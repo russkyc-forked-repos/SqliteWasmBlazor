@@ -2,7 +2,7 @@
 // Web Worker for executing SQL with sqlite-wasm + OPFS SAHPool VFS
 // SAHPool provides synchronous OPFS access in worker context
 
-import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+import sqlite3InitModule, { type SqlValue } from '@sqlite.org/sqlite-wasm';
 import { logger } from './sqlite-logger';
 import { pack } from 'msgpackr';
 import { registerEFCoreFunctions } from './ef-core-functions';
@@ -93,7 +93,9 @@ async function initializeSQLite() {
             originalWarn.apply(console, args);
         };
 
-        sqlite3 = await sqlite3InitModule({
+        // Type declarations don't expose Emscripten-style init options,
+        // but the runtime accepts them for locateFile, print, and printErr
+        const initOptions = {
             print: console.log,
             printErr: console.error,
             locateFile(path: string) {
@@ -103,7 +105,8 @@ async function initializeSQLite() {
                 }
                 return path;
             }
-        });
+        };
+        sqlite3 = await (sqlite3InitModule as (options: typeof initOptions) => Promise<typeof sqlite3>)(initOptions);
 
         // Restore original console.warn
         console.warn = originalWarn;
@@ -292,9 +295,12 @@ async function openDatabase(dbName: string) {
 }
 
 // Get schema info for a table by querying PRAGMA table_info
-function getTableSchema(db: any, tableName: string): Map<string, string> {
-    if (schemaCache.has(tableName)) {
-        return schemaCache.get(tableName)!;
+// Cache key includes database name to prevent collisions when multiple databases
+// have tables with the same name but different schemas
+function getTableSchema(db: any, dbName: string, tableName: string): Map<string, string> {
+    const cacheKey = `${dbName}:${tableName}`;
+    if (schemaCache.has(cacheKey)) {
+        return schemaCache.get(cacheKey)!;
     }
 
     const schema = new Map<string, string>();
@@ -313,7 +319,7 @@ function getTableSchema(db: any, tableName: string): Map<string, string> {
             schema.set(columnName, columnType.toUpperCase());
         }
 
-        schemaCache.set(tableName, schema);
+        schemaCache.set(cacheKey, schema);
     } catch (error) {
         logger.warn(MODULE_NAME, `Failed to load schema for table ${tableName}:`, error);
     }
@@ -411,7 +417,7 @@ async function executeSql(dbName: string, sql: string, parameters: Record<string
                 if (sql.trim().toUpperCase().startsWith('SELECT')) {
                     const tableName = extractTableName(sql);
                     if (tableName) {
-                        tableSchema = getTableSchema(db, tableName);
+                        tableSchema = getTableSchema(db, dbName, tableName);
                     }
                 }
 

@@ -14,7 +14,7 @@
 // - Arithmetic functions return STRING to preserve decimal precision when stored back to database
 // - Non-arithmetic functions return NUMBER as appropriate for their purpose (comparison result, boolean)
 
-import type { Database } from '@sqlite.org/sqlite-wasm';
+import type { Database, SqlValue } from '@sqlite.org/sqlite-wasm';
 import { logger } from './sqlite-logger';
 
 const MODULE_NAME = 'EF Core Functions';
@@ -177,13 +177,15 @@ function registerCompareFunction(db: Database): void {
 function registerRegexpFunction(db: Database): void {
     db.createFunction({
         name: 'regexp',
-        xFunc: (ctxPtr: number, pattern: string | null, value: string | null): number | null => {
+        xFunc: (ctxPtr: number, ...args: SqlValue[]): SqlValue => {
+            const pattern = args[0];
+            const value = args[1];
             if (pattern === null || value === null) {
                 return null;
             }
             try {
-                const regex = new RegExp(pattern);
-                return regex.test(value) ? 1 : 0;
+                const regex = new RegExp(String(pattern));
+                return regex.test(String(value)) ? 1 : 0;
             } catch (error) {
                 logger.warn(MODULE_NAME, `Invalid regex pattern: ${pattern}`, error);
                 return null;
