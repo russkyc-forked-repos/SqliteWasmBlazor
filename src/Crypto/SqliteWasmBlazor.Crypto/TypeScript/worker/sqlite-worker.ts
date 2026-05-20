@@ -611,40 +611,6 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
                   (data as any).opaque === true
               );
 
-          case 'verifyImportRekey':
-              // Non-destructive AEAD preflight for asymmetric import. Caller
-              // validates every envelope file BEFORE wiping the existing
-              // pool — "no destroy unless verified" invariant from the
-              // 4th-pass Codex audit (24dd02f). Same payload shape as
-              // importDbRekey; we just throw away the rekey output.
-              if (!binaryPayload) {
-                  throw new Error('verifyImportRekey requires binaryPayload');
-              }
-              return await withImportRekeyEnvelope(
-                  new Uint8Array(binaryPayload),
-                  (vwk, vdb) => verifyImportRekey(database!, vwk, vdb));
-
-          case 'importDbRekey':
-              // Asymmetric import — VfsImportRekeyEnvelope. Worker decrypts
-              // under wrapKey + re-encrypts under registered globalKey via
-              // rekeySlots, then routes through the opaque-import path so
-              // verify-on-write asserts the rekey came out under the
-              // recipient's actual disk key. wrapKey is transit-only.
-              if (!binaryPayload) {
-                  throw new Error('importDbRekey requires binaryPayload');
-              }
-              logger.info(
-                  MODULE_NAME,
-                  `[asym-import] importDbRekey: db=${database}, payload=${binaryPayload.byteLength}B`);
-              return await withImportRekeyEnvelope(
-                  new Uint8Array(binaryPayload),
-                  (wrapKey, dbBytes) => {
-                      logger.info(
-                          MODULE_NAME,
-                          `[asym-import] unpacked: wrapKey=${keyFingerprint(wrapKey)} dbBytes=${dbBytes.length}B`);
-                      return importDatabaseWithRekey(database!, wrapKey, dbBytes);
-                  });
-
           case 'importDbPlain':
               // Plain-source import onto an Encrypted+Unlocked disk. The
               // payload IS the plain SQLite bytes (no envelope wrapper —
@@ -660,41 +626,6 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
               return await importDatabasePlain(
                   database!,
                   new Uint8Array(binaryPayload));
-
-          case 'exportDb': {
-            // Slot-rekey primitive with four flavours selected by `mode`:
-            //   verbatim → raw OPFS bytes (slot-format ciphertext or plain pages)
-            //   plain    → decrypt under registered K_old → plain pages
-            //   rekey    → decrypt under K_old, re-encrypt under caller-supplied
-            //              K_new (binaryPayload carries VfsKeyHeader). Source MUST
-            //              be encrypted (registered K_old).
-            //   encrypt  → encrypt plain source under caller-supplied K_target.
-            //              Source MUST be plain (no registered key). Symmetric
-            //              with rekey but for the plain→encrypted byte-shuttle
-            //              backup/sharing case.
-            const mode = (data as any).mode as 'verbatim' | 'plain' | 'rekey' | 'encrypt';
-            let newKey: Uint8Array | undefined;
-            if (mode === 'rekey' || mode === 'encrypt') {
-                if (!binaryPayload) {
-                    throw new Error(
-                        `exportDb mode='${mode}' requires binaryPayload (VfsKeyHeader for K_new)`);
-                }
-                newKey = unpackVfsKeyHeader(new Uint8Array(binaryPayload));
-                logger.info(
-                    MODULE_NAME,
-                    `[asym-export] exportDb mode=${mode} db=${database} ` +
-                    `newKey=${keyFingerprint(newKey)}`);
-            }
-            try {
-                return await exportDatabase(database!, mode, newKey);
-            } finally {
-                // newKey is the caller-supplied K_target — wipe before
-                // returning regardless of whether export succeeded.
-                if (newKey !== undefined) {
-                    clearBytes(newKey);
-                }
-            }
-        }
 
         case 'encryptDb':
             // In-place plain → encrypted: reads OPFS plain pages, re-wraps
@@ -958,66 +889,10 @@ function unpackVfsKeyHeader(headerBytes: Uint8Array): Uint8Array {
     }
 }
 
-/**
- * Deserialize a VfsImportRekeyEnvelope (see C# type of the same name).
- * Returns the wrap key + db bytes as separate buffers. The MessagePack
- * payload and the wrap-key view inside it are zeroed before returning so
- * the only live copy of the wrap key is the owned buffer the caller wipes
- * in finally.
- *
- * Envelope shape (matches MessagePack [Key(n)] on the C# type):
- *   0: version (int)
- *   1: wrapKey (bytes, 32)
- *   2: dbBytes (bytes)
- *   3: aadVersion (string)
- */
-function unpackImportRekeyEnvelope(envelopeBytes: Uint8Array): {
-    wrapKey: Uint8Array;
-    dbBytes: Uint8Array;
-} {
-    let decodedWrapKey: Uint8Array | undefined;
-    try {
-        const decoded = unpack(envelopeBytes);
-        if (!Array.isArray(decoded) || decoded.length < 3) {
-            throw new Error('VfsImportRekeyEnvelope: invalid MessagePack envelope');
-        }
-        const [version, wk, db, aadVersion] = decoded as [
-            number, Uint8Array, Uint8Array, string | undefined,
-        ];
-        decodedWrapKey = wk;
-        if (version !== 1) {
-            throw new Error(
-                `VfsImportRekeyEnvelope: unsupported version ${version} (expected 1)`);
-        }
-        if (!(wk instanceof Uint8Array) || wk.length !== 32) {
-            throw new Error(
-                `VfsImportRekeyEnvelope: wrapKey must be a 32-byte Uint8Array (got length=${(wk as any)?.length})`);
-        }
-        if (!(db instanceof Uint8Array)) {
-            throw new Error('VfsImportRekeyEnvelope: dbBytes must be a Uint8Array');
-        }
-        if (aadVersion !== undefined && aadVersion !== 'v1') {
-            throw new Error(
-                `VfsImportRekeyEnvelope: unsupported aadVersion "${aadVersion}" (expected "v1")`);
-        }
-        // Both fields must be FRESH allocations, not views into envelopeBytes —
-        // the finally below clears envelopeBytes and any subarray view would
-        // be zeroed in lockstep. msgpackr returns bin fields as subarrays into
-        // the source buffer, so wrapping each in `new Uint8Array(...)` lifts
-        // them into independent storage that survives the source wipe.
-        return { wrapKey: new Uint8Array(wk), dbBytes: new Uint8Array(db) };
-    } finally {
-        if (decodedWrapKey instanceof Uint8Array) {
-            clearBytes(decodedWrapKey);
-        }
-        clearBytes(envelopeBytes);
-    }
-}
-
 // Scope helper: unpack a VfsKeyHeader, hand the 32-byte key to `fn`, wipe
-// on exit. Use for transient-use sites (encryptDb, rekey/encrypt export).
-// Do NOT use when the key's ownership transfers to a longer-lived owner
-// (setGlobalKey takes ownership and wipes on its own swap).
+// on exit. Use for transient-use sites (encryptDb). Do NOT use when the
+// key's ownership transfers to a longer-lived owner (setGlobalKey takes
+// ownership and wipes on its own swap).
 async function withVfsKeyHeader<T>(
     headerBytes: Uint8Array,
     fn: (key: Uint8Array) => Promise<T> | T,
@@ -1027,22 +902,6 @@ async function withVfsKeyHeader<T>(
         return await fn(key);
     } finally {
         clearBytes(key);
-    }
-}
-
-// Scope helper: unpack a VfsImportRekeyEnvelope, hand wrap key + db bytes
-// to `fn`, wipe the wrap key on exit. dbBytes are not wiped — they're
-// rekey input that the import op consumes and may retain past the
-// callback.
-async function withImportRekeyEnvelope<T>(
-    envelopeBytes: Uint8Array,
-    fn: (wrapKey: Uint8Array, dbBytes: Uint8Array) => Promise<T> | T,
-): Promise<T> {
-    const { wrapKey, dbBytes } = unpackImportRekeyEnvelope(envelopeBytes);
-    try {
-        return await fn(wrapKey, dbBytes);
-    } finally {
-        clearBytes(wrapKey);
     }
 }
 
@@ -1495,97 +1354,6 @@ function keyFingerprint(key: Uint8Array): string {
 }
 
 /**
- * Non-destructive AEAD preflight for asymmetric (v3) import. Runs the
- * decrypt half of rekeySlots against the envelope's page ciphertext under
- * the caller's wrap key, discards the plaintext output, returns 0 on
- * success or 1 on AEAD-tag failure. No OPFS write. Caller validates every
- * file in the envelope BEFORE wiping the existing pool so a corrupt
- * envelope can never destroy data part-way through a multi-file import.
- * Closes the same audit invariant the v1 verifyEncryptedImportBytes did
- * (24dd02f), adapted to the K_wrap-under-AEAD shape.
- */
-function verifyImportRekey(
-    dbName: string,
-    wrapKey: Uint8Array,
-    dbBytes: Uint8Array,
-) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    const dbPath = `/databases/${dbName}`;
-    let plain: Uint8Array | undefined;
-    try {
-        // sourceKey = wrapKey, targetKey = undefined → decrypt-to-plain.
-        // Throws on any slot's AEAD tag failure; bytes never touch OPFS.
-        plain = rekeySlots(dbBytes, dbPath, wrapKey, undefined);
-        return { rowsAffected: 0 };
-    } catch {
-        // VfsImportResult.WRONG_KEY = 1
-        return { rowsAffected: 1 };
-    } finally {
-        if (plain !== undefined) {
-            clearBytes(plain);
-        }
-    }
-}
-
-/**
- * Asymmetric-import primitive: decrypt incoming page ciphertext under the
- * caller-supplied per-export wrap key, re-encrypt under the registered
- * globalKey, then route through the standard opaque-import path. The
- * rekeyed bytes are persisted under the recipient's actual disk key, so
- * verify-on-write and every subsequent open can use the unchanged
- * globalKey. The wrap key is transit-only — it never lands on disk and
- * the caller wipes it as part of the postMessage envelope cleanup.
- *
- * AAD binds the bare DB name, so the recipient must import under the
- * same name the sender exported from. Mismatch surfaces as a verify
- * failure inside rekeySlots' decrypt step, before any OPFS write.
- */
-async function importDatabaseWithRekey(
-    dbName: string,
-    wrapKey: Uint8Array,
-    dbBytes: Uint8Array,
-) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    const globalKey = snapshotGlobalKey();
-    if (globalKey === undefined) {
-        throw new Error(
-            `importDbRekey rejected for ${dbName}: no globalKey registered. ` +
-            `Recipient disk must be Encrypted+Unlocked under their own VFS key ` +
-            `before an asymmetric envelope can be rekeyed onto it.`);
-    }
-    let rekeyed: Uint8Array | undefined;
-    try {
-        const dbPath = `/databases/${dbName}`;
-        logger.info(
-            MODULE_NAME,
-            `[asym-import] rekey-in: dbPath=${dbPath} ` +
-            `wrapKey=${keyFingerprint(wrapKey)} ` +
-            `globalKey=${keyFingerprint(globalKey)} ` +
-            `dbBytes=${dbBytes.length}B`);
-        // rekeySlots: decrypt under wrapKey (sourceKey), re-encrypt under
-        // globalKey (targetKey). Same primitive used for ExportDatabaseAsync
-        // mode='rekey', just with the source/target keys swapped.
-        rekeyed = rekeySlots(dbBytes, dbPath, wrapKey, globalKey);
-        logger.info(
-            MODULE_NAME,
-            `[asym-import] rekey-out: rekeyed=${rekeyed.length}B`);
-        return await importDatabase(dbName, rekeyed, /* opaque */ true);
-    } finally {
-        if (rekeyed !== undefined) {
-            // rekeyed bytes are ciphertext under globalKey — not strictly
-            // sensitive after the importDb call has committed them — but
-            // we wipe the buffer anyway since it's our owned allocation.
-            clearBytes(rekeyed);
-        }
-        clearBytes(globalKey);
-    }
-}
-
-/**
  * Plain-source import primitive: take plain SQLite pages (4096 B each) and
  * re-encrypt every page under the registered globalKey via rekeySlots before
  * routing through the standard opaque-import path. Mirror of
@@ -1671,152 +1439,6 @@ async function importDatabasePlain(
         throw err;
     } finally {
         clearBytes(globalKey);
-    }
-}
-
-/**
- * Preflight an encrypted whole-disk import before the C# side deletes the
- * existing pool. The AAD binds every slot to its final `/databases/{name}`
- * path, so validation must use the real target path rather than a staging
- * filename. Returns the same rowsAffected code family as importDatabase:
- * 0 = OK, 1 = WRONG_KEY.
- */
-/**
- * Walk every DB in the SAHPool, read its 500-byte manifest region, and
- * report a single pool-wide state. The disk-as-unit invariant requires
- * every DB to carry the same manifest bytes — any mismatch surfaces as
- * `'mismatch'` so the caller can refuse to proceed under a corrupted disk.
- *
- * `verifyMac=true` triggers the HMAC check (only legal post-unlock with
- * globalKey installed). Pre-unlock callers leave it false and rely on the
- * AEAD decrypt of slot 0 (deeper in the I/O path) for cryptographic
- * tamper-evidence.
- */
-/**
- * Slot-rekey primitive — the single export entry point. Always closes the
- * DB first for a consistent SAH snapshot, then post-processes the raw bytes
- * according to mode:
- *   verbatim → return raw bytes (plain pages or slot-format ciphertext as-is)
- *   plain    → rekeySlots(raw, sourceKey, undefined) → plain SQLite pages
- *   rekey    → rekeySlots(raw, sourceKey, newKey)    → slot ciphertext under K_new
- *   encrypt  → rekeySlots(raw, undefined, newKey)    → slot ciphertext under K_new
- *               from a plain source (no registered K_old). Symmetric to rekey
- *               but with the opposite source-side precondition.
- *
- * AAD binds dbPath, so REKEY / ENCRYPT output must be re-imported to the
- * same DB name.
- */
-async function exportDatabase(
-    dbName: string,
-    mode: 'verbatim' | 'plain' | 'rekey' | 'encrypt',
-    newKey?: Uint8Array,
-) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-
-    const dbPath = `/databases/${dbName}`;
-
-    // Up-front precondition checks before we snapshot any key material —
-    // failure path then has nothing to clear that wouldn't be cleared
-    // anyway by the finally below.
-    if (mode === 'encrypt' && hasGlobalKey()) {
-        throw new Error(
-            `exportDb mode='encrypt' rejected for ${dbName}: a key is already registered for this path; use mode='rekey' to re-encrypt under a different key.`,
-        );
-    }
-    if ((mode === 'plain' || mode === 'rekey') && !hasGlobalKey()) {
-        // Audit fix: REKEY / PLAIN against a plain source would silently
-        // run rekeySlots(raw, undefined, ...) and treat raw as plain
-        // pages. For REKEY that means plain → encrypted, which is the
-        // ENCRYPT mode's job; surfacing the wrong mode here forces
-        // callers to be explicit. For PLAIN it's just a no-op verbatim
-        // export — same outcome — but rejecting here keeps preconditions
-        // symmetric with REKEY and surfaces caller bugs early.
-        throw new Error(
-            `exportDb mode='${mode}' rejected for ${dbName}: no key registered for this path; ` +
-            `use mode='verbatim' for plain DBs or mode='encrypt' to encrypt a plain source.`,
-        );
-    }
-
-    // verbatim / encrypt do not need a source key (the latter assumes
-    // plain input). plain / rekey decrypt slot bytes under K_old —
-    // snapshot before closeDatabase clears the registry.
-    const sourceKey = (mode === 'verbatim' || mode === 'encrypt')
-        ? undefined
-        : snapshotGlobalKey();
-
-    let raw: Uint8Array | null = null;
-
-    try {
-        await closeDatabase(dbName);
-
-        raw = poolUtil.exportFile(dbPath);
-
-        if (mode === 'verbatim') {
-            logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw!.length}B`);
-            // Return raw directly; not sensitive in verbatim mode (caller
-            // gets whatever was on OPFS — encrypted or plain — and would
-            // expect to retain ownership).
-            const out = raw;
-            raw = null;
-            return { rawBinary: true, data: out };
-        }
-
-        // Shape validation before we hand bytes to rekeySlots — keeps a
-        // mode/file-shape mismatch (e.g. ENCRYPT against a real
-        // encrypted-at-rest file after registry loss) from corrupting
-        // the output.
-        const expectedSourceSlot = (mode === 'encrypt') ? PLAIN_SLOT_SIZE : ENCRYPTED_SLOT_SIZE;
-        if (raw!.length === 0 || raw!.length % expectedSourceSlot !== 0) {
-            throw new Error(
-                `exportDb mode='${mode}' rejected for ${dbName}: file length ${raw!.length} is ` +
-                `not a non-zero multiple of expected source slot size ${expectedSourceSlot}.`,
-            );
-        }
-
-        // Length-only is insufficient for plain-source paths because
-        // a 1024-page encrypted DB and a 1031-page plain DB share byte
-        // length. Verify the SQLite magic header so an encrypted-at-rest
-        // file that happens to divide by 4096 still gets rejected.
-        if (mode === 'encrypt' && !hasSqliteMagicHeader(raw!)) {
-            throw new Error(
-                `exportDb mode='encrypt' rejected for ${dbName}: file does not start with the ` +
-                `SQLite magic header — refusing to treat ciphertext as plain pages.`,
-            );
-        }
-
-        const targetKey = (mode === 'rekey' || mode === 'encrypt') ? newKey : undefined;
-        const out = rekeySlots(raw!, dbPath, sourceKey, targetKey);
-
-        logger.info(
-            MODULE_NAME,
-            `✓ Exported ${mode} ${dbName}: ${raw!.length}B → ${out.length}B`,
-        );
-
-        return { rawBinary: true, data: out };
-    } catch (error) {
-        logger.error(MODULE_NAME, `Failed to export ${mode} ${dbName}:`, error);
-        throw error;
-    } finally {
-        // ENCRYPT: raw is plain SQLite pages — sensitive.
-        // PLAIN: raw is encrypted ciphertext — not sensitive, but the
-        //        rekeySlots output IS plaintext returned to the caller
-        //        (caller-owned, can't clear here).
-        // REKEY: raw is encrypted ciphertext — not sensitive.
-        // Clearing raw unconditionally for non-verbatim is the safer
-        // default; it costs one fill per export.
-        if (raw !== null) {
-            clearBytes(raw);
-        }
-        // sourceKey snapshot is a fresh copy — clear it so K_old doesn't
-        // linger past export, regardless of which branch we took.
-        if (sourceKey !== undefined) {
-            clearBytes(sourceKey);
-        }
-        // The caller-supplied newKey came from unpackVfsKeyHeader; its
-        // lifetime is owned by the case-block that called us. Cleared
-        // there to keep ownership clear.
     }
 }
 

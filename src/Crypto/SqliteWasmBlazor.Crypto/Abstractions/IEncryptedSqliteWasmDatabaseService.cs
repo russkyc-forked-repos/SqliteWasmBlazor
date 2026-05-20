@@ -151,25 +151,25 @@ public interface IEncryptedSqliteWasmDatabaseService
     Task LeaveEncryptedAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Asymmetric disk export. The recipient is identified by their X25519
-    /// PUBLIC key (Base64) + their WebAuthn credentialId — never their VFS
-    /// key. The sender:
+    /// Streaming asymmetric disk export. The recipient is identified by
+    /// their X25519 PUBLIC key (Base64) + their WebAuthn credentialId —
+    /// never their VFS key. The sender:
     /// <list type="number">
     ///   <item>Generates a random 32-byte content key (the per-export disk
     ///         wrap key, <c>K_wrap</c>).</item>
     ///   <item>Wraps <c>K_wrap</c> via ECIES (X25519 ECDH +
     ///         HKDF + AES-256-GCM) to <paramref name="recipientX25519PublicKeyBase64"/>.</item>
     ///   <item>Rekeys every page from the current <c>globalKey</c> under
-    ///         <c>K_wrap</c> (existing slot-rekey primitive).</item>
-    ///   <item>Emits a v3 <see cref="EncryptedDiskEnvelope"/> with the
-    ///         page ciphertext + the wrapped key +
-    ///         <paramref name="recipientCredentialId"/> stamped into
-    ///         <see cref="EncryptedDiskEnvelope.CredentialIdHint"/>.</item>
+    ///         <c>K_wrap</c> in chunked slot-batches; the worker emits each
+    ///         batch to the bridge as a Blob part, the bridge composes the
+    ///         v3 envelope as a virtual-concat Blob, the browser disk-backs
+    ///         the parts list and an anchor click triggers the download.
+    ///         <see cref="byte"/>[] never enters the picture.</item>
     /// </list>
     /// Recipient unwraps with their PRF-derived X25519 private key; only the
     /// holder of that key can recover <c>K_wrap</c>. The credentialId hint
-    /// lets the guided-import UI drive WebAuthn's <c>allowCredentials</c>
-    /// to the exact passkey the recipient must authenticate with.
+    /// carried in the envelope lets the guided-import UI drive WebAuthn's
+    /// <c>allowCredentials</c> to the exact passkey the recipient needs.
     /// <para>
     /// <b>Backup vs share.</b> "Backup to self" passes the caller's own
     /// X25519 pubkey + credentialId — the caller's passkey re-derives the
@@ -186,65 +186,10 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// non-empty Base64 credentialId.
     /// </para>
     /// </summary>
-    Task<byte[]> ExportDiskToPubkeyAsync(
-        string recipientX25519PublicKeyBase64,
-        string recipientCredentialId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Streaming variant of <see cref="ExportDiskToPubkeyAsync"/>: assembles
-    /// the v3 envelope as a virtual-concat <c>Blob</c> on the main thread and
-    /// triggers the browser download directly, never materialising the
-    /// envelope as a managed <see cref="byte"/>[]. Wire format is identical
-    /// (<see cref="EncryptedDiskEnvelope"/>); same ECIES wrap, same AAD,
-    /// same recipient-side import flow.
-    ///
-    /// <para>
-    /// Use this overload for production downloads on memory-constrained
-    /// mobile browsers (renderer-tier WASM heap caps — Mobile Safari
-    /// ~380 MB, Android Chrome variable by device — get overshot by the
-    /// C#-byte[] path on ~250 MB DBs). Prefer
-    /// <see cref="ExportDiskToPubkeyAsync"/> when an in-memory round-trip
-    /// is required (tests, server-side persistence).
-    /// </para>
-    /// </summary>
     Task ExportDiskToPubkeyAndDownloadAsync(
         string filename,
         string recipientX25519PublicKeyBase64,
         string recipientCredentialId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Replace the entire SAH pool with the contents of
-    /// <paramref name="envelope"/>. Preflights every file against the current
-    /// disk state/key before wiping any currently-registered DB. Auto-detects
-    /// per-file content (plain SQLite pages vs slot-format ciphertext) via
-    /// the SQLite magic-header probe in
-    /// <see cref="ISqliteWasmDatabaseService.ImportDatabaseAsync"/>.
-    ///
-    /// <para>
-    /// <b>Caller is responsible for explicit user confirmation in UI</b> —
-    /// this method does not prompt and the wipe step is destructive and
-    /// non-recoverable after preflight succeeds. Per the disk-as-unit model,
-    /// partial imports are not supported: either the envelope preflight fails
-    /// without changing the disk, or the envelope replaces the disk.
-    /// </para>
-    /// <para>
-    /// Caller invariant: disk must NOT be Encrypted+Locked (Plain or
-    /// Encrypted+Unlocked are both accepted). Per-file content kind in
-    /// the envelope must match the current disk state (importing
-    /// ciphertext on a Plain disk yields <see cref="DiskImportResult.WRONG_KEY"/>;
-    /// importing plain on an Encrypted+Unlocked disk yields the same).
-    /// </para>
-    /// </summary>
-    /// <returns>
-    /// <see cref="DiskImportResult.OK"/> on success;
-    /// <see cref="DiskImportResult.WRONG_KEY"/> if content kind does not
-    /// match the current disk state or any per-file AEAD preflight rejects
-    /// the active globalKey.
-    /// </returns>
-    Task<DiskImportResult> ImportDiskAsync(
-        ReadOnlyMemory<byte> envelope,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -285,11 +230,10 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Peek inside a disk-import envelope to extract its
-    /// <see cref="EncryptedDiskEnvelope.CredentialIdHint"/>. Used by the
+    /// Peek inside a v3 disk-import envelope (or its first ~4 KB) to
+    /// extract the embedded <c>CredentialIdHint</c>. Used by the
     /// guided-import UI to know which passkey to drive WebAuthn against
-    /// BEFORE the wipe-and-rebind ritual starts. Pure deserialize — does
-    /// not touch the pool or PRF state.
+    /// BEFORE the wipe-and-rebind ritual starts.
     /// </summary>
     /// <returns>
     /// The envelope's credentialId hint, or <c>null</c> if the envelope is
@@ -300,45 +244,8 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Guided-import primitive that collapses the recipient ritual
+    /// Streaming guided import — collapses the recipient ritual
     /// (Reset → EnterEncrypted → ImportDisk) into one atomic call. The
-    /// caller has already run the WebAuthn ceremony pinned to the
-    /// envelope's <see cref="EncryptedDiskEnvelope.CredentialIdHint"/> and
-    /// derived <paramref name="vfsKey"/> from the cached PRF seed; the PRF
-    /// cache must remain populated through the call so the envelope's
-    /// ECIES <c>K_wrap</c> can be unwrapped under the same seed.
-    /// <para>
-    /// Sequence: ECIES-unwrap <c>K_wrap</c> + AEAD-preflight every envelope
-    /// file before touching the current pool → wipe the existing pool
-    /// (without clearing the PRF cache) → <see cref="EnterEncryptedAsync"/>
-    /// under (<paramref name="vfsKey"/>, <paramref name="credentialId"/>) →
-    /// rekey-import every envelope file under the freshly-installed
-    /// <c>globalKey</c>. The disk ends Encrypted+Unlocked, bound to the
-    /// import's credential, with the envelope's contents written under the
-    /// new <c>globalKey</c>.
-    /// </para>
-    /// <para>
-    /// Caller invariant: state must be <see cref="EncryptedDiskState.Plain"/>
-    /// or Encrypted+Locked. Encrypted+Unlocked is rejected — caller must
-    /// <see cref="LockAsync"/> first; refusing here keeps the state
-    /// machine free of covert in-place key swaps. The envelope's
-    /// <c>CredentialIdHint</c> must match <paramref name="credentialId"/>.
-    /// </para>
-    /// </summary>
-    /// <returns>
-    /// <see cref="DiskImportResult.OK"/> on success;
-    /// <see cref="DiskImportResult.WRONG_KEY"/> if AEAD preflight rejects
-    /// the envelope's wrap key (envelope was not sealed to the caller's
-    /// pubkey).
-    /// </returns>
-    Task<DiskImportResult> ImportDiskGuidedAsync(
-        ReadOnlyMemory<byte> envelope,
-        ReadOnlyMemory<byte> vfsKey,
-        string credentialId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Streaming variant of <see cref="ImportDiskGuidedAsync"/>: the
     /// envelope arrives as a <see cref="Stream"/> (typically
     /// <c>IBrowserFile.OpenReadStream(file.Size)</c>) and is shipped to a
     /// JS-side BlobSession one ArrayPool chunk at a time. C# managed heap
@@ -347,20 +254,21 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// ~50 MB).
     ///
     /// <para>
-    /// Same security contract as <see cref="ImportDiskGuidedAsync"/>:
-    /// state must be Plain or Encrypted+Locked; envelope's
-    /// <see cref="EncryptedDiskEnvelope.CredentialIdHint"/> must match
-    /// <paramref name="credentialId"/>; <paramref name="vfsKey"/> must come
-    /// from the WebAuthn ceremony pinned to that credential. The first
-    /// 4 KB of the stream is held in a managed <c>MemoryStream</c> for the
-    /// header peek (PrfSalt + ECIES wrap fields + CredentialIdHint); the
-    /// bulk slot bytes never cross C# managed memory.
+    /// Sequence: peek the first ~4 KB into a small <c>MemoryStream</c> →
+    /// ECIES-unwrap <c>K_wrap</c> via the caller's PRF seed → AEAD-preflight
+    /// every envelope file (worker reads via <c>blob.stream()</c>) → wipe
+    /// the existing pool (PRF cache preserved) → <see cref="EnterEncryptedAsync"/>
+    /// under (<paramref name="vfsKey"/>, <paramref name="credentialId"/>) →
+    /// rekey-commit every envelope file under the freshly-installed
+    /// <c>globalKey</c>. The disk ends Encrypted+Unlocked, bound to the
+    /// import's credential.
     /// </para>
     /// <para>
-    /// Use this overload for UI hot paths — the byte[]-flavored sibling
-    /// <see cref="ImportDiskGuidedAsync"/> stays for tests and non-UI
-    /// consumers where an in-memory envelope is more convenient than a
-    /// stream.
+    /// Caller invariant: state must be <see cref="EncryptedDiskState.Plain"/>
+    /// or Encrypted+Locked. Encrypted+Unlocked is rejected — caller must
+    /// <see cref="LockAsync"/> first. The envelope's <c>CredentialIdHint</c>
+    /// must match <paramref name="credentialId"/>; <paramref name="vfsKey"/>
+    /// must come from the WebAuthn ceremony pinned to that credential.
     /// </para>
     /// </summary>
     Task<DiskImportResult> ImportDiskGuidedFromStreamAsync(

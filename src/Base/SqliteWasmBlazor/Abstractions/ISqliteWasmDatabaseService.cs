@@ -4,46 +4,6 @@
 namespace SqliteWasmBlazor;
 
 /// <summary>
-/// Internal-only worker-side mode selector for the bridge's per-DB
-/// <c>SqliteWasmWorkerBridge.ExportDatabaseAsync(name, mode, newKey, ct)</c>
-/// overload. The encrypted-disk service loops over PLAIN / REKEY for its
-/// whole-disk envelope; the encrypted-disk in-place transitions use the
-/// matching encrypt/decrypt-in-place primitives. Public consumers should
-/// reach for <see cref="ISqliteWasmDatabaseService.ExportDatabaseAsync"/>
-/// (single-DB native) or
-/// <see cref="IEncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyAsync"/>
-/// (whole-disk envelope) instead.
-/// </summary>
-internal enum VfsExportMode
-{
-    /// <summary>
-    /// Verbatim raw bytes from OPFS — what the public single-DB
-    /// <see cref="ISqliteWasmDatabaseService.ExportDatabaseAsync"/> uses.
-    /// </summary>
-    VERBATIM = 0,
-
-    /// <summary>
-    /// Decrypt every slot under the registered source key and return plain
-    /// SQLite pages. Source MUST be encrypted.
-    /// </summary>
-    PLAIN = 1,
-
-    /// <summary>
-    /// Decrypt under registered source key + re-encrypt under a
-    /// caller-supplied 32-byte key with path-bound AAD. Used by the
-    /// encrypted-disk service for "share with recipient under K_new".
-    /// </summary>
-    REKEY = 2,
-
-    /// <summary>
-    /// Encrypt a plain database under a caller-supplied 32-byte key. Source
-    /// MUST be plain. Mostly historical; the in-place encrypt path is the
-    /// production version of this transition.
-    /// </summary>
-    ENCRYPT = 3,
-}
-
-/// <summary>
 /// Outcome returned by <see cref="ISqliteWasmDatabaseService.ImportDatabaseAsync"/>
 /// and <see cref="ISqliteWasmDatabaseService.ImportAllDatabasesAsync"/>.
 /// Plain (non-opaque) imports always return <see cref="OK"/> on success and

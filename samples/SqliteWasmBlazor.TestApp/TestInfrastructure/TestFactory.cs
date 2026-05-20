@@ -94,41 +94,6 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", diskExportImport.Name, () => diskExportImport.RunAsync()));
 
-                    // Asymmetric ExportDiskToPubkeyAsync + ImportDiskAsync
-                    // (v2) round-trip — exercises every cryptographic seam
-                    // of the new flow: ECIES wrap toward the seed-derived
-                    // X25519 pubkey, ECIES unwrap with the matching priv,
-                    // worker rekey-on-import. Synthetic PRF seed simulates
-                    // a successful WebAuthn ceremony without virtual
-                    // authenticator scaffolding.
-                    var keyCache = services.GetService(typeof(ISecureKeyCache))
-                        as ISecureKeyCache;
-                    var prfService = services.GetService(typeof(IPrfService))
-                        as IPrfService;
-                    if (keyCache is not null && prfService is not null)
-                    {
-                        var diskExportToPubkey = new DiskExportToPubkeyRoundTripTest(
-                            prfFactory, databaseService, session, provider, keyCache, prfService);
-                        _entries.Add(new TestEntry(
-                            "VFS Encryption", diskExportToPubkey.Name, () => diskExportToPubkey.RunAsync()));
-
-                        // Cross-key round-trip for ImportDiskGuidedAsync: sender
-                        // and recipient use DIFFERENT synthetic seeds, mirroring
-                        // the A→B share flow. Validates the guided primitive
-                        // does wipe + EnterEncrypted + rekey-import atomically
-                        // and rebinds the disk's manifest to the recipient's
-                        // credentialId.
-                        var diskImportGuided = new DiskImportGuidedCrossKeyTest(
-                            prfFactory, databaseService, session, provider, keyCache, prfService);
-                        _entries.Add(new TestEntry(
-                            "VFS Encryption", diskImportGuided.Name, () => diskImportGuided.RunAsync()));
-
-                        var diskImportGuidedReject = new DiskImportGuidedRejectDoesNotWipeTest(
-                            prfFactory, databaseService, session, provider, keyCache, prfService);
-                        _entries.Add(new TestEntry(
-                            "VFS Encryption", diskImportGuidedReject.Name, () => diskImportGuidedReject.RunAsync()));
-                    }
-
                     // Pure-plain ZIP round-trip — exercises the new
                     // ISqliteWasmDatabaseService.ExportAll/ImportAll batch
                     // primitives on a Plain disk (no encryption involved).
