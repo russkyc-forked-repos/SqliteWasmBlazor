@@ -1202,7 +1202,7 @@ function keyFingerprint(key: Uint8Array): string {
 }
 
 /**
- * Non-destructive AEAD preflight for asymmetric (v2) import. Runs the
+ * Non-destructive AEAD preflight for asymmetric (v3) import. Runs the
  * decrypt half of rekeySlots against the envelope's page ciphertext under
  * the caller's wrap key, discards the plaintext output, returns 0 on
  * success or 1 on AEAD-tag failure. No OPFS write. Caller validates every

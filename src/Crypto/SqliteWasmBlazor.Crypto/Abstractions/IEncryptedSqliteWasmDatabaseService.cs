@@ -161,7 +161,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     ///         HKDF + AES-256-GCM) to <paramref name="recipientX25519PublicKeyBase64"/>.</item>
     ///   <item>Rekeys every page from the current <c>globalKey</c> under
     ///         <c>K_wrap</c> (existing slot-rekey primitive).</item>
-    ///   <item>Emits a v2 <see cref="EncryptedDiskEnvelope"/> with the
+    ///   <item>Emits a v3 <see cref="EncryptedDiskEnvelope"/> with the
     ///         page ciphertext + the wrapped key +
     ///         <paramref name="recipientCredentialId"/> stamped into
     ///         <see cref="EncryptedDiskEnvelope.CredentialIdHint"/>.</item>
