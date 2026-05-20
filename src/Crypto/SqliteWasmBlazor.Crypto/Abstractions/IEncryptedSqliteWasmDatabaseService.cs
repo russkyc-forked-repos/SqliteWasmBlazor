@@ -338,6 +338,39 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streaming variant of <see cref="ImportDiskGuidedAsync"/>: the
+    /// envelope arrives as a <see cref="Stream"/> (typically
+    /// <c>IBrowserFile.OpenReadStream(file.Size)</c>) and is shipped to a
+    /// JS-side BlobSession one ArrayPool chunk at a time. C# managed heap
+    /// peak stays at one chunk (~1 MB) regardless of envelope size; the
+    /// JS Blob parts list is browser-managed (Safari disk-backs above
+    /// ~50 MB).
+    ///
+    /// <para>
+    /// Same security contract as <see cref="ImportDiskGuidedAsync"/>:
+    /// state must be Plain or Encrypted+Locked; envelope's
+    /// <see cref="EncryptedDiskEnvelope.CredentialIdHint"/> must match
+    /// <paramref name="credentialId"/>; <paramref name="vfsKey"/> must come
+    /// from the WebAuthn ceremony pinned to that credential. The first
+    /// 4 KB of the stream is held in a managed <c>MemoryStream</c> for the
+    /// header peek (PrfSalt + ECIES wrap fields + CredentialIdHint); the
+    /// bulk slot bytes never cross C# managed memory.
+    /// </para>
+    /// <para>
+    /// Use this overload for UI hot paths — the byte[]-flavored sibling
+    /// <see cref="ImportDiskGuidedAsync"/> stays for tests and non-UI
+    /// consumers where an in-memory envelope is more convenient than a
+    /// stream.
+    /// </para>
+    /// </summary>
+    Task<DiskImportResult> ImportDiskGuidedFromStreamAsync(
+        Stream envelopeStream,
+        long envelopeSize,
+        ReadOnlyMemory<byte> vfsKey,
+        string credentialId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Scorched-earth disk reset. Closes every open DB, drops
     /// <c>globalKey</c>, deletes every DB file from the pool, and clears
     /// the PRF cache so the auth UI flips to NotAuthorized in lockstep.

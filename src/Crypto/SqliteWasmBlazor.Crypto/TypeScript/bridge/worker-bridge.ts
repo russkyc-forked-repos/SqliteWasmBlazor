@@ -390,6 +390,128 @@ function composeEnvelopeBlob(
     return new Blob(parts, { type: 'application/x-msgpack' });
 }
 
+// ---------------------------------------------------------------------------
+// BlobSession — chunked C# → JS Blob primitive (Crypto-bundle copy).
+//
+// The Crypto-plane bridge bundle ships standalone; it doesn't import the
+// Base-plane bundle at runtime. So the BlobSession primitive lives in
+// both bundles, registered under the same `sqliteWasmWorker.blobSession*`
+// names, and the C# JSImport reaches whichever bundle the consumer
+// happens to have loaded. Behaviour is byte-identical to the Base-plane
+// implementation; see SqliteWasmBlazor.csproj's bridge for the canonical
+// commentary.
+// ---------------------------------------------------------------------------
+
+const blobSessions = new Map<number, BlobPart[]>();
+
+export function blobSessionOpen(sessionId: number): void {
+    if (blobSessions.has(sessionId)) {
+        throw new Error(`blobSessionOpen: sessionId ${sessionId} is already open`);
+    }
+    blobSessions.set(sessionId, []);
+}
+
+export function blobSessionAppend(
+    sessionId: number,
+    chunkView: IMemoryView,
+    isLast: boolean,
+): void {
+    const parts = blobSessions.get(sessionId);
+    if (!parts) {
+        throw new Error(`blobSessionAppend: unknown sessionId ${sessionId}`);
+    }
+    parts.push(new Blob([chunkView.slice() as Uint8Array<ArrayBuffer>]));
+    void isLast;
+}
+
+export function blobSessionDiscard(sessionId: number): void {
+    blobSessions.delete(sessionId);
+}
+
+function blobSessionPartsRef(sessionId: number): BlobPart[] {
+    const parts = blobSessions.get(sessionId);
+    if (!parts) {
+        throw new Error(`blobSessionPartsRef: no parts list for sessionId ${sessionId}`);
+    }
+    return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Chunked encrypted-disk import — C# → BlobSession → worker.
+//
+// The C# side has already streamed the picked file's bytes into the
+// JS-side BlobSession via the Base-plane chunked-push primitive (one
+// ArrayPool chunk at a time). This glue builds a virtual-concat Blob from
+// those parts and hands it to the worker's import-streamed.ts handlers
+// via the streamHandler protocol.
+//
+// Two-pass: same parts list is rebuilt into a fresh Blob for preflight,
+// then again for commit (Blob.stream() is one-shot per Blob, so we mint
+// a new view between passes). The parts stay live in `blobSessions`
+// until C# calls BlobSessionDiscard in its finally-block.
+// ---------------------------------------------------------------------------
+
+/** JSImport entry — preflight: AEAD-verify slot 0 of every file under K_wrap. */
+export function importDiskStreamPreflightFromSession(
+    sessionId: number,
+    kWrapView: IMemoryView,
+): Promise<number> {
+    return _sendImportDiskStreamSession(
+        'importDiskStreamPreflight', sessionId, kWrapView);
+}
+
+/** JSImport entry — commit: re-stream the envelope, decrypt under K_wrap, re-encrypt under globalKey. */
+export function importDiskStreamCommitFromSession(
+    sessionId: number,
+    kWrapView: IMemoryView,
+): Promise<number> {
+    return _sendImportDiskStreamSession(
+        'importDiskStreamCommit', sessionId, kWrapView);
+}
+
+function _sendImportDiskStreamSession(
+    type: 'importDiskStreamPreflight' | 'importDiskStreamCommit',
+    sessionId: number,
+    kWrapView: IMemoryView,
+): Promise<number> {
+    if (!worker) {
+        return Promise.reject(new Error('Worker not initialized'));
+    }
+    const parts = blobSessionPartsRef(sessionId);
+    const blob = new Blob(parts);
+    const kWrap = kWrapView.slice();
+    const streamId = nextStreamId--;
+    return new Promise((resolve, reject) => {
+        streamHandlers.set(streamId, {
+            onChunk() {
+                streamHandlers.delete(streamId);
+                reject(new Error(`Unexpected streamChunk during ${type}`));
+            },
+            onDone(result) {
+                streamHandlers.delete(streamId);
+                if (typeof result !== 'number') {
+                    reject(new Error(`${type} streamDone missing result`));
+                    return;
+                }
+                resolve(result);
+            },
+            onError(message) {
+                streamHandlers.delete(streamId);
+                reject(new Error(message));
+            },
+        });
+        worker!.postMessage(
+            {
+                streamId,
+                data: { type },
+                blob,
+                binaryPayload: kWrap.buffer,
+            },
+            [kWrap.buffer],
+        );
+    });
+}
+
 function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     const url = URL.createObjectURL(envelope);
     try {
@@ -409,7 +531,12 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     initializeBridge,
     sendToWorker,
     sendBinaryToWorker,
-    exportDiskToDownload
+    exportDiskToDownload,
+    blobSessionOpen,
+    blobSessionAppend,
+    blobSessionDiscard,
+    importDiskStreamPreflightFromSession,
+    importDiskStreamCommitFromSession,
 };
 
 (globalThis as any).__sqliteWasmLogger = logger;

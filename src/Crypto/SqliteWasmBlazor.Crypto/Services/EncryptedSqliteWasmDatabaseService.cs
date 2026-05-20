@@ -1,6 +1,7 @@
 // SqliteWasmBlazor - Minimal EF Core compatible provider
 // MIT License
 
+using System.Buffers;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -774,6 +775,251 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 CryptographicOperations.ZeroMemory(wrapKeySegment.AsSpan());
             }
         }
+    }
+
+    /// <summary>
+    /// Monotonic JS-side BlobSession id allocator. Independent of the
+    /// worker bridge's request-id counter; only needs to be unique within
+    /// the JS-side <c>blobSessions</c> Map for the duration of one
+    /// streaming import.
+    /// </summary>
+    private int _nextSessionId;
+
+    /// <summary>
+    /// Streaming guided-import variant: the envelope arrives as a Stream
+    /// (typically <c>IBrowserFile.OpenReadStream</c>) and is shipped to
+    /// the JS-side BlobSession one ArrayPool chunk at a time. C# managed
+    /// heap peak is one chunk (~1 MB); the JS Blob parts list is the
+    /// browser's responsibility (Safari disk-backs above ~50 MB).
+    ///
+    /// Same security contract as <see cref="ImportDiskGuidedAsync"/>:
+    /// state must be Plain or Encrypted+Locked; envelope's CredentialIdHint
+    /// must match <paramref name="credentialId"/>; vfsKey must come from
+    /// the WebAuthn ceremony pinned to that credential. Throws otherwise.
+    /// Token-equivalent: session id is C#-issued, JS holds it only between
+    /// Open and Discard.
+    /// </summary>
+    public async Task<DiskImportResult> ImportDiskGuidedFromStreamAsync(
+        Stream envelopeStream,
+        long envelopeSize,
+        ReadOnlyMemory<byte> vfsKey,
+        string credentialId,
+        CancellationToken cancellationToken = default)
+    {
+        if (envelopeSize <= 0)
+        {
+            throw new ArgumentException(
+                $"envelopeSize must be positive, got {envelopeSize}", nameof(envelopeSize));
+        }
+        if (string.IsNullOrWhiteSpace(credentialId))
+        {
+            throw new ArgumentException(
+                "credentialId must be a non-empty Base64 WebAuthn credentialId.",
+                nameof(credentialId));
+        }
+        if (vfsKey.Length != 32)
+        {
+            throw new ArgumentException(
+                $"vfsKey must be exactly 32 bytes; got {vfsKey.Length}.", nameof(vfsKey));
+        }
+
+        var current = await GetStateAsync(cancellationToken);
+        if (current.Encrypted && current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ImportDiskGuidedFromStreamAsync rejected: disk is Encrypted+Unlocked. " +
+                "Lock or Reset first; guided import rebinds the disk to the import's " +
+                "credential and is only allowed from Plain or Locked.");
+        }
+
+        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+
+        byte[]? wrapKey = null;
+        try
+        {
+            // Stream the picked file into the JS-side BlobSession one
+            // 1 MB chunk at a time. While the first chunk(s) arrive,
+            // keep a local copy of the first 4 KB — that's the envelope
+            // header that PeekEnvelopeHeader parses for the credential-id
+            // check and the ECIES wrap fields.
+            const int chunkSize = 1 << 20;
+            using var headerCopy = new MemoryStream(4096);
+            var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
+            try
+            {
+                long totalRead = 0;
+                while (totalRead < envelopeSize)
+                {
+                    var read = await envelopeStream.ReadAsync(
+                        buf.AsMemory(0, chunkSize), cancellationToken);
+                    if (read <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"ImportDiskGuidedFromStreamAsync: stream ended at {totalRead} " +
+                            $"of {envelopeSize} bytes; envelope is truncated.");
+                    }
+                    if (headerCopy.Length < 4096)
+                    {
+                        var keep = (int)Math.Min(read, 4096 - headerCopy.Length);
+                        headerCopy.Write(buf, 0, keep);
+                    }
+                    totalRead += read;
+                    bool isLast = totalRead == envelopeSize;
+                    SqliteWasmWorkerBridge.BlobSessionAppend(
+                        sessionId, new Span<byte>(buf, 0, read), isLast);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf, clearArray: true);
+            }
+
+            // Peek the envelope header from the local 4 KB copy — small
+            // enough that one MessagePackReader pass on a managed array
+            // is cheap, and large enough to cover the positional fields
+            // before Files (PrfSalt + 4 strings).
+            var header = PeekEnvelopeHeader(headerCopy.ToArray());
+            if (header.Version != 3)
+            {
+                throw new InvalidOperationException(
+                    $"ImportDiskGuidedFromStreamAsync: unsupported envelope Version={header.Version} (expected 3).");
+            }
+            if (string.IsNullOrEmpty(header.CredentialIdHint))
+            {
+                throw new InvalidOperationException(
+                    "ImportDiskGuidedFromStreamAsync: envelope is missing CredentialIdHint.");
+            }
+            if (!string.Equals(header.CredentialIdHint, credentialId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "ImportDiskGuidedFromStreamAsync: envelope's CredentialIdHint does not " +
+                    "match the supplied credentialId.");
+            }
+
+            var wrapped = new AsymmetricEncryptedData(
+                header.EphemeralPublicKey,
+                header.WrappedContentKeyCiphertext,
+                header.WrappedContentKeyNonce);
+            var unwrapResult = await _prfService.DecryptAsymmetricToBytesAsync(wrapped);
+            if (!unwrapResult.Success || unwrapResult.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"ImportDiskGuidedFromStreamAsync: ECIES unwrap of K_wrap failed " +
+                    $"({unwrapResult.ErrorCode}). The envelope may be sealed for a different " +
+                    $"recipient pubkey than the one this passkey derives.");
+            }
+            wrapKey = unwrapResult.Value;
+            if (wrapKey.Length != 32)
+            {
+                throw new InvalidOperationException(
+                    $"ImportDiskGuidedFromStreamAsync: unwrapped K_wrap must be 32 bytes; " +
+                    $"got {wrapKey.Length}.");
+            }
+
+            // Pass 1 — preflight. Worker AEAD-verifies slot 0 of every
+            // file via blob.stream(). Read-only; no pool mutation.
+            var preflight = await SqliteWasmWorkerBridge.ImportDiskStreamPreflightFromSessionAsync(
+                sessionId, new ArraySegment<byte>(wrapKey));
+            if (preflight != (int)DiskImportResult.OK)
+            {
+                return (DiskImportResult)preflight;
+            }
+
+            // Wipe pool + EnterEncrypted under the import's credential.
+            await WipePoolAsync(cancellationToken);
+            await EnterEncryptedAsync(vfsKey, credentialId, cancellationToken);
+
+            // Pass 2 — commit. Worker rebuilds a fresh Blob from the same
+            // session's parts (still live), re-streams via blob.stream(),
+            // decrypts under K_wrap and re-encrypts under the freshly-
+            // installed globalKey.
+            var commitResult = await SqliteWasmWorkerBridge.ImportDiskStreamCommitFromSessionAsync(
+                sessionId, new ArraySegment<byte>(wrapKey));
+            if (commitResult != (int)DiskImportResult.OK)
+            {
+                return (DiskImportResult)commitResult;
+            }
+
+            ReportDbState(DbInitState.READY);
+            return DiskImportResult.OK;
+        }
+        finally
+        {
+            if (wrapKey is not null)
+            {
+                CryptographicOperations.ZeroMemory(wrapKey);
+            }
+            // Idempotent on every exit — success, AEAD failure, exception.
+            // The JS-side parts list is dropped so the browser can GC the
+            // underlying Blob storage.
+            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Envelope-header peek result — every field the import flow needs
+    /// before it can decide to wipe + re-encrypt. <c>Files</c> is
+    /// intentionally absent: the streaming worker reads it directly off
+    /// the JS-side Blob.
+    /// </summary>
+    private readonly struct EnvelopeHeader
+    {
+        public int Version { get; init; }
+        public string AadVersion { get; init; }
+        public string EphemeralPublicKey { get; init; }
+        public string WrappedContentKeyCiphertext { get; init; }
+        public string WrappedContentKeyNonce { get; init; }
+        public string CredentialIdHint { get; init; }
+    }
+
+    /// <summary>
+    /// Forward-parse just the envelope's positional header without copying
+    /// the <c>Files</c> bulk into managed memory. Uses
+    /// <see cref="MessagePackReader"/>'s streaming primitives so the
+    /// entries are read in-place from <paramref name="envelope"/>; only
+    /// the small string fields are allocated. The 32-byte PrfSalt is
+    /// consumed and discarded — the receiver uses local PrfService config;
+    /// envelope salt is forward-compat for cross-app import.
+    /// </summary>
+    private static EnvelopeHeader PeekEnvelopeHeader(byte[] envelope)
+    {
+        var reader = new MessagePackReader(envelope);
+        var arrLen = reader.ReadArrayHeader();
+        if (arrLen != 8)
+        {
+            throw new InvalidOperationException(
+                $"PeekEnvelopeHeader: expected envelope array(8), got array({arrLen}).");
+        }
+        var version = reader.ReadInt32();
+        var aadVersion = reader.ReadString()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: AadVersion is null.");
+        var prfSaltSeq = reader.ReadBytes()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: PrfSalt is missing.");
+        if (prfSaltSeq.Length != 32)
+        {
+            throw new InvalidOperationException(
+                $"PeekEnvelopeHeader: PrfSalt must be 32 bytes, got {prfSaltSeq.Length}.");
+        }
+        var ephPub = reader.ReadString()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: EphemeralPublicKey is null.");
+        var wrapCt = reader.ReadString()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyCiphertext is null.");
+        var wrapNonce = reader.ReadString()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyNonce is null.");
+        var credIdHint = reader.ReadString()
+            ?? throw new InvalidOperationException("PeekEnvelopeHeader: CredentialIdHint is null.");
+        // Files array tail is intentionally not consumed — the streaming
+        // worker reads it directly off the JS-side Blob.
+        return new EnvelopeHeader
+        {
+            Version = version,
+            AadVersion = aadVersion,
+            EphemeralPublicKey = ephPub,
+            WrappedContentKeyCiphertext = wrapCt,
+            WrappedContentKeyNonce = wrapNonce,
+            CredentialIdHint = credIdHint,
+        };
     }
 
     /// <summary>

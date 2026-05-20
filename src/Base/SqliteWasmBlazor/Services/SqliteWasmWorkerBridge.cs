@@ -982,6 +982,32 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         string filename,
         string metadataJson,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
+
+    /// <summary>
+    /// Streaming disk-import — preflight. Builds a Blob from the parts
+    /// previously appended to <paramref name="sessionId"/> and posts it to
+    /// the worker, which AEAD-verifies slot 0 of each file under
+    /// <paramref name="kWrap"/>. Returns <c>DiskImportResult</c> (0=OK,
+    /// 1=WRONG_KEY). No pool mutation either way.
+    /// </summary>
+    [JSImport("importDiskStreamPreflightFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportDiskStreamPreflightFromSessionAsync(
+        int sessionId,
+        [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
+
+    /// <summary>
+    /// Streaming disk-import — commit. Worker re-streams the same parts
+    /// list (Blob.stream() is one-shot per Blob, so a fresh Blob is built
+    /// from the still-live parts), decrypts each slot under
+    /// <paramref name="kWrap"/>, re-encrypts under the worker's currently-
+    /// registered globalKey, and writes via writeFileSlice + atomicReplaceFile.
+    /// Caller MUST have run <c>WipePoolAsync</c> + <c>EnterEncryptedAsync</c>
+    /// between preflight and commit.
+    /// </summary>
+    [JSImport("importDiskStreamCommitFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportDiskStreamCommitFromSessionAsync(
+        int sessionId,
+        [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 }
 
 /// <summary>

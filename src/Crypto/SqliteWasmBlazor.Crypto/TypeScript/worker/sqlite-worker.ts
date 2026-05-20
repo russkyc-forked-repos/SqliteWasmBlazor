@@ -28,6 +28,10 @@ import {
     clearDiskManifestOp,
 } from './worker-manifest';
 import { setDebugLogBase, debugLog, nextOpId } from './debug-log';
+import {
+    importDiskStreamPreflight,
+    importDiskStreamCommit,
+} from './vfs-prf/import-streamed';
 
 // Re-export mutable state references for local use
 let sqlite3: any;
@@ -224,11 +228,13 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
             streamId: number;
             data: { type: string };
             binaryPayload?: ArrayBuffer;
+            blob?: Blob;
         };
         await handleStreamingRequest(
             streamMsg.streamId,
             streamMsg.data,
             streamMsg.binaryPayload,
+            streamMsg.blob,
         );
         return;
     }
@@ -290,6 +296,7 @@ async function handleStreamingRequest(
     streamId: number,
     data: { type: string },
     binaryPayload?: ArrayBuffer,
+    blob?: Blob,
 ): Promise<void> {
     try {
         switch (data.type) {
@@ -298,6 +305,24 @@ async function handleStreamingRequest(
                     throw new Error('exportDiskStream requires binaryPayload (raw K_wrap)');
                 }
                 await exportDiskStreamHandler(streamId, new Uint8Array(binaryPayload));
+                return;
+            case 'importDiskStreamPreflight':
+                if (!binaryPayload) {
+                    throw new Error('importDiskStreamPreflight requires binaryPayload (raw K_wrap)');
+                }
+                if (!(blob instanceof Blob)) {
+                    throw new Error('importDiskStreamPreflight requires a Blob');
+                }
+                await importDiskStreamPreflightHandler(streamId, blob, new Uint8Array(binaryPayload));
+                return;
+            case 'importDiskStreamCommit':
+                if (!binaryPayload) {
+                    throw new Error('importDiskStreamCommit requires binaryPayload (raw K_wrap)');
+                }
+                if (!(blob instanceof Blob)) {
+                    throw new Error('importDiskStreamCommit requires a Blob');
+                }
+                await importDiskStreamCommitHandler(streamId, blob, new Uint8Array(binaryPayload));
                 return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
@@ -309,6 +334,70 @@ async function handleStreamingRequest(
             error: error instanceof Error ? error.message : String(error),
         });
     }
+}
+
+/**
+ * Pass 1 of the streaming disk import — AEAD-verifies slot 0 of every
+ * file in <paramref name="blob"/> under <paramref name="kWrap"/>. Returns
+ * OK (0) on success or WRONG_KEY (1) on tag failure via streamDone.result.
+ * Pure read; no pool mutation.
+ */
+async function importDiskStreamPreflightHandler(
+    streamId: number,
+    blob: Blob,
+    kWrap: Uint8Array,
+): Promise<void> {
+    if (kWrap.length !== 32) {
+        throw new Error(`importDiskStreamPreflight: K_wrap must be 32 bytes, got ${kWrap.length}`);
+    }
+    const op = nextOpId();
+    debugLog(op, 'preflight.enter', { blobSize: blob.size });
+    let result: number;
+    try {
+        result = await importDiskStreamPreflight(blob, kWrap, op);
+        debugLog(op, 'preflight.done', { result });
+    } catch (err) {
+        debugLog(op, 'preflight.error', { msg: String(err) });
+        throw err;
+    } finally {
+        clearBytes(kWrap);
+    }
+    self.postMessage({ streamId, streamDone: true, result });
+}
+
+/**
+ * Pass 2 of the streaming disk import — caller has wiped + EnterEncrypted,
+ * so a globalKey is registered. Re-streams the envelope, decrypts each
+ * slot under K_wrap, re-encrypts under globalKey via the chunked
+ * writeFileSlice + atomicReplaceFile path. Returns OK (0) on streamDone.
+ */
+async function importDiskStreamCommitHandler(
+    streamId: number,
+    blob: Blob,
+    kWrap: Uint8Array,
+): Promise<void> {
+    if (kWrap.length !== 32) {
+        throw new Error(`importDiskStreamCommit: K_wrap must be 32 bytes, got ${kWrap.length}`);
+    }
+    if (!hasGlobalKey()) {
+        throw new Error(
+            'importDiskStreamCommit rejected: no globalKey registered. ' +
+            'C# caller must have run EnterEncryptedAsync between preflight and commit.');
+    }
+    const globalKey = snapshotGlobalKey()!;
+    const op = nextOpId();
+    debugLog(op, 'commit.enter', { blobSize: blob.size });
+    try {
+        await importDiskStreamCommit(blob, kWrap, globalKey, poolUtil!, op);
+        debugLog(op, 'commit.done', {});
+    } catch (err) {
+        debugLog(op, 'commit.error', { msg: String(err) });
+        throw err;
+    } finally {
+        clearBytes(kWrap);
+        clearBytes(globalKey);
+    }
+    self.postMessage({ streamId, streamDone: true, result: 0 });
 }
 
 /**
