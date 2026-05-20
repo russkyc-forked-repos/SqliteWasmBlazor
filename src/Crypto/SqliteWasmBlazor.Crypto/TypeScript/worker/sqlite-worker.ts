@@ -1550,6 +1550,12 @@ async function importDatabasePlain(
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
+    if (plainBytes.length === 0 || plainBytes.length % PLAIN_SLOT_SIZE !== 0) {
+        throw new Error(
+            `importDbPlain: ${dbName} length ${plainBytes.length} is not a non-zero ` +
+            `multiple of the plain page size ${PLAIN_SLOT_SIZE}; refusing to import ` +
+            `a non-plain source.`);
+    }
     const globalKey = snapshotGlobalKey();
     if (globalKey === undefined) {
         throw new Error(
@@ -1557,27 +1563,61 @@ async function importDatabasePlain(
             `Disk must be Encrypted+Unlocked before plain bytes can be ` +
             `re-encrypted under the disk key.`);
     }
-    let rekeyed: Uint8Array | undefined;
+    const dbPath = `/databases/${dbName}`;
+    const tempPath = `${dbPath}.plain-import-tmp`;
+    const op = nextOpId();
+
+    // Clean up any leftover temp slot from a prior crashed attempt.
+    if (poolUtil.getFileNames().includes(tempPath)) {
+        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+    }
+    // If dbName is already mapped (e.g. an existing slot the caller forgot
+    // to wipe), unlink it before the atomic-replace promotes the new slot.
+    // The state-aware dispatch already deletes existing entries on the C#
+    // side, so this is defensive.
+    if (poolUtil.getFileNames().includes(dbPath)) {
+        try { poolUtil.unlink(dbPath); } catch { /* best-effort */ }
+    }
+
+    const totalSlots = plainBytes.length / PLAIN_SLOT_SIZE;
+    debugLog(op, 'plainImport.enter', { name: dbName, slots: totalSlots });
+
     try {
-        const dbPath = `/databases/${dbName}`;
-        logger.info(
-            MODULE_NAME,
-            `[plain-import] rekey-in: dbPath=${dbPath} ` +
-            `globalKey=${keyFingerprint(globalKey)} ` +
-            `plainBytes=${plainBytes.length}B`);
-        // sourceKey=undefined → input is plain SQLite pages; rekeySlots
-        // aliases each 4096-byte slot as plaintext and emits 4124-byte
-        // encrypted slots under globalKey. AAD binds dbPath + slotIndex,
-        // matching the VFS read path's per-page AAD.
-        rekeyed = rekeySlots(plainBytes, dbPath, undefined, globalKey);
-        logger.info(
-            MODULE_NAME,
-            `[plain-import] rekey-out: rekeyed=${rekeyed.length}B`);
-        return await importDatabase(dbName, rekeyed, /* opaque */ true);
-    } finally {
-        if (rekeyed !== undefined) {
-            clearBytes(rekeyed);
+        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+            const plainOffset = slotBase * PLAIN_SLOT_SIZE;
+            const plainChunkBytes = slotCount * PLAIN_SLOT_SIZE;
+            const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
+
+            // subarray aliases the parent buffer — no allocation.
+            // rekeySlots reads each 4096-byte slot in the chunk and emits
+            // a 4124-byte encrypted slot via per-slot AAD bound to
+            // (dbPath, slotBase + i). The output chunk is freshly
+            // allocated; we writeFileSlice it then drop.
+            const plainChunk = plainBytes.subarray(plainOffset, plainOffset + plainChunkBytes);
+            let encryptedChunk: Uint8Array | null = null;
+            try {
+                encryptedChunk = rekeySlots(plainChunk, dbPath, undefined, globalKey, slotBase);
+                poolUtil.writeFileSlice(tempPath, encryptedOffset, encryptedChunk!);
+                debugLog(op, 'plainImport.chunk', {
+                    name: dbName, slotBase, slotCount,
+                    isFirst: slotBase === 0,
+                    isLast: slotBase + slotCount === totalSlots,
+                });
+            } finally {
+                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+            }
         }
+
+        debugLog(op, 'plainImport.atomicReplace', { name: dbName });
+        poolUtil.atomicReplaceFile(tempPath, dbPath);
+        debugLog(op, 'plainImport.done', { name: dbName });
+        return { rowsAffected: 0 };
+    } catch (err) {
+        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        debugLog(op, 'plainImport.error', { name: dbName, msg: String(err) });
+        throw err;
+    } finally {
         clearBytes(globalKey);
     }
 }
