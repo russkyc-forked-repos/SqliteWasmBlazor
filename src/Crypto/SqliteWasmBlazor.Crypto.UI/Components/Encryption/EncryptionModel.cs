@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.Localization;
 using RxBlazorV2.Interface;
 using RxBlazorV2.Model;
@@ -82,9 +84,11 @@ public partial class EncryptionModel : ObservableModel
     public partial IObservableCommandAsync ExportDiskForRecipient { get; }
 
     // Replaces the entire pool. Caller (page partial) owns the destructive
-    // confirmation dialog; parameter is the picked file's bytes.
+    // confirmation dialog; parameter is the picked file itself — the model
+    // streams it into the JS-side BlobSession one ArrayPool chunk at a time
+    // so C# managed heap stays bounded regardless of envelope size.
     [ObservableCommand(nameof(ImportDiskCmdAsync), nameof(CanImportDisk), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync<byte[]> ImportDisk { get; }
+    public partial IObservableCommandAsync<IBrowserFile> ImportDisk { get; }
 
     // Plain-disk ZIP batch ops. Each ZIP entry is a standard .db any
     // SQLite tool can open.
@@ -231,22 +235,51 @@ public partial class EncryptionModel : ObservableModel
             nameof(ExportDiskForRecipient));
     }
 
-    // Guided import — collapses the recipient ritual (Reset → EnterEncrypted
-    // → ImportDisk) into one orchestrated call. Reads the envelope's
-    // credentialId hint, drives WebAuthn pinned to that passkey, derives the
-    // VFS key from the freshly-cached PRF seed, then calls the service's
-    // wipe-and-rebind primitive. PRF cache stays populated through the
-    // service call so the envelope's ECIES K_wrap can be unwrapped under
-    // the same seed.
-    private async Task ImportDiskCmdAsync(byte[] envelopeBytes, CancellationToken cancellationToken)
+    /// <summary>
+    /// Guided import — collapses the recipient ritual (Reset → EnterEncrypted
+    /// → ImportDisk) into one orchestrated call. The picked file's stream is
+    /// shipped to the JS-side BlobSession one ArrayPool chunk at a time; the
+    /// worker re-streams it for AEAD preflight + per-slot rekey commit.
+    /// C# managed heap peak stays at one chunk (~1 MB).
+    ///
+    /// Flow: peek envelope header (first ~4 KB only) → read CredentialIdHint
+    /// → drive WebAuthn pinned to that passkey → derive VFS key from the
+    /// freshly-cached PRF seed → call Session.ImportDiskGuidedFromStreamAsync.
+    /// The PRF cache stays populated through the service call so the
+    /// envelope's ECIES K_wrap can be unwrapped under the same seed.
+    /// </summary>
+    private async Task ImportDiskCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
     {
-        if (envelopeBytes is null || envelopeBytes.Length == 0)
+        if (file is null || file.Size == 0)
         {
             throw new InvalidOperationException(
                 "Pick a .eds envelope file before importing.");
         }
 
-        var hint = await Session.ReadEnvelopeCredentialIdHintAsync(envelopeBytes, cancellationToken);
+        // Header peek — read just the first 4 KB of the picked file so we
+        // can extract the CredentialIdHint before driving WebAuthn. The
+        // envelope's positional MessagePack header (version + AadVer +
+        // PrfSalt + 4 strings) fits comfortably in 4 KB.
+        const int peekBytes = 4096;
+        var headerSize = (int)Math.Min(peekBytes, file.Size);
+        var headerBuffer = new byte[headerSize];
+        await using (var peekStream = file.OpenReadStream(maxAllowedSize: file.Size, cancellationToken))
+        {
+            var read = 0;
+            while (read < headerSize)
+            {
+                var n = await peekStream.ReadAsync(
+                    headerBuffer.AsMemory(read, headerSize - read), cancellationToken);
+                if (n <= 0) { break; }
+                read += n;
+            }
+            if (read < headerSize)
+            {
+                Array.Resize(ref headerBuffer, read);
+            }
+        }
+
+        var hint = await Session.ReadEnvelopeCredentialIdHintAsync(headerBuffer, cancellationToken);
         if (string.IsNullOrEmpty(hint))
         {
             throw new InvalidOperationException(
@@ -275,8 +308,15 @@ public partial class EncryptionModel : ObservableModel
         var vfsKey = await DeriveVfsKeyAsync();
         try
         {
-            var result = await Session.ImportDiskGuidedAsync(
-                envelopeBytes, vfsKey, hint, cancellationToken);
+            // Re-open the file's stream for the chunked import — the peek
+            // stream above was consumed for 4 KB; IBrowserFile yields a
+            // fresh stream per OpenReadStream call. The service streams
+            // the full body into the JS-side BlobSession one ArrayPool
+            // chunk at a time, then drives preflight + commit.
+            await using var importStream = file.OpenReadStream(
+                maxAllowedSize: file.Size, cancellationToken);
+            var result = await Session.ImportDiskGuidedFromStreamAsync(
+                importStream, file.Size, vfsKey, hint, cancellationToken);
             if (result == DiskImportResult.WRONG_KEY)
             {
                 throw new InvalidOperationException(

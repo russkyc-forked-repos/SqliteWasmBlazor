@@ -92,29 +92,35 @@ public partial class DatabaseEncryption
     /// <summary>
     /// Unified file-pick handler for the import flow. Sniffs the picked
     /// file's extension and dispatches to the envelope (.eds → guided
-    /// passkey-rebinding import) or plain-ZIP (.zip → state-aware
-    /// dispatch via <see cref="EncryptionModel.ImportAllDatabases"/>)
-    /// path. One picker + one handler keeps the page surface compact;
-    /// the model commands' <c>CanExecute</c> + the encrypted service's
-    /// state-aware dispatch handle the rest.
+    /// passkey-rebinding import via the streaming BlobSession path) or
+    /// plain-ZIP (.zip → state-aware dispatch via
+    /// <see cref="EncryptionModel.ImportAllDatabases"/>) path.
+    ///
+    /// <para>
+    /// .eds is handed off as <see cref="IBrowserFile"/> — the model + service
+    /// stream it into a JS-side BlobSession one chunk at a time, so the
+    /// C# managed heap never holds the full envelope. .zip is still read
+    /// into a managed byte[] (typical demo ZIPs are small enough); a
+    /// browser-file variant for plain ZIPs is tracked as G8.7.
+    /// </para>
     /// </summary>
     private async Task HandleImportPickedAsync(IBrowserFile? file)
     {
         if (file is null) return;
-        var bytes = await ReadPickedAsync(file);
-        if (bytes is null) return;
 
-        if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        if (file.Name.EndsWith(".eds", StringComparison.OrdinalIgnoreCase))
         {
-            await HandleZipBytesAsync(bytes);
+            await HandleEnvelopeFileAsync(file);
         }
-        else if (file.Name.EndsWith(".eds", StringComparison.OrdinalIgnoreCase))
+        else if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
         {
-            await HandleEnvelopeBytesAsync(bytes);
+            var bytes = await ReadPickedAsync(file);
+            if (bytes is null) return;
+            await HandleZipBytesAsync(bytes);
         }
     }
 
-    private async Task HandleEnvelopeBytesAsync(byte[] bytes)
+    private async Task HandleEnvelopeFileAsync(IBrowserFile file)
     {
         var confirmed = await ConfirmDestructiveAsync(
             title: Model.Localizer["Btn_ImportDisk"],
@@ -123,7 +129,7 @@ public partial class DatabaseEncryption
 
         if (confirmed)
         {
-            await Model.ImportDisk.ExecuteAsync(bytes);
+            await Model.ImportDisk.ExecuteAsync(file);
         }
     }
 

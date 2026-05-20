@@ -1183,27 +1183,26 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        EncryptedDiskEnvelope decoded;
+        // Forward-parse the positional header via PeekEnvelopeHeader rather
+        // than full MessagePackSerializer.Deserialize<EncryptedDiskEnvelope> —
+        // works equally well on a small (≥ ~256 byte) prefix as on a full
+        // envelope, which is what the streaming import path needs to peek
+        // CredentialIdHint without buffering the whole .eds file in C#.
+        EnvelopeHeader header;
         try
         {
-            decoded = MessagePackSerializer.Deserialize<EncryptedDiskEnvelope>(envelope);
+            header = PeekEnvelopeHeader(envelope.ToArray());
         }
-        catch (MessagePackSerializationException)
+        catch (Exception)
+        {
+            // Truncated / malformed prefix → no hint available.
+            return ValueTask.FromResult<string?>(null);
+        }
+        if (header.Version != 3 || string.IsNullOrEmpty(header.CredentialIdHint))
         {
             return ValueTask.FromResult<string?>(null);
         }
-        try
-        {
-            if (decoded.Version != 3 || string.IsNullOrEmpty(decoded.CredentialIdHint))
-            {
-                return ValueTask.FromResult<string?>(null);
-            }
-            return ValueTask.FromResult<string?>(decoded.CredentialIdHint);
-        }
-        finally
-        {
-            decoded.Clear();
-        }
+        return ValueTask.FromResult<string?>(header.CredentialIdHint);
     }
 
     public async Task<DiskImportResult> ImportDiskGuidedAsync(
