@@ -666,6 +666,117 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
+    /// Streaming variant of <see cref="ExportDiskToPubkeyAsync"/>: assembles
+    /// the v3 envelope as a virtual-concat Blob on the main thread and
+    /// triggers the browser download directly. C# never sees a managed
+    /// <c>byte[]</c> of the envelope — that's the path that OOMs iPad
+    /// Safari at ~150 MB on the byte[]-returning sibling.
+    ///
+    /// Use this overload for production downloads on memory-constrained
+    /// mobile browsers; prefer <see cref="ExportDiskToPubkeyAsync"/> when
+    /// an in-memory round-trip is required (tests, server-side persistence).
+    /// </summary>
+    public async Task ExportDiskToPubkeyAndDownloadAsync(
+        string filename,
+        string recipientX25519PublicKeyBase64,
+        string recipientCredentialId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(filename))
+        {
+            throw new ArgumentException(
+                "filename must be a non-empty string.", nameof(filename));
+        }
+        if (string.IsNullOrWhiteSpace(recipientX25519PublicKeyBase64))
+        {
+            throw new ArgumentException(
+                "recipientX25519PublicKeyBase64 must be a non-empty Base64 X25519 pubkey.",
+                nameof(recipientX25519PublicKeyBase64));
+        }
+        if (string.IsNullOrWhiteSpace(recipientCredentialId))
+        {
+            throw new ArgumentException(
+                "recipientCredentialId must be a non-empty Base64 WebAuthn credentialId.",
+                nameof(recipientCredentialId));
+        }
+
+        // Decode + length-check the recipient pubkey before doing any
+        // worker round-trip — mirrors ExportDiskToPubkeyAsync's preflight.
+        byte[] recipientPubBytes;
+        try
+        {
+            recipientPubBytes = Convert.FromBase64String(recipientX25519PublicKeyBase64);
+        }
+        catch (FormatException ex)
+        {
+            throw new ArgumentException(
+                "recipientX25519PublicKeyBase64 is not valid Base64.",
+                nameof(recipientX25519PublicKeyBase64), ex);
+        }
+        if (recipientPubBytes.Length != 32)
+        {
+            throw new ArgumentException(
+                $"recipientX25519PublicKeyBase64 must decode to 32 bytes; got {recipientPubBytes.Length}.",
+                nameof(recipientX25519PublicKeyBase64));
+        }
+
+        var current = await GetStateAsync(cancellationToken);
+        if (!current.Encrypted || !current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ExportDiskToPubkeyAndDownloadAsync requires Encrypted + Unlocked — call UnlockAsync first.");
+        }
+
+        // Same K_wrap generation + ECIES wrap as the byte[] path. The
+        // wrap key is held in C# only long enough to ship to the worker;
+        // the worker side wipes its copy after the chunked rekey loop
+        // finishes.
+        var wrapKeyMem = await _cryptoProvider.GenerateContentKeyAsync();
+        var wrapKey = wrapKeyMem.ToArray();
+        try
+        {
+            var wrappedResult = await _cryptoProvider.EncryptAsymmetricFromBytesAsync(
+                wrapKey, recipientX25519PublicKeyBase64);
+            if (!wrappedResult.Success || wrappedResult.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"ExportDiskToPubkeyAndDownloadAsync: ECIES wrap of K_wrap failed " +
+                    $"({wrappedResult.ErrorCode}).");
+            }
+            var wrapped = wrappedResult.Value;
+
+            var metadata = new
+            {
+                version = 3,
+                aadVersion = "v1",
+                prfSaltBase64 = Convert.ToBase64String(_prfService.HashedSaltBytes),
+                ephemeralPublicKey = wrapped.EphemeralPublicKey,
+                wrappedContentKeyCiphertext = wrapped.Ciphertext,
+                wrappedContentKeyNonce = wrapped.Nonce,
+                credentialIdHint = recipientCredentialId,
+            };
+            var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
+
+            var ok = await SqliteWasmWorkerBridge.ExportDiskToDownloadAsync(
+                filename, metadataJson, new ArraySegment<byte>(wrapKey));
+            if (!ok)
+            {
+                throw new InvalidOperationException(
+                    "ExportDiskToPubkeyAndDownloadAsync: bridge reported failure.");
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(wrapKey);
+            if (MemoryMarshal.TryGetArray(wrapKeyMem, out var wrapKeySegment)
+                && wrapKeySegment.Array is not null)
+            {
+                CryptographicOperations.ZeroMemory(wrapKeySegment.AsSpan());
+            }
+        }
+    }
+
+    /// <summary>
     /// Import an asymmetric encrypted disk envelope.
     /// </summary>
     public async Task<DiskImportResult> ImportDiskAsync(

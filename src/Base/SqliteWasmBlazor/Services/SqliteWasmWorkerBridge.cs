@@ -961,6 +961,27 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// </summary>
     [JSImport("blobSessionDiscard", "sqliteWasmWorker")]
     internal static partial void BlobSessionDiscard(int sessionId);
+
+    /// <summary>
+    /// Streaming whole-disk envelope export: drives a worker-side rekey
+    /// loop, assembles the v3 MessagePack envelope as a virtual-concat
+    /// Blob on the main thread, and triggers the download directly. C#
+    /// never materialises the envelope as a managed <c>byte[]</c> — the
+    /// path that breaks on iPad Safari for ~250 MB DBs.
+    /// </summary>
+    /// <remarks>
+    /// <c>kWrap</c> uses the <c>ArraySegment&lt;byte&gt;</c> + <c>MemoryView</c>
+    /// marshaling pattern rather than the <c>Span&lt;byte&gt;</c> one
+    /// <see cref="SendBinaryToWorker"/> takes — <see cref="Span{T}"/> isn't
+    /// supported on <c>Task</c>-returning interop (SYSLIB1072). The JS
+    /// side <c>.slice()</c>s into a real <c>Uint8Array</c>; caller wipes
+    /// the source buffer in <c>finally</c>.
+    /// </remarks>
+    [JSImport("exportDiskToDownload", "sqliteWasmWorker")]
+    internal static partial Task<bool> ExportDiskToDownloadAsync(
+        string filename,
+        string metadataJson,
+        [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 }
 
 /// <summary>

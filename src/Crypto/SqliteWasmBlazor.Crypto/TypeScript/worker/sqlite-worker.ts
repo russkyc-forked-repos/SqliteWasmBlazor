@@ -215,6 +215,24 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
         return;
     }
 
+    // Streaming requests — keyed by `streamId` (a negative int issued by
+    // the bridge to stay clear of the C#-side positive request-id space).
+    // The streaming dispatcher emits `streamChunk` + `streamDone` /
+    // `streamError` messages all bearing the same streamId; no `id` field.
+    if ('streamId' in event.data && typeof (event.data as any).streamId === 'number') {
+        const streamMsg = event.data as {
+            streamId: number;
+            data: { type: string };
+            binaryPayload?: ArrayBuffer;
+        };
+        await handleStreamingRequest(
+            streamMsg.streamId,
+            streamMsg.data,
+            streamMsg.binaryPayload,
+        );
+        return;
+    }
+
     // Handle regular requests
     const { id, data, binaryPayload, binaryHeader } = event.data as WorkerRequest;
 
@@ -260,6 +278,134 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
         self.postMessage(response);
     }
 };
+
+/**
+ * Top-level dispatcher for `streamId`-bearing messages. Each handler is
+ * responsible for posting back `streamChunk` messages and ultimately one
+ * `streamDone` (or `streamError`) — all with the same streamId, none with
+ * a top-level `id` field. The bridge keys its StreamHandler registry by
+ * streamId; this dispatcher's only job is to drop into the right handler.
+ */
+async function handleStreamingRequest(
+    streamId: number,
+    data: { type: string },
+    binaryPayload?: ArrayBuffer,
+): Promise<void> {
+    try {
+        switch (data.type) {
+            case 'exportDiskStream':
+                if (!binaryPayload) {
+                    throw new Error('exportDiskStream requires binaryPayload (raw K_wrap)');
+                }
+                await exportDiskStreamHandler(streamId, new Uint8Array(binaryPayload));
+                return;
+            default:
+                throw new Error(`Unknown streaming request type: ${data.type}`);
+        }
+    } catch (error) {
+        self.postMessage({
+            streamId,
+            streamError: true,
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+
+/**
+ * Chunked encrypted-disk export — worker side. Caller (bridge) has wired
+ * a streamHandler for <paramref name="streamId"/>; this function loops
+ * every DB in the SAH pool and for each one emits a sequence of
+ * `streamChunk` messages bearing the rekeyed slot batch under the
+ * envelope's per-export K_wrap. JS heap peak per chunk is one slot batch
+ * (~1 MB) regardless of total disk size.
+ *
+ * Precondition (enforced by caller): the worker is Encrypted+Unlocked —
+ * a globalKey is registered and every DB is slot-format ciphertext under
+ * it. We read each DB chunk via exportFileSlice (so the worker reads at
+ * most one chunk into JS heap at a time), decrypt+re-encrypt under K_wrap
+ * via the chunked rekeySlots path, and transfer the rekeyed chunk to the
+ * main thread.
+ */
+async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    if (kWrap.length !== 32) {
+        throw new Error(`exportDiskStream: K_wrap must be 32 bytes, got ${kWrap.length}`);
+    }
+    if (!hasGlobalKey()) {
+        throw new Error(
+            'exportDiskStream rejected: no globalKey registered. Caller must ' +
+            'have Unlocked the disk before invoking the streaming export.');
+    }
+
+    const op = nextOpId();
+    const globalKey = snapshotGlobalKey()!;
+    try {
+        const names = poolUtil.listDatabases();
+        debugLog(op, 'export.enter', {});
+        debugLog(op, 'export.dbs', { count: names.length });
+
+        for (const name of names) {
+            const dbPath = `/databases/${name}`;
+            const fileSize = poolUtil.getFileSize(dbPath);
+            if (fileSize === 0 || fileSize % ENCRYPTED_SLOT_SIZE !== 0) {
+                throw new Error(
+                    `exportDiskStream: ${name} length ${fileSize} is not a non-zero ` +
+                    `multiple of the encrypted slot size ${ENCRYPTED_SLOT_SIZE}; ` +
+                    `refusing to export a non-encrypted source.`);
+            }
+            const totalSlots = fileSize / ENCRYPTED_SLOT_SIZE;
+            debugLog(op, 'export.db.start', { name, slots: totalSlots });
+
+            for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+                const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+                const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
+                const encryptedBytes = slotCount * ENCRYPTED_SLOT_SIZE;
+                const isFirst = slotBase === 0;
+                const isLast = slotBase + slotCount === totalSlots;
+
+                let sourceChunk: Uint8Array | null = null;
+                let rekeyedChunk: Uint8Array | null = null;
+                try {
+                    sourceChunk = poolUtil.exportFileSlice(dbPath, encryptedOffset, encryptedBytes);
+                    // K_old → K_wrap re-encrypt. Output is the same slot
+                    // format (4124 bytes per slot, AAD-bound to dbPath +
+                    // global slot index).
+                    rekeyedChunk = rekeySlots(sourceChunk!, dbPath, globalKey, kWrap, slotBase);
+                    debugLog(op, 'export.chunk', { name, slotBase, slotCount, isFirst, isLast });
+                    // Transfer the rekeyed buffer to main — the worker
+                    // drops its reference, main wraps it as a Blob part.
+                    self.postMessage(
+                        {
+                            streamId,
+                            streamChunk: true,
+                            name,
+                            data: rekeyedChunk,
+                            isFirst,
+                            isLast,
+                        },
+                        [rekeyedChunk!.buffer],
+                    );
+                    // Buffer is detached after transfer — null the local
+                    // reference so the finally-block's clearBytes is a
+                    // no-op on the (now-zero-length) view.
+                    rekeyedChunk = null;
+                } finally {
+                    if (sourceChunk !== null) { clearBytes(sourceChunk); }
+                    if (rekeyedChunk !== null) { clearBytes(rekeyedChunk); }
+                }
+            }
+            debugLog(op, 'export.db.done', { name });
+        }
+
+        debugLog(op, 'export.done', {});
+        self.postMessage({ streamId, streamDone: true });
+    } finally {
+        // globalKey snapshot — clear so K doesn't linger past export.
+        clearBytes(globalKey);
+    }
+}
 
 async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayBuffer, binaryHeader?: ArrayBuffer) {
     const { type, database, sql, parameters } = data;
