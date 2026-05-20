@@ -69,10 +69,17 @@
   <ItemGroup>
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
-  <!-- SqliteWasmBlazor (own packages, pre-release) -->
+  <!-- SqliteWasmBlazor (own packages, pre-release).
+       Version pinning derived from $(SqliteWasmBlazorVersion) in
+       Directory.Build.props — single source of truth so a version bump
+       there flows to every PackageReference resolved via CPM (Crypto in
+       Release uses PackageReference Include="SqliteWasmBlazor", same for
+       Crypto.UI → Crypto and Demo/AdoNetSample → all three). Without this
+       wire-up, deep-clean-publish lands on a stale cached version and
+       Release builds fail to find newly-added internal methods. -->
   <ItemGroup>
-    <PackageVersion Include="SqliteWasmBlazor" Version="0.9.1-pre" />
-    <PackageVersion Include="SqliteWasmBlazor.Crypto" Version="0.9.1-pre" />
-    <PackageVersion Include="SqliteWasmBlazor.Crypto.UI" Version="0.9.1-pre" />
+    <PackageVersion Include="SqliteWasmBlazor" Version="$(SqliteWasmBlazorVersion)" />
+    <PackageVersion Include="SqliteWasmBlazor.Crypto" Version="$(SqliteWasmBlazorVersion)" />
+    <PackageVersion Include="SqliteWasmBlazor.Crypto.UI" Version="$(SqliteWasmBlazorVersion)" />
   </ItemGroup>
 </Project>
