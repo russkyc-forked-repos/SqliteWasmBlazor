@@ -74,6 +74,14 @@ export interface PrfPoolUtil {
     reserveMinimumCapacity(min: number): Promise<number>;
     exportFile(name: string): Uint8Array;
     importDb(name: string, bytes: Uint8Array | ArrayBuffer, opaque?: boolean): number | Promise<number>;
+    /** Data-region byte count of <paramref name="name"/>'s SAH (excludes header sector). */
+    getFileSize(name: string): number;
+    /** Read a slice of the data region. Throws on unknown name or out-of-range request. */
+    exportFileSlice(name: string, offset: number, length: number): Uint8Array;
+    /** Write a slice; lazy-allocates a fresh SAH slot when name is unmapped. */
+    writeFileSlice(name: string, offset: number, bytes: Uint8Array): void;
+    /** Atomic-promote srcName → dstName (drops dstName's SAH if any, renames src). */
+    atomicReplaceFile(srcName: string, dstName: string): true;
     wipeFiles(): Promise<void>;
     unlink(filename: string): boolean;
     renameFile(oldPath: string, newPath: string): true;
@@ -709,6 +717,102 @@ class OpfsSAHPool {
             if (nRead !== n) toss('Expected to read ' + n + ' bytes but read ' + nRead + '.');
         }
         return b;
+    }
+
+    // -- Chunked I/O primitives ---------------------------------------------
+    //
+    // Foundation for the chunked encrypted-disk pipeline: every op that
+    // touches a > ~1 MB body reads/writes the SAH file in slot-aligned
+    // chunks instead of materialising the whole body in JS heap. The
+    // primitives are deliberately raw — they treat the data region as an
+    // opaque byte array. Higher layers (chunked encrypt-in-place,
+    // chunked import commit) own AAD construction, slot framing, and
+    // atomic-rename ordering.
+
+    /**
+     * Data-region size (excluding the 4 KB SAHPool header sector) of the
+     * SAH backing <paramref name="name"/>. Equal to what
+     * <see cref="exportFile"/> would return as `byte[].length`. Throws on
+     * unknown name.
+     */
+    getFileSize(name: string): number {
+        const sah = this.mapFilenameToSAH.get(name);
+        if (!sah) toss('getFileSize: file not found:', name);
+        return sah!.getSize() - HEADER_OFFSET_DATA;
+    }
+
+    /**
+     * Read <paramref name="length"/> bytes from <paramref name="name"/>'s
+     * data region starting at logical <paramref name="offset"/>. Throws on
+     * unknown name or out-of-range request.
+     */
+    exportFileSlice(name: string, offset: number, length: number): Uint8Array {
+        const sah = this.mapFilenameToSAH.get(name);
+        if (!sah) toss('exportFileSlice: file not found:', name);
+        const dataSize = sah!.getSize() - HEADER_OFFSET_DATA;
+        if (offset < 0 || length < 0 || offset + length > dataSize) {
+            toss(
+                'exportFileSlice: out-of-range',
+                'offset=', offset,
+                'length=', length,
+                'dataSize=', dataSize);
+        }
+        const buf = new Uint8Array(length);
+        if (length > 0) {
+            const nRead = sah!.read(buf, { at: HEADER_OFFSET_DATA + offset });
+            if (nRead !== length) {
+                toss('exportFileSlice: short read', nRead, 'of', length);
+            }
+        }
+        return buf;
+    }
+
+    /**
+     * Write <paramref name="bytes"/> at logical <paramref name="offset"/>
+     * within <paramref name="name"/>'s data region. Lazy-allocates a fresh
+     * SAH slot when the path is not yet mapped — that's the entry point for
+     * the chunked encrypt/decrypt temp-file pattern: caller picks a temp
+     * path, drives a sequence of writeFileSlice calls, then promotes via
+     * <see cref="atomicReplaceFile"/>.
+     *
+     * Skips the SQLite-format-3 header / 512-byte alignment / byte-18
+     * patches that <see cref="importDb"/> applies to known-plain bodies —
+     * a chunked write is by definition opaque. Caller owns the slot's
+     * semantic content.
+     */
+    writeFileSlice(name: string, offset: number, bytes: Uint8Array): void {
+        let sah = this.mapFilenameToSAH.get(name);
+        if (!sah) {
+            sah = this.nextAvailableSAH() ||
+                toss('writeFileSlice: no available SAH slots');
+            this.setAssociatedPath(sah, name, this.capi.SQLITE_OPEN_MAIN_DB);
+        }
+        if (offset < 0) {
+            toss('writeFileSlice: offset must be >= 0, got', offset);
+        }
+        const nWrote = sah.write(bytes, { at: HEADER_OFFSET_DATA + offset });
+        if (nWrote !== bytes.byteLength) {
+            toss('writeFileSlice: short write', nWrote, 'of', bytes.byteLength);
+        }
+    }
+
+    /**
+     * Promote <paramref name="srcName"/> to <paramref name="dstName"/>
+     * atomically (from the consumer's perspective): if dst is currently
+     * mapped to a SAH, that SAH is freed (slot becomes available for
+     * future allocations); the src SAH is then re-tagged with the dst
+     * path via the existing <see cref="renameFile"/> mechanics. No bytes
+     * copied. Used by chunked encrypt/decrypt-in-place to swap a fully
+     * written temp slot in over the source slot in one metadata update.
+     */
+    atomicReplaceFile(srcName: string, dstName: string): true {
+        if (!this.mapFilenameToSAH.has(srcName)) {
+            toss('atomicReplaceFile: src not found:', srcName);
+        }
+        if (this.mapFilenameToSAH.has(dstName)) {
+            this.deletePath(dstName);
+        }
+        return this.renameFile(srcName, dstName);
     }
 
     async importDbChunked(name: string, callback: () => any) {
@@ -1375,6 +1479,18 @@ class OpfsSAHPoolUtil {
         opaque: boolean = false
     ) {
         return this.p.importDb(name, bytes, opaque);
+    }
+    getFileSize(name: string) {
+        return this.p.getFileSize(name);
+    }
+    exportFileSlice(name: string, offset: number, length: number) {
+        return this.p.exportFileSlice(name, offset, length);
+    }
+    writeFileSlice(name: string, offset: number, bytes: Uint8Array) {
+        this.p.writeFileSlice(name, offset, bytes);
+    }
+    atomicReplaceFile(srcName: string, dstName: string) {
+        return this.p.atomicReplaceFile(srcName, dstName);
     }
     async wipeFiles() {
         await this.p.reset(true);
