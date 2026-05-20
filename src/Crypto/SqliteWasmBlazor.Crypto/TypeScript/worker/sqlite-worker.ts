@@ -27,6 +27,7 @@ import {
     writeDiskManifestOp,
     clearDiskManifestOp,
 } from './worker-manifest';
+import { setDebugLogBase } from './debug-log';
 
 // Re-export mutable state references for local use
 let sqlite3: any;
@@ -198,6 +199,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
         if (event.data.assetRoot) {
             assetRoot = event.data.assetRoot;
         }
+        // Wire the diagnostic channel. After this fires, every debugLog call
+        // POSTs to <origin><baseHref>debug-log.php; before it fires the
+        // calls are no-ops. The PHP sink is deployed only by
+        // scripts/deep-clean-publish.sh, so a vanilla publish 404s silently.
+        setDebugLogBase(baseHref);
         // Start initialization after receiving base href
         await initializeSQLite();
         return;
