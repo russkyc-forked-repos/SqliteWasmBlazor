@@ -210,13 +210,17 @@ public partial class EncryptionModel : ObservableModel
             throw new InvalidOperationException(
                 "Cannot back up: not signed in (no WebAuthn credentialId available).");
         }
-        var envelope = await Session.ExportDiskToPubkeyAsync(
-            Auth.PublicKey, Auth.CredentialId, cancellationToken);
+        // Streaming download path: worker emits per-DB chunks, bridge composes
+        // the envelope as a virtual-concat Blob, browser disk-backs the parts,
+        // anchor click triggers the save. C# never holds the envelope as a
+        // managed byte[] — the cliff the legacy ExportDiskToPubkeyAsync byte[]
+        // path hits at ~150 MB on iPad and at ~2 GB on desktop WASM.
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-backup-{stamp}.eds";
-        await DownloadBytesAsync(envelope, fileName);
+        await Session.ExportDiskToPubkeyAndDownloadAsync(
+            fileName, Auth.PublicKey, Auth.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExported", FormatSize(envelope.Length), fileName],
+            Localizer["Status_DiskExportedStreaming", fileName],
             nameof(ExportDiskBackup));
     }
 
@@ -225,13 +229,12 @@ public partial class EncryptionModel : ObservableModel
         var recipient = TryGetPastedRecipientIdentity()
             ?? throw new InvalidOperationException(
                 "Pasted recipient identity is missing or invalid.");
-        var envelope = await Session.ExportDiskToPubkeyAsync(
-            recipient.PublicKey, recipient.CredentialId, cancellationToken);
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-recipient-{stamp}.eds";
-        await DownloadBytesAsync(envelope, fileName);
+        await Session.ExportDiskToPubkeyAndDownloadAsync(
+            fileName, recipient.PublicKey, recipient.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExportedForRecipient", FormatSize(envelope.Length), fileName],
+            Localizer["Status_DiskExportedForRecipientStreaming", fileName],
             nameof(ExportDiskForRecipient));
     }
 

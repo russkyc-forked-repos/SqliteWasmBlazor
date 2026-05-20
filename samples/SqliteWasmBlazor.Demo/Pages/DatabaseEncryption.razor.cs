@@ -8,14 +8,13 @@ namespace SqliteWasmBlazor.Demo.Pages;
 
 public partial class DatabaseEncryption
 {
-    /// <summary>
-    /// Maximum size accepted from <see cref="MudFileUpload{T}"/> on disk
-    /// import. The encrypted-VFS pool is bounded by the SAH capacity (~25
-    /// slots × ~few MB each); 100 MiB covers practical envelopes with
-    /// headroom while preventing a malicious / corrupt picker from
-    /// pinning the WASM heap.
-    /// </summary>
-    private const long MaxImportEnvelopeBytes = 100L * 1024 * 1024;
+    // .eds goes through the streaming BlobSession path (no managed byte[]
+    // of the envelope is ever allocated). .zip still loads into a managed
+    // byte[] via ReadPickedAsync — use file.Size as the cap there; the
+    // browser/picker already bounds what the user can hand in, and the
+    // arbitrary 100 MiB ceiling rejected legitimate large plain ZIPs.
+    // Future work (G8.7): flip .zip to a JS-side ZIP parser + IBrowserFile
+    // streaming so the .zip cap can be lifted to disk-bounded.
 
     [Inject] public required IDialogService DialogService { get; init; }
 
@@ -157,14 +156,17 @@ public partial class DatabaseEncryption
     }
 
     /// <summary>
-    /// Common file-bytes read with size cap. Returns null on
-    /// no-file-picked; throws on oversize.
+    /// Common file-bytes read for the .zip plain-import path. Uses the
+    /// picked file's own <see cref="IBrowserFile.Size"/> as the stream
+    /// cap so legitimate multi-DB plain ZIPs aren't rejected by an
+    /// arbitrary constant — the browser/picker already bounds what the
+    /// user can hand in. Returns null on no-file-picked.
     /// </summary>
     private static async Task<byte[]?> ReadPickedAsync(IBrowserFile? file)
     {
         if (file is null) return null;
-        await using var stream = file.OpenReadStream(maxAllowedSize: MaxImportEnvelopeBytes);
-        using var ms = new MemoryStream();
+        await using var stream = file.OpenReadStream(maxAllowedSize: file.Size);
+        using var ms = new MemoryStream(checked((int)file.Size));
         await stream.CopyToAsync(ms);
         return ms.ToArray();
     }
