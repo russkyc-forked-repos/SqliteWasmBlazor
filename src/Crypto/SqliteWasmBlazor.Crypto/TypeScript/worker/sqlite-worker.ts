@@ -1840,11 +1840,15 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
     const tempPath = `${dbPath}.encrypt-tmp`;
     const op = nextOpId();
 
-    if (hasGlobalKey()) {
-        throw new Error(
-            `encryptDb rejected for ${dbName}: a key is already registered; use rekey-export ceremony to re-encrypt under a different key.`,
-        );
-    }
+    // Install-K-first ordering (D.1): a globalKey is already registered
+    // before this loop runs — the caller (EnterEncryptedAsync) installed
+    // K precisely so a rollback decrypt can run under the same key on
+    // mid-loop failure. The shape check below (% PLAIN_SLOT_SIZE != 0)
+    // + the SQLite magic-header probe make it structurally impossible
+    // for an already-encrypted file to slip through this path: a
+    // ciphertext file's length divides by ENCRYPTED_SLOT_SIZE (4124),
+    // not PLAIN_SLOT_SIZE (4096), and its first 16 bytes are AEAD
+    // ciphertext, not the "SQLite format 3\0" magic.
 
     const fileNames: string[] = poolUtil.getFileNames();
     if (!fileNames.includes(dbPath)) {

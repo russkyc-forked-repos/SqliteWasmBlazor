@@ -379,28 +379,29 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
 
         var databases = await _bridge.ListDatabasesAsync(cancellationToken);
-        var backups = new Dictionary<string, byte[]>(databases.Count, StringComparer.Ordinal);
+        var encryptedSoFar = new List<string>(databases.Count);
         try
         {
-            // Phase 0: snapshot every plain DB so a later per-DB encrypt or
-            // manifest write failure can restore the whole pool to Plain.
-            foreach (var db in databases)
-            {
-                backups[db] = await _bridge.ExportDatabaseAsync(db, cancellationToken);
-            }
+            // Phase 1: install the global key BEFORE the encrypt loop.
+            // Install-K-first ordering avoids the managed byte[] backup of
+            // every plain DB that the pre-G7 path did — a 247 MB DB no
+            // longer OOMs Mobile Safari before the first worker call.
+            // Mid-loop failure rolls back via per-DB decrypt-in-place
+            // under the still-registered K, so the crash-safety contract
+            // matches the byte[] backup era with zero managed allocation
+            // per DB.
+            await InstallEncryptionKeyAsync(key, cancellationToken);
 
-            // Phase 1: walk every plain DB in OPFS, encrypt-in-place under K.
-            // EncryptDatabaseInPlaceAsync is per-DB; we iterate. The worker
-            // closes each DB during the conversion, so OFile state can't leak.
+            // Phase 2: walk every plain DB in OPFS, encrypt-in-place under K.
+            // EncryptDatabaseInPlaceAsync is per-DB; the worker closes each
+            // DB during the conversion, so OFile state can't leak. Track
+            // encryptedSoFar so a later failure can decrypt back exactly
+            // the DBs that crossed the cipher boundary.
             foreach (var db in databases)
             {
                 await _encryptedBridge.EncryptDatabaseInPlaceAsync(db, key, cancellationToken);
+                encryptedSoFar.Add(db);
             }
-
-            // Phase 2: install the global key. EnterEncrypted writes the
-            // keyed manifest after install, so verification happens after
-            // the write rather than inside the public UnlockAsync path.
-            await InstallEncryptionKeyAsync(key, cancellationToken);
 
             // Phase 3: write the disk-bound manifest as the last atomic step.
             // GetStateAsync flips to Encrypted+Unlocked only after every DB has
@@ -417,42 +418,40 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
         catch
         {
-            await RollBackEnterEncryptedAsync(databases, backups, CancellationToken.None);
+            await RollBackEnterEncryptedAsync(encryptedSoFar, CancellationToken.None);
             throw;
-        }
-        finally
-        {
-            foreach (var backup in backups.Values)
-            {
-                CryptographicOperations.ZeroMemory(backup);
-            }
         }
     }
 
+    /// <summary>
+    /// Roll back a partial Plain → Encrypted transition without managed-heap
+    /// snapshots. Decrypts every DB that crossed the cipher boundary (in
+    /// reverse install order) via the same chunked decrypt-in-place primitive
+    /// used by LeaveEncryptedAsync. Clears the manifest (which may have been
+    /// partially written if the failure was post-encrypt) and drops the
+    /// installed key. After this the disk is back to Plain.
+    /// </summary>
     private async Task RollBackEnterEncryptedAsync(
-        IReadOnlyList<string> databases,
-        IReadOnlyDictionary<string, byte[]> backups,
+        IReadOnlyList<string> encryptedSoFar,
         CancellationToken cancellationToken)
     {
+        // Decrypt under the still-registered globalKey first — the worker's
+        // decryptDatabaseInPlace requires hasGlobalKey() and snapshots from
+        // it, so we must not clear the key until every DB is back to plain.
+        for (var i = encryptedSoFar.Count - 1; i >= 0; i--)
+        {
+            await _encryptedBridge.DecryptDatabaseInPlaceAsync(encryptedSoFar[i], cancellationToken);
+        }
+
+        // Clear any manifest bytes that landed before the failure (the
+        // primitive is a no-op when nothing was written).
+        await _encryptedBridge.ClearDiskManifestAsync(cancellationToken);
+
+        // Finally drop the key + reset in-memory state.
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
         _isUnlocked = false;
         _expectedCredentialId = null;
         _bridge.SetDiskLocked(false);
-
-        foreach (var db in databases)
-        {
-            await _bridge.DeleteDatabaseAsync(db, cancellationToken);
-        }
-
-        foreach (var (db, bytes) in backups)
-        {
-            var result = await _bridge.ImportDatabaseAsync(db, bytes, cancellationToken);
-            if (result != DiskImportResult.OK)
-            {
-                throw new InvalidOperationException(
-                    $"EnterEncryptedAsync rollback failed while restoring '{db}' (result={result}).");
-            }
-        }
     }
 
     public async Task LeaveEncryptedAsync(CancellationToken cancellationToken = default)
