@@ -27,7 +27,7 @@ import {
     writeDiskManifestOp,
     clearDiskManifestOp,
 } from './worker-manifest';
-import { setDebugLogBase } from './debug-log';
+import { setDebugLogBase, debugLog, nextOpId } from './debug-log';
 
 // Re-export mutable state references for local use
 let sqlite3: any;
@@ -1546,85 +1546,12 @@ function hasSqliteMagicHeader(bytes: Uint8Array): boolean {
 }
 
 /**
- * Atomic-ish OPFS file replacement using SAHPool's metadata-only
- * renameFile. Steps: write new bytes to a temp slot, rename original
- * aside as a backup, rename temp into the original's place, unlink
- * backup. On any failure we attempt to roll back so the original
- * survives — the only way the original is destroyed is a successful
- * rekey followed by a successful renameFile pair, which is the
- * intended outcome.
- *
- * Caller responsibility: the worker has already closed the DB and is
- * holding the raw input bytes / new bytes. This helper only touches
- * OPFS.
+ * Number of plain SQLite pages processed per chunk iteration. 256 pages
+ * × 4096 B = 1 MB plain input, which expands to ~1.03 MB encrypted output
+ * (256 × 4124 B). Both stay well under the per-op JS heap budget on iPad
+ * Safari (~150 MB renderer cap shared with WASM heap).
  */
-function replaceOpfsFileAtomically(
-    dbPath: string,
-    newBytes: Uint8Array,
-    opaque: boolean,
-) {
-    const tempPath = `${dbPath}.rekey-tmp`;
-    const backupPath = `${dbPath}.rekey-bak`;
-
-    // Defensive: clean up leftovers from any prior crashed attempt
-    // before starting. unlink is no-op when the file doesn't exist.
-    const before: string[] = poolUtil.getFileNames();
-    for (const stale of [tempPath, backupPath]) {
-        if (before.includes(stale)) {
-            try { poolUtil.unlink(stale); } catch { /* best-effort */ }
-        }
-    }
-
-    let tempWritten = false;
-    let originalRenamed = false;
-    try {
-        // 1. Write new bytes to a temp slot. importDb performs basic
-        //    well-formedness checks (and verify-on-write when the path
-        //    has a registered key — note the temp path doesn't, so
-        //    the verify-on-write branch doesn't fire here regardless of
-        //    `opaque`).
-        poolUtil.importDb(tempPath, newBytes, opaque);
-        tempWritten = true;
-
-        // 2. Move the original aside as a backup so the original path
-        //    is free for the temp rename.
-        poolUtil.renameFile(dbPath, backupPath);
-        originalRenamed = true;
-
-        // 3. Promote temp into the original's place. SAHPool renameFile
-        //    is metadata-only — no file copy.
-        poolUtil.renameFile(tempPath, dbPath);
-        tempWritten = false;
-
-        // 4. Cleanup the backup; original is now the new content.
-        try { poolUtil.unlink(backupPath); } catch (e) {
-            // Step 4 failure is non-fatal: the original path holds the
-            // intended new content; the backup is orphaned but harmless
-            // (subsequent in-place ops clean it up at start).
-            logger.warn(MODULE_NAME, `replaceOpfsFileAtomically: cleanup of ${backupPath} failed`, e);
-        }
-        originalRenamed = false;
-    } catch (error) {
-        // Roll back as far as we got. Order matters:
-        //   - If originalRenamed: backup holds the original; move it
-        //     back so dbPath points at the unmodified file.
-        //   - If tempWritten: temp slot has data we no longer want.
-        if (originalRenamed) {
-            try { poolUtil.renameFile(backupPath, dbPath); } catch (rollbackErr) {
-                logger.error(
-                    MODULE_NAME,
-                    `replaceOpfsFileAtomically: rollback rename ${backupPath}→${dbPath} failed; ` +
-                    `original DB is at ${backupPath}, manual recovery required`,
-                    rollbackErr,
-                );
-            }
-        }
-        if (tempWritten) {
-            try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-        }
-        throw error;
-    }
-}
+const CHUNK_SLOTS = 256;
 
 async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
     if (!sqlite3 || !poolUtil) {
@@ -1635,6 +1562,8 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
     }
 
     const dbPath = `/databases/${dbName}`;
+    const tempPath = `${dbPath}.encrypt-tmp`;
+    const op = nextOpId();
 
     if (hasGlobalKey()) {
         throw new Error(
@@ -1647,57 +1576,88 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
         throw new Error(`encryptDb: no existing DB at ${dbPath}`);
     }
 
-    let raw: Uint8Array | null = null;
-    let encrypted: Uint8Array | null = null;
+    await closeDatabase(dbName);
+
+    // Shape check on the full file size before reading any chunk. A real
+    // encrypted-at-rest file (4124-byte slots) divides differently from
+    // plain pages (4096-byte slots); refuse to treat the wrong shape as
+    // plain pages and corrupt it.
+    const fileSize = poolUtil.getFileSize(dbPath);
+    if (fileSize === 0 || fileSize % PLAIN_SLOT_SIZE !== 0) {
+        throw new Error(
+            `encryptDb: ${dbName} length ${fileSize} is not a non-zero multiple of ` +
+            `the plain page size ${PLAIN_SLOT_SIZE}; refusing to encrypt a non-plain source.`,
+        );
+    }
+    const totalSlots = fileSize / PLAIN_SLOT_SIZE;
+
+    // SQLite magic header probe on the first 16 bytes — guards against a
+    // file whose length matches plain pages by coincidence. The probe
+    // reads only what it needs (no full-file read).
+    const headerProbe = poolUtil.exportFileSlice(dbPath, 0, SQLITE_MAGIC_HEADER.length);
     try {
-        await closeDatabase(dbName);
-
-        raw = poolUtil.exportFile(dbPath);
-
-        // Shape check: source must be plain SQLite pages. The registry
-        // says no key, but a real encrypted-at-rest file after a registry
-        // loss would still be slot-format ciphertext (4124-byte slots).
-        // Reject before rekeySlots so we can't accidentally treat the
-        // ciphertext as plain pages and corrupt it.
-        if (raw!.length === 0 || raw!.length % PLAIN_SLOT_SIZE !== 0) {
-            throw new Error(
-                `encryptDb: ${dbName} length ${raw!.length} is not a non-zero multiple of ` +
-                `the plain page size ${PLAIN_SLOT_SIZE}; refusing to encrypt a non-plain source.`,
-            );
-        }
-
-        // Length is necessary but not sufficient — 1024 encrypted slots
-        // and 1031 plain pages have the same byte length. Verify the
-        // SQLite magic header so we can't misclassify ciphertext.
-        if (!hasSqliteMagicHeader(raw!)) {
+        if (!hasSqliteMagicHeader(headerProbe)) {
             throw new Error(
                 `encryptDb: ${dbName} does not start with the SQLite magic header — ` +
                 `refusing to treat ciphertext as plain pages.`,
             );
         }
+    } finally {
+        clearBytes(headerProbe);
+    }
 
-        encrypted = rekeySlots(raw!, dbPath, undefined, key);
+    // Clean up any leftover temp slot from a prior crashed attempt before
+    // we start writing. unlink is no-op on missing paths.
+    if (poolUtil.getFileNames().includes(tempPath)) {
+        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+    }
 
-        // Non-destructive replace: temp-write + double-rename means the
-        // original survives any failure inside replaceOpfsFileAtomically.
-        replaceOpfsFileAtomically(dbPath, encrypted, /* opaque */ true);
+    debugLog(op, 'encryptInPlace.enter', { name: dbName, slots: totalSlots });
+
+    try {
+        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+            const plainOffset = slotBase * PLAIN_SLOT_SIZE;
+            const plainBytes = slotCount * PLAIN_SLOT_SIZE;
+            const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
+
+            let plainChunk: Uint8Array | null = null;
+            let encryptedChunk: Uint8Array | null = null;
+            try {
+                plainChunk = poolUtil.exportFileSlice(dbPath, plainOffset, plainBytes);
+                encryptedChunk = rekeySlots(plainChunk!, dbPath, undefined, key, slotBase);
+                poolUtil.writeFileSlice(tempPath, encryptedOffset, encryptedChunk!);
+                debugLog(op, 'encryptInPlace.chunk', {
+                    name: dbName, slotBase, slotCount,
+                    isFirst: slotBase === 0,
+                    isLast: slotBase + slotCount === totalSlots,
+                });
+            } finally {
+                // plainChunk is sensitive plaintext — wipe.
+                if (plainChunk !== null) { clearBytes(plainChunk); }
+                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+            }
+        }
+
+        // Promote temp → real. The src SAH slot becomes the new live
+        // DB slot in one metadata-only rename; the old plain slot is
+        // freed back to the pool.
+        debugLog(op, 'encryptInPlace.atomicReplace', { name: dbName });
+        poolUtil.atomicReplaceFile(tempPath, dbPath);
 
         logger.info(
             MODULE_NAME,
-            `✓ Encrypted in place ${dbName}: ${raw!.length}B → ${encrypted.length}B`,
+            `✓ Encrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
+        debugLog(op, 'encryptInPlace.done', { name: dbName });
 
         return { rowsAffected: 0 };
-    } finally {
-        // raw is plain SQLite pages from OPFS — sensitive plaintext.
-        if (raw !== null) {
-            clearBytes(raw);
-        }
-        // encrypted is ciphertext (post-write) — not sensitive, but
-        // clearing it costs almost nothing and keeps the GC heap clean.
-        if (encrypted !== null) {
-            clearBytes(encrypted);
-        }
+    } catch (err) {
+        // Mid-loop or post-rename failure: drop the temp slot if it still
+        // has data. The real path is untouched until atomicReplaceFile.
+        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        debugLog(op, 'encryptInPlace.error', { name: dbName, msg: String(err) });
+        throw err;
     }
 }
 
@@ -1715,6 +1675,8 @@ async function decryptDatabaseInPlace(dbName: string) {
     }
 
     const dbPath = `/databases/${dbName}`;
+    const tempPath = `${dbPath}.decrypt-tmp`;
+    const op = nextOpId();
 
     if (!hasGlobalKey()) {
         throw new Error(
@@ -1737,49 +1699,67 @@ async function decryptDatabaseInPlace(dbName: string) {
         throw new Error(`decryptDb: globalKey not set but hasGlobalKey returned true for ${dbName}`);
     }
 
-    let plain: Uint8Array | null = null;
-    let raw: Uint8Array | null = null;
     try {
         await closeDatabase(dbName);
 
-        raw = poolUtil.exportFile(dbPath);
-
-        // Shape check: source must be slot-format ciphertext.
-        if (raw!.length === 0 || raw!.length % ENCRYPTED_SLOT_SIZE !== 0) {
+        const fileSize = poolUtil.getFileSize(dbPath);
+        if (fileSize === 0 || fileSize % ENCRYPTED_SLOT_SIZE !== 0) {
             throw new Error(
-                `decryptDb: ${dbName} length ${raw!.length} is not a non-zero multiple of ` +
+                `decryptDb: ${dbName} length ${fileSize} is not a non-zero multiple of ` +
                 `the encrypted slot size ${ENCRYPTED_SLOT_SIZE}; registry says encrypted but ` +
                 `the file shape says plain — refusing to decrypt a non-encrypted source.`,
             );
         }
+        const totalSlots = fileSize / ENCRYPTED_SLOT_SIZE;
 
-        plain = rekeySlots(raw!, dbPath, sourceKey, undefined);
+        if (poolUtil.getFileNames().includes(tempPath)) {
+            try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        }
 
-        replaceOpfsFileAtomically(dbPath, plain!, /* opaque */ false);
+        debugLog(op, 'decryptInPlace.enter', { name: dbName, slots: totalSlots });
+
+        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+            const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
+            const encryptedBytes = slotCount * ENCRYPTED_SLOT_SIZE;
+            const plainOffset = slotBase * PLAIN_SLOT_SIZE;
+
+            let encryptedChunk: Uint8Array | null = null;
+            let plainChunk: Uint8Array | null = null;
+            try {
+                encryptedChunk = poolUtil.exportFileSlice(dbPath, encryptedOffset, encryptedBytes);
+                plainChunk = rekeySlots(encryptedChunk!, dbPath, sourceKey, undefined, slotBase);
+                poolUtil.writeFileSlice(tempPath, plainOffset, plainChunk!);
+                debugLog(op, 'decryptInPlace.chunk', {
+                    name: dbName, slotBase, slotCount,
+                    isFirst: slotBase === 0,
+                    isLast: slotBase + slotCount === totalSlots,
+                });
+            } finally {
+                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                // plainChunk is sensitive plaintext — wipe.
+                if (plainChunk !== null) { clearBytes(plainChunk); }
+            }
+        }
+
+        debugLog(op, 'decryptInPlace.atomicReplace', { name: dbName });
+        poolUtil.atomicReplaceFile(tempPath, dbPath);
 
         logger.info(
             MODULE_NAME,
-            `✓ Decrypted in place ${dbName}: ${raw!.length}B → ${plain!.length}B`,
+            `✓ Decrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
+        debugLog(op, 'decryptInPlace.done', { name: dbName });
 
         return { rowsAffected: 0 };
+    } catch (err) {
+        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        debugLog(op, 'decryptInPlace.error', { name: dbName, msg: String(err) });
+        throw err;
     } finally {
-        // Single-key model: the on-disk DB is now plain, but globalKey may
-        // still be set (caller-controlled). Caller is responsible for
-        // dropping globalKey via ClearEncryptionKeyAsync if the worker
-        // should be in plain mode after this op.
-        // sourceKey is the fresh snapshot — wipe so K_old doesn't
-        // linger past the operation.
+        // K_old (snapshot) — wipe so it doesn't linger past the op.
+        // globalKey lifecycle remains caller-controlled.
         clearBytes(sourceKey);
-        // raw is encrypted ciphertext from OPFS — not a secret.
-        if (raw !== null) {
-            clearBytes(raw);
-        }
-        // plain is the decrypted intermediate — file is now plain on
-        // OPFS, but the in-memory buffer is a copy that should be wiped.
-        if (plain !== null) {
-            clearBytes(plain);
-        }
     }
 }
 

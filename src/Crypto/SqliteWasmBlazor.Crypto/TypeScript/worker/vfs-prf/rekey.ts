@@ -40,6 +40,7 @@ export function rekeySlots(
     dbPath: string,
     sourceKey: Uint8Array | undefined,
     targetKey: Uint8Array | undefined,
+    slotIndexBase: number = 0,
 ): Uint8Array {
     const sourceSlotSize = sourceKey === undefined ? SECTOR_SIZE : PHYSICAL_SLOT_SIZE;
     const targetSlotSize = targetKey === undefined ? SECTOR_SIZE : PHYSICAL_SLOT_SIZE;
@@ -56,16 +57,22 @@ export function rekeySlots(
     const slotCount = bytesIn.length / sourceSlotSize;
     const out = new Uint8Array(slotCount * targetSlotSize);
 
+    // Diagnostic line on the very first slot of the very first chunk
+    // (slotIndexBase === 0 && i === 0). For chunked callers this fires
+    // once at the start of the loop; legacy whole-buffer callers see the
+    // same line as before.
     console.log(
         `[rekeySlots] dbPath=${dbPath} ` +
         `sourceKey=${keyFingerprint(sourceKey)} ` +
         `targetKey=${keyFingerprint(targetKey)} ` +
-        `slots=${slotCount} (sourceSlot=${sourceSlotSize} → targetSlot=${targetSlotSize})`);
+        `slots=${slotCount} base=${slotIndexBase} ` +
+        `(sourceSlot=${sourceSlotSize} → targetSlot=${targetSlotSize})`);
 
     for (let i = 0; i < slotCount; i++) {
         const srcStart = i * sourceSlotSize;
-        const aad = buildPageAad(dbPath, i);
-        if (i === 0) {
+        const slotIndex = slotIndexBase + i;
+        const aad = buildPageAad(dbPath, slotIndex);
+        if (slotIndex === 0) {
             // AAD = "prf-vfs-v1|{dbPath}|" + LE-uint32(slotIndex). Decode
             // the prefix back to a string so two log lines from sender
             // and recipient can be diffed at a glance.
