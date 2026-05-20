@@ -921,6 +921,46 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         [JSMarshalAs<JSType.MemoryView>] Span<byte> data,
         string metadataJson,
         [JSMarshalAs<JSType.MemoryView>] Span<byte> header);
+
+    // ----- BlobSession: chunked C# → JS Blob construction -----
+    // Lets the C# side stream a large body (a picked encrypted .eds, a
+    // delta payload, anything) into the JS layer one chunk at a time
+    // without ever materialising the whole body in WASM linear memory.
+    // The JS bridge holds each chunk as a Blob part keyed by the
+    // C#-issued <paramref name="sessionId"/>; consumer bridges (added
+    // in the chunked-import phases) compose <c>new Blob(parts)</c> to
+    // feed <c>blob.stream()</c> to the worker. C# owns the lifetime —
+    // every Open must be balanced by a Discard.
+
+    /// <summary>
+    /// Allocate a fresh JS-side part list keyed by <paramref name="sessionId"/>.
+    /// Caller must use a unique id (the bridge's existing
+    /// <see cref="_nextRequestId"/> counter is the canonical source).
+    /// Throws on duplicate id.
+    /// </summary>
+    [JSImport("blobSessionOpen", "sqliteWasmWorker")]
+    internal static partial void BlobSessionOpen(int sessionId);
+
+    /// <summary>
+    /// Append <paramref name="chunk"/> as a Blob part to the open session.
+    /// The bridge `.slice()`s the MemoryView into a fresh Uint8Array and
+    /// wraps it as a `Blob`; Safari disk-backs large part lists out of JS
+    /// heap. <paramref name="isLast"/> is informational — consumer bridges
+    /// know their own end-of-stream condition.
+    /// </summary>
+    [JSImport("blobSessionAppend", "sqliteWasmWorker")]
+    internal static partial void BlobSessionAppend(
+        int sessionId,
+        [JSMarshalAs<JSType.MemoryView>] Span<byte> chunk,
+        bool isLast);
+
+    /// <summary>
+    /// Drop the JS-side part list. Idempotent; safe to call from a
+    /// finally-block whether the import completed, failed, or was
+    /// cancelled before the consumer call ever ran.
+    /// </summary>
+    [JSImport("blobSessionDiscard", "sqliteWasmWorker")]
+    internal static partial void BlobSessionDiscard(int sessionId);
 }
 
 /// <summary>
