@@ -210,17 +210,12 @@ public partial class EncryptionModel : ObservableModel
             throw new InvalidOperationException(
                 "Cannot back up: not signed in (no WebAuthn credentialId available).");
         }
-        // Streaming download path: worker emits per-DB chunks, bridge composes
-        // the envelope as a virtual-concat Blob, browser disk-backs the parts,
-        // anchor click triggers the save. C# never holds the envelope as a
-        // managed byte[] — the cliff the legacy ExportDiskToPubkeyAsync byte[]
-        // path hits at ~150 MB on iPad and at ~2 GB on desktop WASM.
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-backup-{stamp}.eds";
         await Session.ExportDiskToPubkeyAndDownloadAsync(
             fileName, Auth.PublicKey, Auth.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExportedStreaming", fileName],
+            Localizer["Status_DiskExported", fileName],
             nameof(ExportDiskBackup));
     }
 
@@ -234,7 +229,7 @@ public partial class EncryptionModel : ObservableModel
         await Session.ExportDiskToPubkeyAndDownloadAsync(
             fileName, recipient.PublicKey, recipient.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExportedForRecipientStreaming", fileName],
+            Localizer["Status_DiskExportedForRecipient", fileName],
             nameof(ExportDiskForRecipient));
     }
 
