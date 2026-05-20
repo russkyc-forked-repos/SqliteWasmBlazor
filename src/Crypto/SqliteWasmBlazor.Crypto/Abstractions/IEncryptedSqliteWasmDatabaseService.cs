@@ -371,6 +371,29 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streaming single-DB plain import — the right primitive for "I have
+    /// one big <c>.db</c> file and want it on this disk". State-aware:
+    /// writes plain pages on a Plain disk, rekey-on-write to encrypted
+    /// slots on Encrypted+Unlocked, throws on Encrypted+Locked (caller
+    /// should Unlock first; the <c>.eds</c> guided import is the
+    /// rebind-to-new-credential path).
+    ///
+    /// <para>
+    /// C# managed-heap peak: one ArrayPool chunk (~1 MB) regardless of file
+    /// size. The source <paramref name="stream"/> is shipped into the
+    /// JS-side BlobSession one chunk at a time; the worker reads it via
+    /// <c>blob.stream()</c> and writes a temp SAH slot then atomic-promotes
+    /// to <paramref name="databaseName"/>. Existing same-name DB is
+    /// replaced.
+    /// </para>
+    /// </summary>
+    Task ImportDatabaseFromStreamAsync(
+        string databaseName,
+        Stream stream,
+        long size,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Scorched-earth disk reset. Closes every open DB, drops
     /// <c>globalKey</c>, deletes every DB file from the pool, and clears
     /// the PRF cache so the auth UI flips to NotAuthorized in lockstep.

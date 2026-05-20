@@ -217,11 +217,11 @@
                    importDbPlain handler — manifest + passkey binding survive. *@
                 <MudText Typo="Typo.body2" Class="mb-2">
                     <MudIcon Icon="@Icons.Material.Filled.FileUpload" Size="Size.Small" Class="mr-1" />
-                    @Model.Localizer["Btn_ImportFile_ZipOnly"]
+                    @Model.Localizer["Btn_ImportFile_ZipOrDb"]
                 </MudText>
                 <MudFileUpload T="IBrowserFile"
                                FilesChanged="@(file => HandleImportPickedAsync(file))"
-                               Accept=".zip,application/zip,application/octet-stream" />
+                               Accept=".zip,.db,application/zip,application/octet-stream" />
             }
             else if (Model.IsPlain)
             {
@@ -246,16 +246,17 @@
                 }
 
                 @* Plain: one picker accepts .eds (bootstraps Encrypted+Unlocked
-                   under the envelope's passkey via the guided primitive) or
-                   .zip (replaces the pool with plain ZIP entries). The
-                   handler dispatches by extension. *@
+                   under the envelope's passkey via the guided primitive),
+                   .zip (replaces the pool with plain ZIP entries), or .db
+                   (streams a single plain SQLite database). The handler
+                   dispatches by extension. *@
                 <MudText Typo="Typo.body2" Class="mb-2">
                     <MudIcon Icon="@Icons.Material.Filled.FileUpload" Size="Size.Small" Class="mr-1" />
                     @Model.Localizer["Btn_ImportFile"]
                 </MudText>
                 <MudFileUpload T="IBrowserFile"
                                FilesChanged="@(file => HandleImportPickedAsync(file))"
-                               Accept=".eds,.zip,application/zip,application/octet-stream" />
+                               Accept=".eds,.zip,.db,application/zip,application/octet-stream" />
             }
             else if (Model.IsLocked)
             {

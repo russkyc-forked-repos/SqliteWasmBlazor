@@ -1008,6 +1008,18 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     internal static partial Task<int> ImportDiskStreamCommitFromSessionAsync(
         int sessionId,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
+
+    /// <summary>
+    /// Stream a single plain .db file from the BlobSession into the SAH
+    /// pool. Worker dispatches by <c>hasGlobalKey()</c>: Encrypted+Unlocked
+    /// rekeys on write under the registered globalKey; Plain disk writes
+    /// the source bytes verbatim. Caller must refuse Encrypted+Locked
+    /// before opening the BlobSession (the C# service does this).
+    /// </summary>
+    [JSImport("importDatabaseFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportDatabaseFromSessionAsync(
+        int sessionId,
+        string databaseName);
 }
 
 /// <summary>

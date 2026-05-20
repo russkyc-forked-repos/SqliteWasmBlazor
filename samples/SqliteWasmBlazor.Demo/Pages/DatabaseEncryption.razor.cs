@@ -111,11 +111,28 @@ public partial class DatabaseEncryption
         {
             await HandleEnvelopeFileAsync(file);
         }
+        else if (file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleSingleDbFileAsync(file);
+        }
         else if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
         {
             var bytes = await ReadPickedAsync(file);
             if (bytes is null) return;
             await HandleZipBytesAsync(bytes);
+        }
+    }
+
+    private async Task HandleSingleDbFileAsync(IBrowserFile file)
+    {
+        var confirmed = await ConfirmDestructiveAsync(
+            title: Model.Localizer["Btn_ImportFile"],
+            message: Model.Localizer["Confirm_ImportSingleDatabase"],
+            destructiveLabel: Model.Localizer["Btn_ImportFile"]);
+
+        if (confirmed)
+        {
+            await Model.ImportSingleDatabase.ExecuteAsync(file);
         }
     }
 

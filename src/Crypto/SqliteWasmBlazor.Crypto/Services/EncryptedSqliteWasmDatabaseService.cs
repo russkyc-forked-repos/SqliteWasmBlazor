@@ -957,6 +957,88 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
+    /// Streaming single-DB plain import — the right primitive for "I have
+    /// one big .db file and want it on this disk". State-aware: writes
+    /// plain pages on a Plain disk, rekeys-on-write to encrypted slots on
+    /// Encrypted+Unlocked, refuses on Encrypted+Locked (caller should
+    /// Unlock first; the .eds guided import is the rebind-to-new-credential
+    /// path).
+    ///
+    /// C# managed-heap peak: one ArrayPool chunk (~1 MB) regardless of file
+    /// size. The picked file's bytes are streamed into the JS-side
+    /// BlobSession; the worker reads them via <c>blob.stream()</c> and
+    /// writes a temp SAH slot via writeFileSlice + atomicReplaceFile.
+    /// </summary>
+    public async Task ImportDatabaseFromStreamAsync(
+        string databaseName,
+        Stream stream,
+        long size,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            throw new ArgumentException(
+                "databaseName must be non-empty.", nameof(databaseName));
+        }
+        if (size <= 0)
+        {
+            throw new ArgumentException(
+                $"size must be positive, got {size}.", nameof(size));
+        }
+        var current = await GetStateAsync(cancellationToken);
+        if (current.Encrypted && !current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ImportDatabaseFromStreamAsync rejected: disk is Encrypted+Locked. " +
+                "Unlock first, or use the .eds guided import to rebind the disk to " +
+                "a different credential.");
+        }
+
+        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+        try
+        {
+            const int chunkSize = 1 << 20;
+            var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
+            try
+            {
+                long totalRead = 0;
+                while (totalRead < size)
+                {
+                    var read = await stream.ReadAsync(
+                        buf.AsMemory(0, chunkSize), cancellationToken);
+                    if (read <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"ImportDatabaseFromStreamAsync: stream ended at {totalRead} " +
+                            $"of {size} bytes; source is truncated.");
+                    }
+                    totalRead += read;
+                    bool isLast = totalRead == size;
+                    SqliteWasmWorkerBridge.BlobSessionAppend(
+                        sessionId, new Span<byte>(buf, 0, read), isLast);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf, clearArray: true);
+            }
+
+            var result = await SqliteWasmWorkerBridge.ImportDatabaseFromSessionAsync(
+                sessionId, databaseName);
+            if (result != (int)DiskImportResult.OK)
+            {
+                throw new InvalidOperationException(
+                    $"ImportDatabaseFromStreamAsync: worker returned result={result}.");
+            }
+        }
+        finally
+        {
+            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+        }
+    }
+
+    /// <summary>
     /// Envelope-header peek result — every field the import flow needs
     /// before it can decide to wipe + re-encrypt. <c>Files</c> is
     /// intentionally absent: the streaming worker reads it directly off

@@ -31,6 +31,7 @@ import { setDebugLogBase, debugLog, nextOpId } from './debug-log';
 import {
     importDiskStreamPreflight,
     importDiskStreamCommit,
+    importDatabaseFromBlob,
 } from './vfs-prf/import-streamed';
 
 // Re-export mutable state references for local use
@@ -324,6 +325,16 @@ async function handleStreamingRequest(
                 }
                 await importDiskStreamCommitHandler(streamId, blob, new Uint8Array(binaryPayload));
                 return;
+            case 'importDatabaseFromSession':
+                if (!(blob instanceof Blob)) {
+                    throw new Error('importDatabaseFromSession requires a Blob');
+                }
+                if (typeof (data as any).database !== 'string') {
+                    throw new Error('importDatabaseFromSession requires data.database');
+                }
+                await importDatabaseFromSessionHandler(
+                    streamId, blob, (data as any).database as string);
+                return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
         }
@@ -396,6 +407,47 @@ async function importDiskStreamCommitHandler(
     } finally {
         clearBytes(kWrap);
         clearBytes(globalKey);
+    }
+    self.postMessage({ streamId, streamDone: true, result: 0 });
+}
+
+/**
+ * Streaming single-DB plain-import handler. Dispatch by hasGlobalKey():
+ * Encrypted+Unlocked → rekey-on-write under globalKey;
+ * Plain disk → write plain pages verbatim.
+ * Encrypted+Locked is the caller's responsibility (C# refuses before
+ * opening the BlobSession).
+ *
+ * JS heap peak: ~1 MB (one slot batch) regardless of file size.
+ */
+async function importDatabaseFromSessionHandler(
+    streamId: number,
+    blob: Blob,
+    dbName: string,
+): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    const op = nextOpId();
+    debugLog(op, 'singleImport.routed', {
+        name: dbName,
+        blobSize: blob.size,
+        encrypted: hasGlobalKey(),
+    });
+    if (hasGlobalKey()) {
+        const globalKey = snapshotGlobalKey()!;
+        try {
+            await importDatabaseFromBlob(
+                blob, dbName, poolUtil,
+                globalKey,
+                (chunk, dbPath, slotIndexBase, key) =>
+                    rekeySlots(chunk, dbPath, undefined, key, slotIndexBase),
+                op);
+        } finally {
+            clearBytes(globalKey);
+        }
+    } else {
+        await importDatabaseFromBlob(blob, dbName, poolUtil, undefined, undefined, op);
     }
     self.postMessage({ streamId, streamDone: true, result: 0 });
 }

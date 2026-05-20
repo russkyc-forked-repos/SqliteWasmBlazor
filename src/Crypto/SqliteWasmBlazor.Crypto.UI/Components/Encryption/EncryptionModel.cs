@@ -90,6 +90,14 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ImportDiskCmdAsync), nameof(CanImportDisk), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportDisk { get; }
 
+    // Replaces (or creates) a single named DB. Caller owns the
+    // confirmation dialog. Stream-shaped — large .db files don't pin
+    // managed memory. Service dispatches by disk state: Plain writes
+    // plain pages; Unlocked rekey-on-writes under globalKey; Locked is
+    // refused (caller's CanExecute gates the button).
+    [ObservableCommand(nameof(ImportSingleDatabaseCmdAsync), nameof(CanImportSingleDatabase), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<IBrowserFile> ImportSingleDatabase { get; }
+
     // Plain-disk ZIP batch ops. Each ZIP entry is a standard .db any
     // SQLite tool can open.
     [ObservableCommand(nameof(ExportAllDatabasesAsync), nameof(CanExportAllDatabases), nameof(FormatOperationError))]
@@ -119,6 +127,12 @@ public partial class EncryptionModel : ObservableModel
     // mid-session would orphan in-flight EF contexts and is conceptually a
     // Reset+Import, not an Import.
     private bool CanImportDisk() => IsPlain || IsLocked;
+
+    // Single-DB streaming import allowed on Plain (writes plain pages)
+    // and Encrypted+Unlocked (rekey-on-write under globalKey). Locked is
+    // refused — the service throws otherwise, but disabling the button
+    // gives clearer UX.
+    private bool CanImportSingleDatabase() => IsPlain || IsUnlocked;
 
     // Plain ZIP export only makes sense on a Plain disk — on an encrypted
     // disk the native .db pages would be unreadable until LeaveEncrypted runs.
@@ -338,6 +352,31 @@ public partial class EncryptionModel : ObservableModel
 
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(Localizer["Status_DiskImported"], nameof(ImportDisk));
+    }
+
+    /// <summary>
+    /// Single-DB plain import — picks one .db file and routes it through
+    /// the streaming BlobSession path. Bypasses the byte[] cliff the
+    /// multi-DB ZIP path hits at ~150 MB on iPad. Dispatches by disk
+    /// state inside the service: Plain → writes plain pages; Unlocked →
+    /// rekey-on-write under globalKey; Locked is refused (button is
+    /// disabled by CanImportSingleDatabase).
+    /// </summary>
+    private async Task ImportSingleDatabaseCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
+    {
+        if (file is null || file.Size == 0)
+        {
+            throw new InvalidOperationException(
+                "Pick a .db file before importing.");
+        }
+        await using var stream = file.OpenReadStream(
+            maxAllowedSize: file.Size, cancellationToken);
+        await Session.ImportDatabaseFromStreamAsync(
+            file.Name, stream, file.Size, cancellationToken);
+        await RefreshAsync(cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_SingleDbImported", file.Name],
+            nameof(ImportSingleDatabase));
     }
 
     private async Task ExportAllDatabasesAsync(CancellationToken cancellationToken)

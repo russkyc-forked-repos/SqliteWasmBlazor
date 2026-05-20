@@ -469,6 +469,45 @@ export function importDiskStreamCommitFromSession(
         'importDiskStreamCommit', sessionId, kWrapView);
 }
 
+/**
+ * JSImport entry — single-DB plain import. Streams a single picked .db file
+ * from the BlobSession to the worker; the worker dispatches by hasGlobalKey()
+ * (Encrypted+Unlocked rekeys on write, Plain writes verbatim). The Encrypted+
+ * Locked case is the C# caller's responsibility — the model gates the button.
+ */
+export function importDatabaseFromSession(
+    sessionId: number,
+    dbName: string,
+): Promise<number> {
+    if (!worker) {
+        return Promise.reject(new Error('Worker not initialized'));
+    }
+    const parts = blobSessionPartsRef(sessionId);
+    const blob = new Blob(parts);
+    const streamId = nextStreamId--;
+    return new Promise((resolve, reject) => {
+        streamHandlers.set(streamId, {
+            onChunk() {
+                streamHandlers.delete(streamId);
+                reject(new Error(`Unexpected streamChunk during importDatabaseFromSession`));
+            },
+            onDone(result) {
+                streamHandlers.delete(streamId);
+                resolve(typeof result === 'number' ? result : 0);
+            },
+            onError(message) {
+                streamHandlers.delete(streamId);
+                reject(new Error(message));
+            },
+        });
+        worker!.postMessage({
+            streamId,
+            data: { type: 'importDatabaseFromSession', database: dbName },
+            blob,
+        });
+    });
+}
+
 function _sendImportDiskStreamSession(
     type: 'importDiskStreamPreflight' | 'importDiskStreamCommit',
     sessionId: number,
@@ -537,6 +576,7 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     blobSessionDiscard,
     importDiskStreamPreflightFromSession,
     importDiskStreamCommitFromSession,
+    importDatabaseFromSession,
 };
 
 (globalThis as any).__sqliteWasmLogger = logger;
