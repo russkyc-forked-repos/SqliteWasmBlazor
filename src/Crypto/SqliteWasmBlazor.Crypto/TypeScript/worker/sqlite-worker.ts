@@ -335,6 +335,13 @@ async function handleStreamingRequest(
                 await importDatabaseFromSessionHandler(
                     streamId, blob, (data as any).database as string);
                 return;
+            case 'exportDatabaseToSession':
+                if (typeof (data as any).database !== 'string') {
+                    throw new Error('exportDatabaseToSession requires data.database');
+                }
+                await exportDatabaseToSessionHandler(
+                    streamId, (data as any).database as string);
+                return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
         }
@@ -409,6 +416,103 @@ async function importDiskStreamCommitHandler(
         clearBytes(globalKey);
     }
     self.postMessage({ streamId, streamDone: true, result: 0 });
+}
+
+/**
+ * Streaming single-DB export handler. Dispatch by hasGlobalKey():
+ *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages, emit chunks
+ *   Plain disk        → emit verbatim chunks
+ *   Encrypted+Locked  → C# refuses before posting; not reachable here
+ *
+ * Output is always plain SQLite .db bytes — the file a downstream tool
+ * (`sqlite3 file.db`) can open directly, or our own
+ * <see cref="ImportDatabaseFromStreamAsync"/> can re-import. JS heap peak
+ * per op: ~1 MB regardless of DB size.
+ */
+async function exportDatabaseToSessionHandler(
+    streamId: number,
+    dbName: string,
+): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+
+    const dbPath = `/databases/${dbName}`;
+    const fileNames = poolUtil.getFileNames();
+    if (!fileNames.includes(dbPath)) {
+        throw new Error(`exportDatabaseToSession: no existing DB at ${dbPath}`);
+    }
+
+    await closeDatabase(dbName);
+
+    const encrypted = hasGlobalKey();
+    const sourceSlotSize = encrypted ? ENCRYPTED_SLOT_SIZE : PLAIN_SLOT_SIZE;
+    const fileSize = poolUtil.getFileSize(dbPath);
+    if (fileSize === 0 || fileSize % sourceSlotSize !== 0) {
+        throw new Error(
+            `exportDatabaseToSession: ${dbName} length ${fileSize} is not a non-zero ` +
+            `multiple of the expected slot size ${sourceSlotSize} ` +
+            `(disk state=${encrypted ? 'encrypted' : 'plain'}).`);
+    }
+    const totalSlots = fileSize / sourceSlotSize;
+
+    const op = nextOpId();
+    debugLog(op, 'singleExport.enter', {
+        name: dbName, slots: totalSlots, encrypted,
+    });
+
+    const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
+    try {
+        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+            const sourceOffset = slotBase * sourceSlotSize;
+            const sourceBytes = slotCount * sourceSlotSize;
+
+            let sourceChunk: Uint8Array | null = null;
+            let plainChunk: Uint8Array | null = null;
+            try {
+                sourceChunk = poolUtil.exportFileSlice(dbPath, sourceOffset, sourceBytes);
+                if (encrypted) {
+                    // rekeySlots: source=globalKey decrypts; target=undefined
+                    // emits plain pages. AAD bound to (dbPath, slotBase+i)
+                    // matches what the worker wrote during EnterEncrypted /
+                    // chunked plain-import / etc.
+                    plainChunk = rekeySlots(
+                        sourceChunk!, dbPath, globalKey, undefined, slotBase);
+                } else {
+                    // Plain source — sourceChunk IS the plain bytes; just
+                    // forward it as the chunk to transfer.
+                    plainChunk = sourceChunk;
+                    sourceChunk = null;
+                }
+                const isFirst = slotBase === 0;
+                const isLast = slotBase + slotCount === totalSlots;
+                debugLog(op, 'singleExport.chunk', {
+                    name: dbName, slotBase, slotCount, isFirst, isLast,
+                });
+                self.postMessage(
+                    {
+                        streamId,
+                        streamChunk: true,
+                        name: dbName,
+                        data: plainChunk,
+                        isFirst, isLast,
+                    },
+                    [plainChunk!.buffer],
+                );
+                // Buffer detached after transfer.
+                plainChunk = null;
+            } finally {
+                if (sourceChunk !== null) { clearBytes(sourceChunk); }
+                if (plainChunk !== null) { clearBytes(plainChunk); }
+            }
+        }
+
+        debugLog(op, 'singleExport.done', { name: dbName });
+        self.postMessage({ streamId, streamDone: true });
+    } finally {
+        if (globalKey !== undefined) { clearBytes(globalKey); }
+    }
 }
 
 /**

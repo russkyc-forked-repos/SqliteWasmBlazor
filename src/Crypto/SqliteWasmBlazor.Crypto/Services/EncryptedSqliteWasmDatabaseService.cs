@@ -831,6 +831,50 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
+    /// Streaming single-DB plain export — downloads one DB as a raw plain
+    /// <c>.db</c> file (the format a SQLite tool can open directly). State-
+    /// aware: Plain disk emits the file verbatim; Encrypted+Unlocked
+    /// decrypts each slot to plain pages before emit; Encrypted+Locked
+    /// throws (caller should Unlock first).
+    ///
+    /// C# never holds the bytes — the worker chunks the source, the bridge
+    /// composes a single Blob, the browser disk-backs the parts list, and
+    /// an anchor click triggers the save.
+    /// </summary>
+    public async Task ExportDatabaseToDownloadAsync(
+        string databaseName,
+        string filename,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            throw new ArgumentException(
+                "databaseName must be non-empty.", nameof(databaseName));
+        }
+        if (string.IsNullOrWhiteSpace(filename))
+        {
+            throw new ArgumentException(
+                "filename must be non-empty.", nameof(filename));
+        }
+        var current = await GetStateAsync(cancellationToken);
+        if (current.Encrypted && !current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ExportDatabaseToDownloadAsync rejected: disk is Encrypted+Locked. " +
+                "Unlock first; without globalKey the worker can't decrypt slots " +
+                "back to plain pages.");
+        }
+
+        var ok = await SqliteWasmWorkerBridge.ExportDatabaseToDownloadAsync(
+            filename, databaseName);
+        if (!ok)
+        {
+            throw new InvalidOperationException(
+                "ExportDatabaseToDownloadAsync: bridge reported failure.");
+        }
+    }
+
+    /// <summary>
     /// Streaming single-DB plain import — the right primitive for "I have
     /// one big .db file and want it on this disk". State-aware: writes
     /// plain pages on a Plain disk, rekeys-on-write to encrypted slots on

@@ -279,6 +279,26 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streaming single-DB export — downloads one DB as a raw plain
+    /// <c>.db</c> file (the format <c>sqlite3 file.db</c> can open). State-
+    /// aware: Plain disk emits verbatim; Encrypted+Unlocked decrypts each
+    /// slot to plain pages before emit; Encrypted+Locked throws.
+    ///
+    /// <para>
+    /// C# never sees the bytes — the worker chunks the source via
+    /// <c>exportFileSlice</c>, emits per-batch <c>streamChunk</c> messages,
+    /// the bridge composes a single Blob, the browser disk-backs the parts
+    /// list, and an anchor click triggers the save. Output is byte-identical
+    /// to what the import side reads on the other end of
+    /// <see cref="ImportDatabaseFromStreamAsync"/>.
+    /// </para>
+    /// </summary>
+    Task ExportDatabaseToDownloadAsync(
+        string databaseName,
+        string filename,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Streaming single-DB plain import — the right primitive for "I have
     /// one big <c>.db</c> file and want it on this disk". State-aware:
     /// writes plain pages on a Plain disk, rekey-on-write to encrypted

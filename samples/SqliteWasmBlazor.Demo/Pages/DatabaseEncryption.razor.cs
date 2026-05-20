@@ -8,13 +8,12 @@ namespace SqliteWasmBlazor.Demo.Pages;
 
 public partial class DatabaseEncryption
 {
-    // .eds goes through the streaming BlobSession path (no managed byte[]
-    // of the envelope is ever allocated). .zip still loads into a managed
-    // byte[] via ReadPickedAsync — use file.Size as the cap there; the
-    // browser/picker already bounds what the user can hand in, and the
-    // arbitrary 100 MiB ceiling rejected legitimate large plain ZIPs.
-    // Future work (G8.7): flip .zip to a JS-side ZIP parser + IBrowserFile
-    // streaming so the .zip cap can be lifted to disk-bounded.
+    // Plain-ZIP import is byte[]-shaped (ZipArchive needs the full
+    // archive resident). For a >100 MiB ZIP the C# managed-heap allocation
+    // is the OOM cliff; reject up front with a clear hint at the
+    // single-DB streaming route. The .eds and .db paths are unbounded
+    // (they stream into JS-side BlobSession one chunk at a time).
+    private const long MaxZipImportBytes = 100L * 1024 * 1024;
 
     [Inject] public required IDialogService DialogService { get; init; }
 
@@ -117,10 +116,47 @@ public partial class DatabaseEncryption
         }
         else if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
         {
+            if (file.Size > MaxZipImportBytes)
+            {
+                await ShowZipTooLargeAsync(file);
+                return;
+            }
             var bytes = await ReadPickedAsync(file);
             if (bytes is null) return;
             await HandleZipBytesAsync(bytes);
         }
+    }
+
+    /// <summary>
+    /// User picked a ZIP bigger than <see cref="MaxZipImportBytes"/>.
+    /// Show a clear explanation pointing at the single-DB streaming route
+    /// (the production answer for large databases); we don't try the byte[]
+    /// path because it'll OOM the WASM heap on mobile and surface as a tab
+    /// reload with no diagnostic.
+    /// </summary>
+    private async Task ShowZipTooLargeAsync(IBrowserFile file)
+    {
+        var parameters = new DialogParameters<Components.DestructiveConfirmDialog>
+        {
+            { x => x.Title, Model.Localizer["Btn_ImportAllDatabases"].ToString() },
+            { x => x.Message, Model.Localizer[
+                "Error_ZipTooLarge",
+                file.Name,
+                FormatBytes(file.Size),
+                FormatBytes(MaxZipImportBytes)].ToString() },
+            { x => x.DestructiveLabel, Model.Localizer["Btn_Cancel"].ToString() },
+            { x => x.CancelLabel, Model.Localizer["Btn_Cancel"].ToString() },
+        };
+        await DialogService.ShowAsync<Components.DestructiveConfirmDialog>(
+            Model.Localizer["Btn_ImportAllDatabases"], parameters);
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024L * 1024) return $"{bytes / 1024.0:F1} KiB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MiB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F2} GiB";
     }
 
     private async Task HandleSingleDbFileAsync(IBrowserFile file)

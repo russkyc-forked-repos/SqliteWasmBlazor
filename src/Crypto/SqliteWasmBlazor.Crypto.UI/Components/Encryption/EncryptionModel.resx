@@ -46,6 +46,9 @@
   <data name="Status_DiskExportedForRecipient" xml:space="preserve"><value>Exported encrypted disk for recipient as {0}.</value></data>
   <data name="Status_DiskImported" xml:space="preserve"><value>Disk imported; every database has been replaced with the envelope's contents.</value></data>
   <data name="Status_SingleDbImported" xml:space="preserve"><value>Imported single database {0}.</value></data>
+  <data name="Status_SingleDbExported" xml:space="preserve"><value>Exported {0} as {1}.</value></data>
+  <data name="Btn_ExportSingleDatabase" xml:space="preserve"><value>Export selected database (.db)</value></data>
+  <data name="Lbl_SelectDatabase" xml:space="preserve"><value>Database</value></data>
   <data name="Status_AllExported" xml:space="preserve"><value>Exported all databases ({0}) as {1}.</value></data>
   <data name="Status_AllImported" xml:space="preserve"><value>All databases imported; the pool has been replaced with the ZIP's contents.</value></data>
   <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Backup encrypted disk</value></data>
@@ -53,9 +56,11 @@
   <data name="Btn_ExportAllDatabases" xml:space="preserve"><value>Export all databases (ZIP)</value></data>
   <data name="Btn_ImportAllDatabases" xml:space="preserve"><value>Import all databases (ZIP)</value></data>
   <data name="Btn_ImportFile" xml:space="preserve"><value>Import disk file (.eds, .zip, or .db)</value></data>
+  <data name="Hint_ImportFileSize" xml:space="preserve"><value>.eds and .db: streamed, no size limit. .zip: capped at 100 MiB on mobile (use .db for one large database).</value></data>
   <data name="Btn_ImportFile_ZipOnly" xml:space="preserve"><value>Import databases (.zip)</value></data>
   <data name="Btn_ImportFile_ZipOrDb" xml:space="preserve"><value>Import databases (.zip or single .db)</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>This replaces any existing database with the same name.</value></data>
+  <data name="Error_ZipTooLarge" xml:space="preserve"><value>The selected ZIP ({0}, {1}) exceeds the {2} import limit. Multi-database ZIPs above this size aren't supported on mobile browsers — they overflow the WASM heap. For a single large database, export and re-import it as a .db file (the .db picker streams it in chunks without size limits).</value></data>
   <data name="Confirm_ImportAllDatabases" xml:space="preserve"><value>Importing this ZIP will replace every database currently in the pool. Continue?</value></data>
   <data name="Confirm_ImportAllDatabases_Locked" xml:space="preserve"><value>Importing this ZIP will wipe the encrypted disk AND remove encryption — the current passkey will no longer protect any data. You can re-encrypt the disk under any new passkey afterwards. Continue?</value></data>
   <data name="Confirm_ImportAllDatabases_Unlocked" xml:space="preserve"><value>Importing this ZIP will replace every database currently in the encrypted pool. Encryption stays in place under the current passkey — the imported databases will be re-encrypted on write. Continue?</value></data>

@@ -1020,6 +1020,19 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     internal static partial Task<int> ImportDatabaseFromSessionAsync(
         int sessionId,
         string databaseName);
+
+    /// <summary>
+    /// Streaming single-DB export. Worker reads the SAH file in slot-batches,
+    /// dispatches by <c>hasGlobalKey()</c> (Plain → verbatim; Encrypted+
+    /// Unlocked → decrypt to plain pages), emits chunks via
+    /// <c>streamChunk</c> postMessage. Bridge composes a single Blob (no
+    /// envelope wrapper — raw <c>.db</c> bytes a SQLite tool can open) and
+    /// triggers anchor-click download. Caller refuses Encrypted+Locked.
+    /// </summary>
+    [JSImport("exportDatabaseToDownload", "sqliteWasmWorker")]
+    internal static partial Task<bool> ExportDatabaseToDownloadAsync(
+        string filename,
+        string databaseName);
 }
 
 /// <summary>

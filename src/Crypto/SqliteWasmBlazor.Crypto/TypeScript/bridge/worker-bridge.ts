@@ -470,6 +470,48 @@ export function importDiskStreamCommitFromSession(
 }
 
 /**
+ * JSImport entry — single-DB plain export. Drives the worker's per-DB
+ * chunked export (Plain disk: verbatim; Encrypted+Unlocked: decrypt to
+ * plain pages), accumulates chunks into a single Blob (no envelope
+ * wrapper — raw .db bytes a SQLite tool can open), triggers anchor-click
+ * download. C# never sees the bytes.
+ */
+export function exportDatabaseToDownload(
+    filename: string,
+    dbName: string,
+): Promise<boolean> {
+    if (!worker) {
+        return Promise.reject(new Error('Worker not initialized'));
+    }
+    const streamId = nextStreamId--;
+    const chunks: Blob[] = [];
+    return new Promise((resolve, reject) => {
+        streamHandlers.set(streamId, {
+            onChunk(_name, data) {
+                chunks.push(new Blob([data as Uint8Array<ArrayBuffer>]));
+            },
+            onDone() {
+                streamHandlers.delete(streamId);
+                try {
+                    triggerEnvelopeDownload(filename, new Blob(chunks));
+                    resolve(true);
+                } catch (e) {
+                    reject(e instanceof Error ? e : new Error(String(e)));
+                }
+            },
+            onError(message) {
+                streamHandlers.delete(streamId);
+                reject(new Error(message));
+            },
+        });
+        worker!.postMessage({
+            streamId,
+            data: { type: 'exportDatabaseToSession', database: dbName },
+        });
+    });
+}
+
+/**
  * JSImport entry — single-DB plain import. Streams a single picked .db file
  * from the BlobSession to the worker; the worker dispatches by hasGlobalKey()
  * (Encrypted+Unlocked rekeys on write, Plain writes verbatim). The Encrypted+
@@ -577,6 +619,7 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     importDiskStreamPreflightFromSession,
     importDiskStreamCommitFromSession,
     importDatabaseFromSession,
+    exportDatabaseToDownload,
 };
 
 (globalThis as any).__sqliteWasmLogger = logger;

@@ -94,6 +94,15 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", diskExportImport.Name, () => diskExportImport.RunAsync()));
 
+                    // Single-DB streaming import round-trip — covers the
+                    // IBrowserFile path the page uses (Plain + Unlocked
+                    // dispatch). Plain → Plain round-trip + Plain →
+                    // Encrypted+Unlocked rekey-on-write in one run.
+                    var singleDbStreaming = new SingleDbStreamingRoundTripTest(
+                        prfFactory, databaseService, session);
+                    _entries.Add(new TestEntry(
+                        "VFS Encryption", singleDbStreaming.Name, () => singleDbStreaming.RunAsync()));
+
                     // Pure-plain ZIP round-trip — exercises the new
                     // ISqliteWasmDatabaseService.ExportAll/ImportAll batch
                     // primitives on a Plain disk (no encryption involved).

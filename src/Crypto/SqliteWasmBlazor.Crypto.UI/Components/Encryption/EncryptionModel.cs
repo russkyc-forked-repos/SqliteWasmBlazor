@@ -34,6 +34,21 @@ public partial class EncryptionModel : ObservableModel
     public partial string? PastedRecipientError { get; set; }
 
     /// <summary>
+    /// Names of every DB in the SAH pool (sourced from
+    /// <c>ISqliteWasmDatabaseService.ListDatabasesAsync</c> at the last
+    /// <see cref="RefreshAsync"/>). Drives the per-DB single-file export
+    /// picker on Plain + Unlocked branches. Empty list → the affordance
+    /// hides itself.
+    /// </summary>
+    public partial IReadOnlyList<string> DatabaseNames { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Currently-selected DB name for the per-DB export affordance. UI
+    /// binds it to a MudSelect populated from <see cref="DatabaseNames"/>.
+    /// </summary>
+    public partial string? SelectedDatabase { get; set; }
+
+    /// <summary>
     /// Mirror of <see cref="IHostDatabaseService.HasAnyDataAsync"/> at
     /// the last <see cref="RefreshAsync"/>. Drives the visibility of the
     /// Plain-disk ZIP-export affordance — the reset service already knows
@@ -98,6 +113,13 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ImportSingleDatabaseCmdAsync), nameof(CanImportSingleDatabase), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportSingleDatabase { get; }
 
+    // Single-DB plain export. Streams the chosen DB as a plain .db file
+    // download; on Encrypted+Unlocked the worker decrypts slot-by-slot
+    // before emit so the result is a vanilla SQLite file. Locked is
+    // refused (CanExportSingleDatabase gates).
+    [ObservableCommand(nameof(ExportSingleDatabaseAsync), nameof(CanExportSingleDatabase), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync ExportSingleDatabase { get; }
+
     // Plain-disk ZIP batch ops. Each ZIP entry is a standard .db any
     // SQLite tool can open.
     [ObservableCommand(nameof(ExportAllDatabasesAsync), nameof(CanExportAllDatabases), nameof(FormatOperationError))]
@@ -134,6 +156,12 @@ public partial class EncryptionModel : ObservableModel
     // gives clearer UX.
     private bool CanImportSingleDatabase() => IsPlain || IsUnlocked;
 
+    // Single-DB streaming export needs Plain or Unlocked + a chosen DB.
+    // Plain disks emit verbatim; Unlocked decrypts on read. Locked has
+    // no key to decrypt with, so the service throws.
+    private bool CanExportSingleDatabase() =>
+        (IsPlain || IsUnlocked) && !string.IsNullOrEmpty(SelectedDatabase);
+
     // Plain ZIP export only makes sense on a Plain disk — on an encrypted
     // disk the native .db pages would be unreadable until LeaveEncrypted runs.
     private bool CanExportAllDatabases() => IsPlain;
@@ -147,6 +175,16 @@ public partial class EncryptionModel : ObservableModel
     {
         State = await Session.GetStateAsync(cancellationToken);
         HasPlainData = await HostDatabaseService.HasAnyDataAsync(cancellationToken);
+        // Refresh the DB list — single-DB export picker hangs off this.
+        // Read on every state transition so a newly-created or freshly-
+        // imported DB shows up immediately.
+        DatabaseNames = await DatabaseService.ListDatabasesAsync(cancellationToken);
+        // If the selected DB has been deleted, drop the selection so the
+        // export button disables itself.
+        if (!string.IsNullOrEmpty(SelectedDatabase) && !DatabaseNames.Contains(SelectedDatabase))
+        {
+            SelectedDatabase = null;
+        }
     }
 
     private async Task EnterEncryptedCmdAsync(CancellationToken cancellationToken)
@@ -245,6 +283,34 @@ public partial class EncryptionModel : ObservableModel
         StatusModel.AddSuccess(
             Localizer["Status_DiskExportedForRecipient", fileName],
             nameof(ExportDiskForRecipient));
+    }
+
+    /// <summary>
+    /// Streams the currently-selected DB to a plain <c>.db</c> file download.
+    /// Filename derives from the DB name + a timestamp; user can rename in
+    /// the browser save dialog. Plain disks emit verbatim; Encrypted+Unlocked
+    /// decrypts on read so the downloaded file is a vanilla SQLite database
+    /// any tool can open.
+    /// </summary>
+    private async Task ExportSingleDatabaseAsync(CancellationToken cancellationToken)
+    {
+        var dbName = SelectedDatabase;
+        if (string.IsNullOrEmpty(dbName))
+        {
+            throw new InvalidOperationException(
+                "Select a database from the list before exporting.");
+        }
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        // Most DB names end in .db already; strip + re-add so the stamp
+        // sits between name and extension (e.g. TodoDb-20260520-202132.db).
+        var stem = dbName.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
+            ? dbName[..^3]
+            : dbName;
+        var fileName = $"{stem}-{stamp}.db";
+        await Session.ExportDatabaseToDownloadAsync(dbName, fileName, cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_SingleDbExported", dbName, fileName],
+            nameof(ExportSingleDatabase));
     }
 
     /// <summary>
