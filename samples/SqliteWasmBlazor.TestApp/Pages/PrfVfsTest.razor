@@ -87,10 +87,8 @@
                 <MudText Typo="Typo.subtitle2">My X25519 pubkey (PFA armor)</MudText>
                 <MudText Typo="Typo.caption" Class="mb-2 d-block">
                     Public half of the active passkey's X25519 keypair, armored
-                    via <code>PrfArmor.ArmorPublicKey()</code>. Copy it to the
-                    "Recipient pubkey" field below to test a same-passkey rekey
-                    round-trip, or share it with another tab/session to test a
-                    cross-passkey export.
+                    via <code>PrfArmor.ArmorPublicKey()</code>. Share it with
+                    another tab/session to test a cross-passkey export.
                 </MudText>
                 <MudTextField T="string"
                               Value="@_armoredOwnPubkey"

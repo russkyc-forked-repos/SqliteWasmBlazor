@@ -1,57 +1,34 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using MudBlazor;
-using SqliteWasmBlazor.Components.Interop;
 using SqliteWasmBlazor.Crypto.UI.Components.Encryption;
 
 namespace SqliteWasmBlazor.Demo.Pages;
 
 public partial class DatabaseEncryption
 {
-    // Plain-ZIP import is byte[]-shaped (ZipArchive needs the full
-    // archive resident). For a >100 MiB ZIP the C# managed-heap allocation
-    // is the OOM cliff; reject up front with a clear hint at the
-    // single-DB streaming route. The .eds and .db paths are unbounded
-    // (they stream into JS-side BlobSession one chunk at a time).
-    private const long MaxZipImportBytes = 100L * 1024 * 1024;
-
     [Inject] public required IDialogService DialogService { get; init; }
 
     /// <summary>
-    /// Triggered when <see cref="EncryptionModel.PendingDownload"/>
-    /// changes. Runs the file-download interop and signals completion via
-    /// the supplied <see cref="TaskCompletionSource"/> so the originating
-    /// command can finish its <c>StatusModel</c> update.
-    ///
-    /// <para>
-    /// JSInterop lives in the consumer page partial, never the model —
-    /// RxBlazorV2 §5 (Component Triggers) is the canonical seam for "model
-    /// emits a side-effect, host runs interop and acks completion".
-    /// </para>
+    /// Toggle a DB name in the model's
+    /// <see cref="EncryptionModel.SelectedDatabases"/> list. Driven by the
+    /// per-DB checkboxes in the export card; ObservableList's Add / Remove
+    /// emit change notifications natively so the command's CanExecute
+    /// re-evaluates without a manual reassign.
     /// </summary>
-    protected override Task OnPendingDownloadChangedAsync(CancellationToken cancellationToken)
+    private void OnDatabaseSelectionChanged(string dbName, bool isSelected)
     {
-        if (Model.PendingDownload is not { } payload)
+        if (isSelected)
         {
-            return Task.CompletedTask;
+            if (!Model.SelectedDatabases.Contains(dbName))
+            {
+                Model.SelectedDatabases.Add(dbName);
+            }
         }
-
-        try
+        else
         {
-            FileOperationsInterop.DownloadMessagePackFile(
-                new ArraySegment<byte>(payload.Bytes),
-                payload.FileName);
-            payload.Done.TrySetResult();
+            Model.SelectedDatabases.Remove(dbName);
         }
-        catch (Exception ex)
-        {
-            payload.Done.TrySetException(ex);
-        }
-        finally
-        {
-            Model.PendingDownload = null;
-        }
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -89,74 +66,36 @@ public partial class DatabaseEncryption
 
     /// <summary>
     /// Unified file-pick handler for the import flow. Sniffs the picked
-    /// file's extension and dispatches to the envelope (.eds → guided
-    /// passkey-rebinding import via the streaming BlobSession path) or
-    /// plain-ZIP (.zip → state-aware dispatch via
-    /// <see cref="EncryptionModel.ImportAllDatabases"/>) path.
-    ///
-    /// <para>
-    /// .eds is handed off as <see cref="IBrowserFile"/> — the model + service
-    /// stream it into a JS-side BlobSession one chunk at a time, so the
-    /// C# managed heap never holds the full envelope. .zip is still read
-    /// into a managed byte[] (typical demo ZIPs are small enough); a
-    /// browser-file variant for plain ZIPs is tracked as G8.7.
-    /// </para>
+    /// file's extension and routes:
+    /// <list type="bullet">
+    ///   <item><c>.eds</c> → guided passkey-rebinding disk import
+    ///   (<see cref="EncryptionModel.ImportDisk"/>).</item>
+    ///   <item><c>.db</c> or <c>.dbs</c> → plain single-DB write or pool
+    ///   replace, both via <see cref="EncryptionModel.ImportDatabases"/>;
+    ///   the model owns the extension dispatch and streams the file into
+    ///   the JS-side BlobSession one chunk at a time.</item>
+    /// </list>
+    /// All three paths are stream-shaped — the C# managed heap never
+    /// holds the full envelope/file. The confirmation prompt is the
+    /// page's job; the destructive scope (one DB vs whole pool vs the
+    /// whole disk + credential) decides the wording.
     /// </summary>
     private async Task HandleImportPickedAsync(IBrowserFile? file)
     {
-        if (file is null) return;
+        if (file is null) { return; }
 
         if (file.Name.EndsWith(".eds", StringComparison.OrdinalIgnoreCase))
         {
             await HandleEnvelopeFileAsync(file);
         }
+        else if (file.Name.EndsWith(".dbs", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleDbsFileAsync(file);
+        }
         else if (file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
         {
             await HandleSingleDbFileAsync(file);
         }
-        else if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-        {
-            if (file.Size > MaxZipImportBytes)
-            {
-                await ShowZipTooLargeAsync(file);
-                return;
-            }
-            var bytes = await ReadPickedAsync(file);
-            if (bytes is null) return;
-            await HandleZipBytesAsync(bytes);
-        }
-    }
-
-    /// <summary>
-    /// User picked a ZIP bigger than <see cref="MaxZipImportBytes"/>.
-    /// Show a clear explanation pointing at the single-DB streaming route
-    /// (the production answer for large databases); we don't try the byte[]
-    /// path because it'll OOM the WASM heap on mobile and surface as a tab
-    /// reload with no diagnostic.
-    /// </summary>
-    private async Task ShowZipTooLargeAsync(IBrowserFile file)
-    {
-        var parameters = new DialogParameters<Components.DestructiveConfirmDialog>
-        {
-            { x => x.Title, Model.Localizer["Btn_ImportAllDatabases"].ToString() },
-            { x => x.Message, Model.Localizer[
-                "Error_ZipTooLarge",
-                file.Name,
-                FormatBytes(file.Size),
-                FormatBytes(MaxZipImportBytes)].ToString() },
-            { x => x.DestructiveLabel, Model.Localizer["Btn_Cancel"].ToString() },
-            { x => x.CancelLabel, Model.Localizer["Btn_Cancel"].ToString() },
-        };
-        await DialogService.ShowAsync<Components.DestructiveConfirmDialog>(
-            Model.Localizer["Btn_ImportAllDatabases"], parameters);
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024L * 1024) return $"{bytes / 1024.0:F1} KiB";
-        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MiB";
-        return $"{bytes / (1024.0 * 1024 * 1024):F2} GiB";
     }
 
     private async Task HandleSingleDbFileAsync(IBrowserFile file)
@@ -168,7 +107,27 @@ public partial class DatabaseEncryption
 
         if (confirmed)
         {
-            await Model.ImportSingleDatabase.ExecuteAsync(file);
+            await Model.ImportDatabases.ExecuteAsync(file);
+        }
+    }
+
+    private async Task HandleDbsFileAsync(IBrowserFile file)
+    {
+        // Multi-DB envelope replaces the entire pool. On Unlocked disks
+        // the worker rekey-on-writes each entry under globalKey; on Plain
+        // disks it writes plain pages. CanImportDatabases gates Locked
+        // out (no key to encrypt under).
+        var messageKey = Model.IsUnlocked
+            ? "Confirm_ImportDatabases_Unlocked"
+            : "Confirm_ImportDatabases";
+        var confirmed = await ConfirmDestructiveAsync(
+            title: Model.Localizer["Btn_ImportDatabases"],
+            message: Model.Localizer[messageKey],
+            destructiveLabel: Model.Localizer["Btn_ImportDatabases"]);
+
+        if (confirmed)
+        {
+            await Model.ImportDatabases.ExecuteAsync(file);
         }
     }
 
@@ -183,44 +142,5 @@ public partial class DatabaseEncryption
         {
             await Model.ImportDisk.ExecuteAsync(file);
         }
-    }
-
-    private async Task HandleZipBytesAsync(byte[] bytes)
-    {
-        // State-aware warning: a plain ZIP on a Locked disk breaks encryption,
-        // on an Unlocked disk preserves it, on a Plain disk just replaces.
-        // Session.ImportAllDatabasesAsync owns the dispatch; the page only
-        // owns the right confirmation prompt for each outcome.
-        var messageKey = Model switch
-        {
-            { IsLocked: true } => "Confirm_ImportAllDatabases_Locked",
-            { IsUnlocked: true } => "Confirm_ImportAllDatabases_Unlocked",
-            _ => "Confirm_ImportAllDatabases",
-        };
-        var confirmed = await ConfirmDestructiveAsync(
-            title: Model.Localizer["Btn_ImportAllDatabases"],
-            message: Model.Localizer[messageKey],
-            destructiveLabel: Model.Localizer["Btn_ImportAllDatabases"]);
-
-        if (confirmed)
-        {
-            await Model.ImportAllDatabases.ExecuteAsync(bytes);
-        }
-    }
-
-    /// <summary>
-    /// Common file-bytes read for the .zip plain-import path. Uses the
-    /// picked file's own <see cref="IBrowserFile.Size"/> as the stream
-    /// cap so legitimate multi-DB plain ZIPs aren't rejected by an
-    /// arbitrary constant — the browser/picker already bounds what the
-    /// user can hand in. Returns null on no-file-picked.
-    /// </summary>
-    private static async Task<byte[]?> ReadPickedAsync(IBrowserFile? file)
-    {
-        if (file is null) return null;
-        await using var stream = file.OpenReadStream(maxAllowedSize: file.Size);
-        using var ms = new MemoryStream(checked((int)file.Size));
-        await stream.CopyToAsync(ms);
-        return ms.ToArray();
     }
 }

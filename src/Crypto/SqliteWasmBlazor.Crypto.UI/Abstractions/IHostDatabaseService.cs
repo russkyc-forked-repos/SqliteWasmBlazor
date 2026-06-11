@@ -32,22 +32,6 @@ public interface IHostDatabaseService
     /// <see cref="DbInitState.READY"/>.
     /// </summary>
     ValueTask ResetAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// True when at least one of the host's registered DbContexts holds
-    /// at least one row. Drives the visibility of the Plain-disk
-    /// ZIP-export affordance on the encryption page — empty databases
-    /// produce a meaningless download. The reset service is the natural
-    /// home for the predicate because it already knows the host's
-    /// DbContext factories (it has to, to drive per-context
-    /// <c>MigrateAsync</c>).
-    /// <para>
-    /// Implementations should fail-open (return <c>true</c>) on probe
-    /// errors so transient query failures don't suppress an
-    /// otherwise-valid export affordance.
-    /// </para>
-    /// </summary>
-    ValueTask<bool> HasAnyDataAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -62,7 +46,4 @@ public sealed class NullHostDatabaseService : IHostDatabaseService
 
     public ValueTask ResetAsync(CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;
-
-    public ValueTask<bool> HasAnyDataAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(true);
 }

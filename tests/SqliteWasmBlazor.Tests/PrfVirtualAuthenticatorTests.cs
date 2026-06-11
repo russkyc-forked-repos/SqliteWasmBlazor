@@ -136,55 +136,6 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
 
     [Fact]
     [Trait("Browser", "Chromium")]
-    public async Task RekeyCeremony_PreservesRowsUnderNewKey()
-    {
-        await using var scenario = await fixture.CreateScenarioAsync(output);
-
-        await scenario.NavigateAsync(PrfTestPath);
-
-        // First click absorbs the cold WASM boot; subsequent clicks fall back
-        // to the dev-friendly ButtonEnabledTimeoutMs.
-        await ClickAsync(scenario, "Register passkey", FirstButtonVisibleTimeoutMs);
-        await ExpectStatusContainsAsync(scenario, "Passkey registered");
-
-        await ClickAsync(scenario, "Authenticate and open");
-        await ExpectStatusContainsAsync(scenario, "Authenticated.");
-
-        await ClickAsync(scenario, "Insert + read 25 rows");
-        await ExpectStatusContainsAsync(scenario, "Round trip OK — total rows: 25");
-
-        // Auto-extracted armored pubkey appears in the readonly textarea once
-        // the page has the active passkey's PRF session cached.
-        var readonlyArea = scenario.Page.Locator("textarea[readonly]");
-        await Assertions.Expect(readonlyArea).ToBeVisibleAsync(new() { Timeout = 10000 });
-        var armoredPubkey = await readonlyArea.InputValueAsync();
-        Assert.Contains("BEGIN PFA PUBLIC KEY", armoredPubkey);
-
-        // Same-passkey rekey: paste the active passkey's own armored pubkey as
-        // the rotate target. Exercises ExportDatabaseAsync(REKEY) → wipe →
-        // re-install → ImportDatabaseAsync verify-on-write end-to-end. After
-        // auto-lock, reopening with the same passkey must install the global
-        // key, and the following read proves the rotated rows survived.
-        var targetField = scenario.Page.GetByLabel("Target passkey pubkey (PFA armor)");
-        await targetField.FillAsync(armoredPubkey);
-        // MudTextField @bind-Value commits on blur (default Immediate=false),
-        // so FillAsync alone leaves the C# state empty — Tab forces the blur
-        // event that flushes _pastedArmoredPubkey and re-enables the Rotate
-        // button.
-        await scenario.Page.Keyboard.PressAsync("Tab");
-
-        await ClickAsync(scenario, "Rotate to pasted pubkey (auto-locks)");
-        await ExpectStatusContainsAsync(scenario, "Rotated — local DB now encrypted");
-
-        await ClickAsync(scenario, "Authenticate and open");
-        await ExpectStatusContainsAsync(scenario, "Authenticated.");
-
-        await ClickAsync(scenario, "Read row count (no writes)");
-        await ExpectStatusContainsAsync(scenario, "Row count: 25");
-    }
-
-    [Fact]
-    [Trait("Browser", "Chromium")]
     public async Task SessionExpiresOnTtl_DropsKeyAndReEnablesAuth()
     {
         await using var scenario = await fixture.CreateScenarioAsync(output);

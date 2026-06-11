@@ -156,13 +156,12 @@
     }
 
     @* State-aware export/import card. Three branches:
-       - Plain disk: ZIP of native .db files (interop with sqlite3) via
-         the plain ISqliteWasmDatabaseService.
-       - Encrypted+Unlocked: opaque .eds envelopes via
-         IEncryptedSqliteWasmDatabaseService (export + import).
-       - Encrypted+Locked: import-only via the guided primitive
-         (ImportDiskGuidedAsync wipes + rebinds to the envelope's passkey).
-         Exports are inaccessible — the globalKey isn't installed yet. *@
+       - Plain disk: per-DB checkbox export (single → .db, multi → .dbs)
+         + unified import picker (.db / .dbs / .eds).
+       - Encrypted+Unlocked: envelope export (.eds backup + recipient share)
+         plus the same per-DB plain export and unified import picker.
+       - Encrypted+Locked: import-only — only .eds is accepted (rebinds the
+         disk to the envelope's credential via the guided primitive). *@
     @if (Model.IsUnlocked || Model.IsPlain || Model.IsLocked)
     {
         <MudPaper Elevation="2" Class="pa-4 mb-4">
@@ -174,7 +173,8 @@
             @if (Model.IsUnlocked)
             {
                 @* Encrypted+Unlocked: envelope export (backup or rekey
-                   share) + envelope import (.eds). *@
+                   share) lives only on this branch — needs an installed
+                   globalKey. *@
                 <MudButtonAsyncRx Command="@Model.ExportDiskBackup"
                                   Variant="Variant.Outlined"
                                   Color="Color.Primary"
@@ -209,124 +209,69 @@
                                   Class="mb-4">
                     @Model.Localizer["Btn_ExportDiskForRecipient"]
                 </MudButtonAsyncRx>
-
-                @* Per-DB plain export: streams the picked DB as a plain
-                   .db file (decrypts on Unlocked, verbatim on Plain). The
-                   right primitive for "I have one big DB I want to move
-                   to a SQLite tool" — bypasses the multi-DB ZIP cap. *@
-                @if (Model.DatabaseNames.Count > 0)
-                {
-                    <MudSelect T="string"
-                               Value="@Model.SelectedDatabase"
-                               ValueChanged="@(v => Model.SelectedDatabase = v)"
-                               Label="@(Model.Localizer["Lbl_SelectDatabase"])"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Class="mb-2">
-                        @foreach (var name in Model.DatabaseNames)
-                        {
-                            <MudSelectItem Value="@name">@name</MudSelectItem>
-                        }
-                    </MudSelect>
-                    <MudButtonAsyncRx Command="@Model.ExportSingleDatabase"
-                                      Variant="Variant.Outlined"
-                                      Color="Color.Default"
-                                      StartIcon="@Icons.Material.Filled.FileDownload"
-                                      FullWidth="true"
-                                      Class="mb-4">
-                        @Model.Localizer["Btn_ExportSingleDatabase"]
-                    </MudButtonAsyncRx>
-                }
-
-                @* Unlocked: only .zip is meaningful here (.eds rebinds the
-                   credential and is rejected via CanImportDisk on Unlocked).
-                   Plain ZIP onto an Unlocked disk re-encrypts each entry on
-                   write under the registered globalKey via the worker's
-                   importDbPlain handler — manifest + passkey binding survive. *@
-                <MudText Typo="Typo.body2" Class="mb-2">
-                    <MudIcon Icon="@Icons.Material.Filled.FileUpload" Size="Size.Small" Class="mr-1" />
-                    @Model.Localizer["Btn_ImportFile_ZipOrDb"]
-                </MudText>
-                <MudFileUpload T="IBrowserFile"
-                               FilesChanged="@(file => HandleImportPickedAsync(file))"
-                               Accept=".zip,.db,application/zip,application/octet-stream" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
-                    @Model.Localizer["Hint_ImportFileSize"]
-                </MudText>
             }
-            else if (Model.IsPlain)
+
+            @if ((Model.IsPlain || Model.IsUnlocked) && Model.DatabaseNames.Count > 0)
             {
-                @* Plain disk: two import paths. ZIP of native .db files
-                   (plain interop, ISqliteWasmDatabaseService.ImportAll) and
-                   .eds envelope (bootstraps Encrypted+Unlocked under the
-                   envelope's passkey via the guided primitive). Single
-                   export path — the ZIP one. .eds export needs an active
-                   encryption key and surfaces on Unlocked only. Export is
-                   hidden when no consumer DbContext has rows (empty
-                   download is meaningless). *@
-                @if (Model.HasPlainData)
-                {
-                    <MudButtonAsyncRx Command="@Model.ExportAllDatabases"
-                                      Variant="Variant.Outlined"
-                                      Color="Color.Primary"
-                                      StartIcon="@Icons.Material.Filled.FolderZip"
-                                      FullWidth="true"
-                                      Class="mb-3">
-                        @Model.Localizer["Btn_ExportAllDatabases"]
-                    </MudButtonAsyncRx>
-                }
+                @* Plain export checkbox selector. One picked → vanilla .db
+                   download; multiple → streaming .dbs envelope (MessagePack
+                   array of [name, bytes], no compression). Service decides
+                   the shape from the cardinality; this UI just collects the
+                   selection. Plain disks emit verbatim; Encrypted+Unlocked
+                   decrypts slot-by-slot before emit so downloads are
+                   vanilla SQLite any tool can open. *@
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    <MudIcon Icon="@Icons.Material.Filled.FileDownload" Size="Size.Small" Class="mr-1" />
+                    @Model.Localizer["Lbl_SelectDatabasesToExport"]
+                </MudText>
+                <MudStack Spacing="0" Class="mb-2">
+                    @foreach (var name in Model.DatabaseNames)
+                    {
+                        var dbName = name;
+                        <MudCheckBox T="bool"
+                                     Value="@Model.SelectedDatabases.Contains(dbName)"
+                                     ValueChanged="@(checkedNow => OnDatabaseSelectionChanged(dbName, checkedNow))"
+                                     Label="@dbName"
+                                     Dense="true"
+                                     Size="Size.Small" />
+                    }
+                </MudStack>
+                <MudButtonAsyncRx Command="@Model.ExportDatabases"
+                                  Variant="Variant.Outlined"
+                                  Color="Color.Default"
+                                  StartIcon="@Icons.Material.Filled.FileDownload"
+                                  FullWidth="true"
+                                  Class="mb-4">
+                    @Model.Localizer["Btn_ExportDatabases"]
+                </MudButtonAsyncRx>
+            }
 
-                @* Per-DB plain export. Same affordance as the Unlocked
-                   branch; only the source-side dispatch differs (Plain
-                   disk emits verbatim bytes; no decrypt step). *@
-                @if (Model.DatabaseNames.Count > 0)
-                {
-                    <MudSelect T="string"
-                               Value="@Model.SelectedDatabase"
-                               ValueChanged="@(v => Model.SelectedDatabase = v)"
-                               Label="@(Model.Localizer["Lbl_SelectDatabase"])"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Class="mb-2">
-                        @foreach (var name in Model.DatabaseNames)
-                        {
-                            <MudSelectItem Value="@name">@name</MudSelectItem>
-                        }
-                    </MudSelect>
-                    <MudButtonAsyncRx Command="@Model.ExportSingleDatabase"
-                                      Variant="Variant.Outlined"
-                                      Color="Color.Default"
-                                      StartIcon="@Icons.Material.Filled.FileDownload"
-                                      FullWidth="true"
-                                      Class="mb-3">
-                        @Model.Localizer["Btn_ExportSingleDatabase"]
-                    </MudButtonAsyncRx>
-                }
-
-                @* Plain: one picker accepts .eds (bootstraps Encrypted+Unlocked
-                   under the envelope's passkey via the guided primitive),
-                   .zip (replaces the pool with plain ZIP entries), or .db
-                   (streams a single plain SQLite database). The handler
-                   dispatches by extension. *@
+            @if (Model.IsPlain || Model.IsUnlocked)
+            {
+                @* Unified import picker. .db → single-DB streaming write;
+                   .dbs → multi-DB envelope replace-pool; .eds → guided
+                   passkey-rebinding disk import (Plain only — Unlocked
+                   rejects .eds via CanImportDisk to avoid orphaning open
+                   EF contexts mid-session). Extension dispatch lives in
+                   HandleImportPickedAsync. *@
                 <MudText Typo="Typo.body2" Class="mb-2">
                     <MudIcon Icon="@Icons.Material.Filled.FileUpload" Size="Size.Small" Class="mr-1" />
                     @Model.Localizer["Btn_ImportFile"]
                 </MudText>
                 <MudFileUpload T="IBrowserFile"
                                FilesChanged="@(file => HandleImportPickedAsync(file))"
-                               Accept=".eds,.zip,.db,application/zip,application/octet-stream" />
+                               Accept=".eds,.db,.dbs,application/octet-stream" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
                     @Model.Localizer["Hint_ImportFileSize"]
                 </MudText>
             }
             else if (Model.IsLocked)
             {
-                @* Locked: globalKey not installed, so backup/recipient
-                   exports are inaccessible. One picker accepts .eds (guided
-                   import: WebAuthn-ceremonies the envelope's pinned passkey,
-                   wipes the disk, rebinds it to that credential — disk ends
-                   Encrypted+Unlocked) or .zip (recovery path: wipes pool +
-                   clears manifest + drops globalKey — disk ends Plain). *@
+                @* Locked: globalKey not installed, so plain export and
+                   plain import (single .db / .dbs) are gated off. Only
+                   .eds is accepted — the guided primitive WebAuthn-
+                   ceremonies the envelope's pinned passkey, wipes the
+                   disk, and rebinds to that credential, ending Unlocked. *@
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
                     @Model.Localizer["Hint_ImportOnLocked"]
                 </MudText>
@@ -336,7 +281,7 @@
                 </MudText>
                 <MudFileUpload T="IBrowserFile"
                                FilesChanged="@(file => HandleImportPickedAsync(file))"
-                               Accept=".eds,.zip,application/zip,application/octet-stream" />
+                               Accept=".eds,application/octet-stream" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
                     @Model.Localizer["Hint_ImportFileSize"]
                 </MudText>

@@ -84,33 +84,4 @@ public sealed class DemoHostDatabaseService : IHostDatabaseService
         // Clear any lingering boot-failure alert.
         _reporter.Report(DbInitState.READY);
     }
-
-    public async ValueTask<bool> HasAnyDataAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            await using (var todo = await _todoFactory.CreateDbContextAsync(cancellationToken))
-            {
-                if (await todo.TodoItems.AnyAsync(cancellationToken))
-                {
-                    return true;
-                }
-            }
-            await using (var note = await _noteFactory.CreateDbContextAsync(cancellationToken))
-            {
-                if (await note.Notes.AnyAsync(cancellationToken))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-        catch
-        {
-            // Fail-open: probe errors (transient DB unavailability, race
-            // with a Reset, etc.) shouldn't suppress an otherwise-valid
-            // export affordance.
-            return true;
-        }
-    }
 }

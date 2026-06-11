@@ -108,14 +108,8 @@ public static class TestRegistry
         "Synthetic_PrfSeed_DrivesEncryptedVfsRoundTrip",
         "Synthetic_PrfSeed_EncryptInPlace_PreservesRowsUnderKey",
         "Synthetic_PrfSeed_DecryptInPlace_PreservesRowsAsPlain",
-        "Encrypted_ToPlain_ViaLeaveAndExportAll_RoundTrip",
-        "Disk_ExportToPubkey_AsymmetricRoundTrip",
-        "Disk_ImportGuided_CrossKeyRoundTrip",
-        "Disk_ImportGuided_RejectDoesNotWipePlainDisk",
-        "Plain_BatchExportImport_RoundTrip",
-        "ImportPlainZip_From_EncryptedLocked_EndsPlain",
-        "ImportPlainZip_From_EncryptedUnlocked_StaysEncrypted",
-        "ImportPlainZip_BadShape_DoesNotWipeUnlockedDisk",
+        "SingleDb_StreamingImport_PlainAndEncryptedRoundTrip",
+        "Plain_DbsEnvelope_StreamingImport_RoundTrip",
     ];
 
     /// <summary>

@@ -4,9 +4,9 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Encryption;
 /// Backing model for the encrypted-VFS disk-management surface. Lives in
 /// <c>Crypto.UI</c>; consumers compose their own page UI around the
 /// commands (the demo's <c>Pages/DatabaseEncryption.razor</c> is one such
-/// composition). JSInterop-free — downloads flow through the
-/// <see cref="PendingDownload"/> component-trigger so the page partial owns
-/// the file-save interop.
+/// composition). JSInterop-free — downloads happen entirely worker-side
+/// via the streaming export primitives (the worker emits a Blob and the
+/// bridge clicks an anchor); the model never holds the bytes.
 ///
 /// <para>Page wraps content in <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c>;
 /// NotAuthorized renders <c>AuthenticationPanel</c>. Authorized branches by

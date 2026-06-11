@@ -33,6 +33,15 @@ import {
     importDiskStreamCommit,
     importDatabaseFromBlob,
 } from './vfs-prf/import-streamed';
+import {
+    BufferedStreamReader,
+    readArrayHeader,
+    readBinHeader,
+    readStr,
+    packArrayHeader,
+    packBinHeader,
+    packStr,
+} from '../bridge/msgpack-stream';
 
 // Re-export mutable state references for local use
 let sqlite3: any;
@@ -342,6 +351,19 @@ async function handleStreamingRequest(
                 await exportDatabaseToSessionHandler(
                     streamId, (data as any).database as string);
                 return;
+            case 'exportDatabasesToSession':
+                if (!Array.isArray((data as any).databases)) {
+                    throw new Error('exportDatabasesToSession requires data.databases (string[])');
+                }
+                await exportDatabasesToSessionHandler(
+                    streamId, (data as any).databases as string[]);
+                return;
+            case 'importDatabasesFromSession':
+                if (!(blob instanceof Blob)) {
+                    throw new Error('importDatabasesFromSession requires a Blob');
+                }
+                await importDatabasesFromSessionHandler(streamId, blob);
+                return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
         }
@@ -511,6 +533,238 @@ async function exportDatabaseToSessionHandler(
         debugLog(op, 'singleExport.done', { name: dbName });
         self.postMessage({ streamId, streamDone: true });
     } finally {
+        if (globalKey !== undefined) { clearBytes(globalKey); }
+    }
+}
+
+/**
+ * Streaming multi-DB plain export handler — emits a `.dbs` envelope.
+ *
+ * Wire format (MessagePack):
+ *   array(N)
+ *     array(2)  // file 1
+ *       str(name)
+ *       bin(plainBytes)
+ *     array(2)  // file 2
+ *       ...
+ *
+ * State-aware (same dispatch as the single-DB export):
+ *   Plain disk        → emit each file's bytes verbatim
+ *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages before emit
+ *   Encrypted+Locked  → C# caller refuses before posting (no key)
+ *
+ * The bridge accumulates chunks into one Blob and triggers download. No
+ * per-file streamChunk grouping — header bytes and per-file body bytes
+ * arrive as one continuous stream in arrival order.
+ */
+async function exportDatabasesToSessionHandler(
+    streamId: number,
+    dbNames: string[],
+): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    if (dbNames.length === 0) {
+        throw new Error('exportDatabasesToSession: dbNames must be non-empty');
+    }
+
+    const encrypted = hasGlobalKey();
+    const sourceSlotSize = encrypted ? ENCRYPTED_SLOT_SIZE : PLAIN_SLOT_SIZE;
+    const fileNames = poolUtil.getFileNames();
+    for (const dbName of dbNames) {
+        const dbPath = `/databases/${dbName}`;
+        if (!fileNames.includes(dbPath)) {
+            throw new Error(`exportDatabasesToSession: no existing DB at ${dbPath}`);
+        }
+    }
+
+    // Close every DB up front so the SAH snapshot is consistent across the
+    // envelope (no slot reads racing with SQLite writes from an open ctx).
+    for (const dbName of dbNames) {
+        await closeDatabase(dbName);
+    }
+
+    const op = nextOpId();
+    debugLog(op, 'multiExport.enter', {
+        count: dbNames.length, encrypted,
+    });
+
+    const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
+    try {
+        // Outer array header. Per file: array(2) + str(name) + bin(plainSize).
+        emitEnvelopeBytes(streamId, packArrayHeader(dbNames.length));
+
+        for (const dbName of dbNames) {
+            const dbPath = `/databases/${dbName}`;
+            const fileSize = poolUtil.getFileSize(dbPath);
+            if (fileSize === 0 || fileSize % sourceSlotSize !== 0) {
+                throw new Error(
+                    `exportDatabasesToSession: ${dbName} length ${fileSize} ` +
+                    `is not a non-zero multiple of slot size ${sourceSlotSize} ` +
+                    `(disk state=${encrypted ? 'encrypted' : 'plain'}).`);
+            }
+            const totalSlots = fileSize / sourceSlotSize;
+            const plainSize = totalSlots * PLAIN_SLOT_SIZE;
+
+            emitEnvelopeBytes(streamId, packArrayHeader(2));
+            for (const part of packStr(dbName)) {
+                emitEnvelopeBytes(streamId, part);
+            }
+            emitEnvelopeBytes(streamId, packBinHeader(plainSize));
+
+            debugLog(op, 'multiExport.file.start', { name: dbName, slots: totalSlots });
+
+            for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+                const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+                const sourceOffset = slotBase * sourceSlotSize;
+                const sourceBytes = slotCount * sourceSlotSize;
+
+                let sourceChunk: Uint8Array | null = null;
+                let plainChunk: Uint8Array | null = null;
+                try {
+                    sourceChunk = poolUtil.exportFileSlice(dbPath, sourceOffset, sourceBytes);
+                    if (encrypted) {
+                        plainChunk = rekeySlots(
+                            sourceChunk!, dbPath, globalKey, undefined, slotBase);
+                    } else {
+                        plainChunk = sourceChunk;
+                        sourceChunk = null;
+                    }
+                    self.postMessage(
+                        { streamId, streamChunk: true, data: plainChunk },
+                        [plainChunk!.buffer],
+                    );
+                    plainChunk = null;
+                } finally {
+                    if (sourceChunk !== null) { clearBytes(sourceChunk); }
+                    if (plainChunk !== null) { clearBytes(plainChunk); }
+                }
+            }
+            debugLog(op, 'multiExport.file.done', { name: dbName });
+        }
+
+        debugLog(op, 'multiExport.done', {});
+        self.postMessage({ streamId, streamDone: true });
+    } finally {
+        if (globalKey !== undefined) { clearBytes(globalKey); }
+    }
+}
+
+/** Helper: postMessage a small header byte block as a streamChunk (transferable). */
+function emitEnvelopeBytes(streamId: number, bytes: Uint8Array<ArrayBuffer>): void {
+    // Copy into a fresh buffer so the call site can keep using `bytes`
+    // (packStr returns tuple parts the caller iterates over).
+    const copy = new Uint8Array(bytes.length);
+    copy.set(bytes);
+    self.postMessage(
+        { streamId, streamChunk: true, data: copy },
+        [copy.buffer],
+    );
+}
+
+/**
+ * Streaming multi-DB plain-import handler — consumes a `.dbs` envelope
+ * from <paramref name="blob"/>. Wipes the existing pool first (matches
+ * the old ZIP-on-Plain semantics), then per-file: read name + bin
+ * length, stream-write that many plain pages through the chunked SAH
+ * path with rekey-on-write if a globalKey is registered.
+ *
+ * State dispatch matches the single-DB import: Plain writes plain;
+ * Encrypted+Unlocked rekey-on-writes; Encrypted+Locked is refused by
+ * the C# caller before opening the BlobSession.
+ */
+async function importDatabasesFromSessionHandler(
+    streamId: number,
+    blob: Blob,
+): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+
+    const op = nextOpId();
+    const encrypted = hasGlobalKey();
+    debugLog(op, 'multiImport.enter', { blobSize: blob.size, encrypted });
+
+    // Wipe the pool first — same destructive contract the old plain-ZIP
+    // import had. Caller owns the user-facing confirmation.
+    const existing = poolUtil.listDatabases();
+    for (const name of existing) {
+        try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
+    }
+
+    const reader = new BufferedStreamReader(blob.stream().getReader());
+    const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
+    try {
+        const fileCount = await readArrayHeader(reader);
+        if (fileCount === 0) {
+            throw new Error('importDatabasesFromSession: envelope is empty');
+        }
+        debugLog(op, 'multiImport.files', { count: fileCount });
+
+        for (let i = 0; i < fileCount; i++) {
+            const tupleLen = await readArrayHeader(reader);
+            if (tupleLen !== 2) {
+                throw new Error(
+                    `importDatabasesFromSession: file ${i} must be array(2), got array(${tupleLen})`);
+            }
+            const name = await readStr(reader);
+            const plainSize = await readBinHeader(reader);
+            if (plainSize === 0 || plainSize % PLAIN_SLOT_SIZE !== 0) {
+                throw new Error(
+                    `importDatabasesFromSession: file '${name}' plain length ${plainSize} ` +
+                    `is not a non-zero multiple of ${PLAIN_SLOT_SIZE}.`);
+            }
+            const dbPath = `/databases/${name}`;
+            const tempPath = `${dbPath}.multi-import-tmp`;
+            if (poolUtil.getFileNames().includes(tempPath)) {
+                try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+            }
+            const totalSlots = plainSize / PLAIN_SLOT_SIZE;
+            debugLog(op, 'multiImport.file.start', { name, slots: totalSlots });
+
+            for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
+                const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
+                const plainChunkBytes = slotCount * PLAIN_SLOT_SIZE;
+                const plainChunk = await reader.read(plainChunkBytes);
+
+                if (slotBase === 0
+                    && !hasSqliteMagicHeader(plainChunk.subarray(0, SQLITE_MAGIC_HEADER.length))) {
+                    clearBytes(plainChunk);
+                    throw new Error(
+                        `importDatabasesFromSession: file '${name}' does not start with the ` +
+                        `SQLite magic header — refusing to import a non-plain source.`);
+                }
+
+                if (encrypted) {
+                    let encryptedChunk: Uint8Array | null = null;
+                    try {
+                        encryptedChunk = rekeySlots(
+                            plainChunk, dbPath, undefined, globalKey!, slotBase);
+                        poolUtil.writeFileSlice(
+                            tempPath, slotBase * ENCRYPTED_SLOT_SIZE, encryptedChunk!);
+                    } finally {
+                        clearBytes(plainChunk);
+                        if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                    }
+                } else {
+                    try {
+                        poolUtil.writeFileSlice(
+                            tempPath, slotBase * PLAIN_SLOT_SIZE, plainChunk);
+                    } finally {
+                        clearBytes(plainChunk);
+                    }
+                }
+            }
+
+            debugLog(op, 'multiImport.atomicReplace', { name });
+            poolUtil.atomicReplaceFile(tempPath, dbPath);
+            debugLog(op, 'multiImport.file.done', { name });
+        }
+
+        debugLog(op, 'multiImport.done', {});
+        self.postMessage({ streamId, streamDone: true, result: 0 });
+    } finally {
+        reader.releaseLock();
         if (globalKey !== undefined) { clearBytes(globalKey); }
     }
 }
@@ -715,21 +969,21 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
                   (data as any).opaque === true
               );
 
-          case 'importDbPlain':
-              // Plain-source import onto an Encrypted+Unlocked disk. The
-              // payload IS the plain SQLite bytes (no envelope wrapper —
-              // there's no transit key to ship). Worker re-encrypts each
-              // 4096-byte page under the registered globalKey via rekeySlots
-              // and routes through opaque-import so verify-on-write confirms
-              // the encrypted slots decrypt under the disk key. Lets a Plain
-              // ZIP land on an Encrypted+Unlocked disk while preserving the
-              // passkey binding.
-              if (!binaryPayload) {
-                  throw new Error('importDbPlain requires binaryPayload');
-              }
-              return await importDatabasePlain(
-                  database!,
-                  new Uint8Array(binaryPayload));
+        case 'exportDb': {
+            // Plane-1 contract (ISqliteWasmDatabaseService.ExportDatabaseAsync):
+            // VERBATIM export — raw OPFS bytes, slot-format ciphertext or
+            // plain pages, whatever is on disk. The byte[]-shuttle rekey/
+            // encrypt/plain modes were deleted with the streaming refactor;
+            // only verbatim survives because the base plane's public API
+            // still sends it.
+            const mode = (data as any).mode as string;
+            if (mode !== 'verbatim') {
+                throw new Error(
+                    `exportDb mode='${mode}' is no longer supported; ` +
+                    `use the streaming export/import surface instead.`);
+            }
+            return await exportDatabaseVerbatim(database!);
+        }
 
         case 'encryptDb':
             // In-place plain → encrypted: reads OPFS plain pages, re-wraps
@@ -1327,6 +1581,25 @@ async function deleteDatabase(dbName: string) {
     }
 }
 
+/**
+ * Verbatim byte[] export — plane-1 contract behind
+ * ISqliteWasmDatabaseService.ExportDatabaseAsync. Returns raw OPFS bytes:
+ * slot-format ciphertext on an encrypted disk, plain pages on a plain one
+ * (the importer auto-detects by SQLite magic). Closes the DB first so the
+ * snapshot is consistent — the C# side mirrors that by dropping the name
+ * from its open-databases set.
+ */
+async function exportDatabaseVerbatim(dbName: string) {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    const dbPath = `/databases/${dbName}`;
+    await closeDatabase(dbName);
+    const raw: Uint8Array = poolUtil.exportFile(dbPath);
+    logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw.length}B`);
+    return { rawBinary: true, data: raw };
+}
+
 async function renameDatabase(oldName: string, newName: string) {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
@@ -1455,95 +1728,6 @@ async function importDatabase(dbName: string, data: Uint8Array, opaque = false) 
  */
 function keyFingerprint(key: Uint8Array): string {
     return `<redacted:${key.length}B>`;
-}
-
-/**
- * Plain-source import primitive: take plain SQLite pages (4096 B each) and
- * re-encrypt every page under the registered globalKey via rekeySlots before
- * routing through the standard opaque-import path. Mirror of
- * importDatabaseWithRekey minus the source-decrypt step (no wrapKey to
- * unwrap — sourceKey is undefined so rekeySlots aliases the input bytes
- * as the per-slot plaintext). Lets a Plain ZIP entry land on an
- * Encrypted+Unlocked disk while preserving the passkey binding: globalKey,
- * manifest, and credentialId all survive untouched.
- */
-async function importDatabasePlain(
-    dbName: string,
-    plainBytes: Uint8Array,
-) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    if (plainBytes.length === 0 || plainBytes.length % PLAIN_SLOT_SIZE !== 0) {
-        throw new Error(
-            `importDbPlain: ${dbName} length ${plainBytes.length} is not a non-zero ` +
-            `multiple of the plain page size ${PLAIN_SLOT_SIZE}; refusing to import ` +
-            `a non-plain source.`);
-    }
-    const globalKey = snapshotGlobalKey();
-    if (globalKey === undefined) {
-        throw new Error(
-            `importDbPlain rejected for ${dbName}: no globalKey registered. ` +
-            `Disk must be Encrypted+Unlocked before plain bytes can be ` +
-            `re-encrypted under the disk key.`);
-    }
-    const dbPath = `/databases/${dbName}`;
-    const tempPath = `${dbPath}.plain-import-tmp`;
-    const op = nextOpId();
-
-    // Clean up any leftover temp slot from a prior crashed attempt.
-    if (poolUtil.getFileNames().includes(tempPath)) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-    }
-    // If dbName is already mapped (e.g. an existing slot the caller forgot
-    // to wipe), unlink it before the atomic-replace promotes the new slot.
-    // The state-aware dispatch already deletes existing entries on the C#
-    // side, so this is defensive.
-    if (poolUtil.getFileNames().includes(dbPath)) {
-        try { poolUtil.unlink(dbPath); } catch { /* best-effort */ }
-    }
-
-    const totalSlots = plainBytes.length / PLAIN_SLOT_SIZE;
-    debugLog(op, 'plainImport.enter', { name: dbName, slots: totalSlots });
-
-    try {
-        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
-            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
-            const plainOffset = slotBase * PLAIN_SLOT_SIZE;
-            const plainChunkBytes = slotCount * PLAIN_SLOT_SIZE;
-            const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
-
-            // subarray aliases the parent buffer — no allocation.
-            // rekeySlots reads each 4096-byte slot in the chunk and emits
-            // a 4124-byte encrypted slot via per-slot AAD bound to
-            // (dbPath, slotBase + i). The output chunk is freshly
-            // allocated; we writeFileSlice it then drop.
-            const plainChunk = plainBytes.subarray(plainOffset, plainOffset + plainChunkBytes);
-            let encryptedChunk: Uint8Array | null = null;
-            try {
-                encryptedChunk = rekeySlots(plainChunk, dbPath, undefined, globalKey, slotBase);
-                poolUtil.writeFileSlice(tempPath, encryptedOffset, encryptedChunk!);
-                debugLog(op, 'plainImport.chunk', {
-                    name: dbName, slotBase, slotCount,
-                    isFirst: slotBase === 0,
-                    isLast: slotBase + slotCount === totalSlots,
-                });
-            } finally {
-                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
-            }
-        }
-
-        debugLog(op, 'plainImport.atomicReplace', { name: dbName });
-        poolUtil.atomicReplaceFile(tempPath, dbPath);
-        debugLog(op, 'plainImport.done', { name: dbName });
-        return { rowsAffected: 0 };
-    } catch (err) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-        debugLog(op, 'plainImport.error', { name: dbName, msg: String(err) });
-        throw err;
-    } finally {
-        clearBytes(globalKey);
-    }
 }
 
 /**

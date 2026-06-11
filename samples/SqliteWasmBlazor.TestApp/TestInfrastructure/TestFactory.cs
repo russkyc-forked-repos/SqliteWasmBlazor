@@ -84,16 +84,6 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", syntheticDecryptInPlace.Name, () => syntheticDecryptInPlace.RunAsync()));
 
-                    // Encrypted → plain round-trip via LeaveEncrypted +
-                    // ExportAll ZIP. The legacy v1 envelope tests were
-                    // dropped with the ExportDiskAsync(byte[]) symmetric
-                    // overload; the asymmetric round-trip below is the
-                    // canonical replacement.
-                    var diskExportImport = new DiskExportImportRoundTripTest(
-                        prfFactory, databaseService, session);
-                    _entries.Add(new TestEntry(
-                        "VFS Encryption", diskExportImport.Name, () => diskExportImport.RunAsync()));
-
                     // Single-DB streaming import round-trip — covers the
                     // IBrowserFile path the page uses (Plain + Unlocked
                     // dispatch). Plain → Plain round-trip + Plain →
@@ -103,36 +93,15 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbStreaming.Name, () => singleDbStreaming.RunAsync()));
 
-                    // Pure-plain ZIP round-trip — exercises the new
-                    // ISqliteWasmDatabaseService.ExportAll/ImportAll batch
-                    // primitives on a Plain disk (no encryption involved).
-                    var plainBatch = new PlainBatchExportImportRoundTripTest(
+                    // Multi-DB .dbs envelope streaming import round-trip
+                    // — the page emits this envelope from the checkbox
+                    // export selector when ≥ 2 DBs are picked; the import
+                    // side wipes the pool then writes each MessagePack
+                    // entry through the chunked SAH path.
+                    var dbsEnvelope = new DbsEnvelopeRoundTripTest(
                         prfFactory, databaseService, session);
                     _entries.Add(new TestEntry(
-                        "VFS Encryption", plainBatch.Name, () => plainBatch.RunAsync()));
-
-                    // Plain ZIP imported onto an Encrypted+Locked disk:
-                    // recovery path that drops the manifest + globalKey,
-                    // unpacks plain bytes, and ends Plain so the user can
-                    // re-encrypt under any new passkey afterwards.
-                    var importPlainLocked = new ImportPlainZipFromLockedTest(
-                        prfFactory, databaseService, session);
-                    _entries.Add(new TestEntry(
-                        "VFS Encryption", importPlainLocked.Name, () => importPlainLocked.RunAsync()));
-
-                    // Plain ZIP imported onto an Encrypted+Unlocked disk:
-                    // re-encrypts each ZIP entry under the registered
-                    // globalKey via the importDbPlain worker handler.
-                    // Manifest + passkey binding survive untouched.
-                    var importPlainUnlocked = new ImportPlainZipFromUnlockedTest(
-                        prfFactory, databaseService, session);
-                    _entries.Add(new TestEntry(
-                        "VFS Encryption", importPlainUnlocked.Name, () => importPlainUnlocked.RunAsync()));
-
-                    var importPlainBadShape = new ImportPlainZipRejectsBadShapeTest(
-                        prfFactory, databaseService, session);
-                    _entries.Add(new TestEntry(
-                        "VFS Encryption", importPlainBadShape.Name, () => importPlainBadShape.RunAsync()));
+                        "VFS Encryption", dbsEnvelope.Name, () => dbsEnvelope.RunAsync()));
 
                     // Codex audit invariant: manifest MAC verifies on
                     // UnlockAsync — wrong key throws before SQL runs and

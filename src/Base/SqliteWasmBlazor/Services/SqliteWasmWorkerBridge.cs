@@ -1033,6 +1033,33 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     internal static partial Task<bool> ExportDatabaseToDownloadAsync(
         string filename,
         string databaseName);
+
+    /// <summary>
+    /// Streaming multi-DB plain export — emits a <c>.dbs</c> envelope
+    /// (MessagePack array of <c>[name, bytes]</c> tuples; no compression).
+    /// State-aware on the worker side: Plain emits verbatim; Encrypted+
+    /// Unlocked decrypts each file slot-by-slot to plain pages.
+    /// <paramref name="dbNamesJson"/> is a JSON-encoded array of names
+    /// (C#'s <see cref="System.Text.Json.JsonSerializer"/> doesn't marshal
+    /// <see cref="IReadOnlyList{T}"/> across the JSImport boundary, so we
+    /// serialise to a string at the C# call site).
+    /// </summary>
+    [JSImport("exportDatabasesToDownload", "sqliteWasmWorker")]
+    internal static partial Task<bool> ExportDatabasesToDownloadAsync(
+        string filename,
+        string dbNamesJson);
+
+    /// <summary>
+    /// Streaming multi-DB plain import — consumes a <c>.dbs</c> envelope
+    /// that the C# side already streamed into the BlobSession via
+    /// <see cref="BlobSessionAppend"/>. Worker wipes the pool first, then
+    /// parses the MessagePack array and writes each entry through the
+    /// chunked SAH path (Plain: verbatim; Encrypted+Unlocked: rekey-on-
+    /// write under globalKey). Caller refuses Encrypted+Locked.
+    /// </summary>
+    [JSImport("importDatabasesFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportDatabasesFromSessionAsync(
+        int sessionId);
 }
 
 /// <summary>

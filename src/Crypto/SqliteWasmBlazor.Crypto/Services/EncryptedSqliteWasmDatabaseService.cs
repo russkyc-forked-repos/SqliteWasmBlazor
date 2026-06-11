@@ -2,7 +2,6 @@
 // MIT License
 
 using System.Buffers;
-using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using MessagePack;
@@ -41,8 +40,6 @@ namespace SqliteWasmBlazor;
 internal sealed class EncryptedSqliteWasmDatabaseService
     : IEncryptedSqliteWasmDatabaseService, IDatabaseLockProbe
 {
-    private const int PlainVfsSlotSize = 4096;
-
     private readonly SqliteWasmWorkerBridge _bridge;
     private readonly EncryptedSqliteWasmWorkerBridge _encryptedBridge;
     private readonly IDbInitializationReporter _reporter;
@@ -875,6 +872,140 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
+    /// Streaming multi-DB plain export — downloads selected DBs as a
+    /// <c>.dbs</c> envelope (MessagePack array of <c>[name, bytes]</c>;
+    /// no compression). State-aware on the worker side: Plain emits
+    /// verbatim; Encrypted+Unlocked decrypts each file slot-by-slot to
+    /// plain pages. Encrypted+Locked throws.
+    ///
+    /// <para>
+    /// If <paramref name="databaseNames"/> contains exactly one name this
+    /// short-circuits to <see cref="ExportDatabaseToDownloadAsync"/> so a
+    /// single-selection download lands as a vanilla <c>.db</c> file (no
+    /// envelope wrapper). Two or more names produce a <c>.dbs</c> file.
+    /// </para>
+    /// </summary>
+    public async Task ExportDatabasesToDownloadAsync(
+        IReadOnlyList<string> databaseNames,
+        string filename,
+        CancellationToken cancellationToken = default)
+    {
+        if (databaseNames is null || databaseNames.Count == 0)
+        {
+            throw new ArgumentException(
+                "databaseNames must be non-empty.", nameof(databaseNames));
+        }
+        if (string.IsNullOrWhiteSpace(filename))
+        {
+            throw new ArgumentException(
+                "filename must be non-empty.", nameof(filename));
+        }
+        var current = await GetStateAsync(cancellationToken);
+        if (current.Encrypted && !current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ExportDatabasesToDownloadAsync rejected: disk is Encrypted+Locked. " +
+                "Unlock first; without globalKey the worker can't decrypt slots " +
+                "back to plain pages.");
+        }
+        if (databaseNames.Count == 1)
+        {
+            await ExportDatabaseToDownloadAsync(
+                databaseNames[0], filename, cancellationToken);
+            return;
+        }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(databaseNames);
+        var ok = await SqliteWasmWorkerBridge.ExportDatabasesToDownloadAsync(
+            filename, json);
+        if (!ok)
+        {
+            throw new InvalidOperationException(
+                "ExportDatabasesToDownloadAsync: bridge reported failure.");
+        }
+    }
+
+    /// <summary>
+    /// Streaming multi-DB plain import — reads a <c>.dbs</c> envelope from
+    /// <paramref name="envelopeStream"/> and writes each entry through the
+    /// chunked SAH path. Wipes the existing pool first (matching the old
+    /// plain-ZIP-on-Plain semantics). State-aware: Plain writes plain;
+    /// Encrypted+Unlocked rekey-on-writes per entry under the registered
+    /// globalKey; Encrypted+Locked throws.
+    ///
+    /// <para>
+    /// C# managed-heap peak: one ArrayPool chunk (~1 MB). The whole
+    /// envelope is streamed into a JS-side BlobSession chunk by chunk;
+    /// the worker reads via <c>blob.stream()</c> + the
+    /// <c>BufferedStreamReader</c> MessagePack decoder.
+    /// </para>
+    /// </summary>
+    public async Task ImportDatabasesFromStreamAsync(
+        Stream envelopeStream,
+        long envelopeSize,
+        CancellationToken cancellationToken = default)
+    {
+        if (envelopeSize <= 0)
+        {
+            throw new ArgumentException(
+                $"envelopeSize must be positive, got {envelopeSize}.",
+                nameof(envelopeSize));
+        }
+        var current = await GetStateAsync(cancellationToken);
+        if (current.Encrypted && !current.Unlocked)
+        {
+            throw new InvalidOperationException(
+                "ImportDatabasesFromStreamAsync rejected: disk is Encrypted+Locked. " +
+                "Unlock first, or use the .eds guided import to rebind the disk " +
+                "to a different credential.");
+        }
+
+        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+        try
+        {
+            const int chunkSize = 1 << 20;
+            var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
+            try
+            {
+                long totalRead = 0;
+                while (totalRead < envelopeSize)
+                {
+                    var read = await envelopeStream.ReadAsync(
+                        buf.AsMemory(0, chunkSize), cancellationToken);
+                    if (read <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"ImportDatabasesFromStreamAsync: stream ended at {totalRead} " +
+                            $"of {envelopeSize} bytes; envelope is truncated.");
+                    }
+                    totalRead += read;
+                    bool isLast = totalRead == envelopeSize;
+                    SqliteWasmWorkerBridge.BlobSessionAppend(
+                        sessionId, new Span<byte>(buf, 0, read), isLast);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf, clearArray: true);
+            }
+
+            var result = await SqliteWasmWorkerBridge.ImportDatabasesFromSessionAsync(sessionId);
+            if (result != (int)DiskImportResult.OK)
+            {
+                throw new InvalidOperationException(
+                    $"ImportDatabasesFromStreamAsync: worker returned result={result}.");
+            }
+
+            ReportDbState(DbInitState.READY);
+        }
+        finally
+        {
+            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+        }
+    }
+
+    /// <summary>
     /// Streaming single-DB plain import — the right primitive for "I have
     /// one big .db file and want it on this disk". State-aware: writes
     /// plain pages on a Plain disk, rekeys-on-write to encrypted slots on
@@ -1021,126 +1152,6 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         };
     }
 
-    /// <inheritdoc />
-    public async Task<DiskImportResult> ImportAllDatabasesAsync(
-        byte[] zipBytes,
-        CancellationToken cancellationToken = default)
-    {
-        if (zipBytes is null || zipBytes.Length == 0)
-        {
-            throw new ArgumentException(
-                "ImportAllDatabasesAsync: zipBytes must be a non-empty ZIP archive.",
-                nameof(zipBytes));
-        }
-
-        var current = await GetStateAsync(cancellationToken);
-        var entries = await ReadPlainSqliteZipEntriesAsync(
-            zipBytes,
-            requireVfsPageShape: current.Encrypted && current.Unlocked,
-            cancellationToken);
-        if (entries is null)
-        {
-            return DiskImportResult.WRONG_KEY;
-        }
-
-        // Branch on disk state. Plain delegates straight to the base bridge;
-        // Locked breaks encryption (recovery path); Unlocked re-encrypts on
-        // write (preserves passkey binding).
-        if (!current.Encrypted)
-        {
-            return await _bridge.ImportAllDatabasesAsync(zipBytes, cancellationToken);
-        }
-
-        if (!current.Unlocked)
-        {
-            // Encrypted+Locked → break encryption. Drop globalKey + delete
-            // every DB + clear manifest, then unpack the ZIP via the base
-            // bridge (which now writes plain pages because no key is
-            // registered). State ends Plain; user can re-encrypt under any
-            // new passkey via EnterEncryptedAsync.
-            await WipePoolAsync(cancellationToken);
-            await _encryptedBridge.ClearDiskManifestAsync(cancellationToken);
-            var result = await _bridge.ImportAllDatabasesAsync(zipBytes, cancellationToken);
-            if (result == DiskImportResult.OK)
-            {
-                ReportDbState(DbInitState.READY);
-            }
-            return result;
-        }
-
-        // Encrypted+Unlocked → preserve encryption. Wipe DBs only (keep
-        // manifest + globalKey + passkey binding); re-encrypt each ZIP
-        // entry on write under the registered globalKey via the worker's
-        // importDbPlain handler. State stays Encrypted+Unlocked.
-        var existing = await _bridge.ListDatabasesAsync(cancellationToken);
-        foreach (var name in existing)
-        {
-            await _bridge.DeleteDatabaseAsync(name, cancellationToken);
-        }
-
-        foreach (var entry in entries)
-        {
-            var result = await _encryptedBridge.ImportPlainDatabaseAsync(
-                entry.Name, entry.Bytes, cancellationToken);
-            if (result != DiskImportResult.OK)
-            {
-                return result;
-            }
-        }
-        return DiskImportResult.OK;
-    }
-
-    private static async Task<List<PlainZipEntry>?> ReadPlainSqliteZipEntriesAsync(
-        byte[] zipBytes,
-        bool requireVfsPageShape,
-        CancellationToken cancellationToken)
-    {
-        var result = new List<PlainZipEntry>();
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
-        using var preflightMs = new MemoryStream(zipBytes, writable: false);
-        using var preflightZip = new ZipArchive(preflightMs, ZipArchiveMode.Read);
-        foreach (var entry in preflightZip.Entries)
-        {
-            if (string.IsNullOrEmpty(entry.Name))
-            {
-                continue;
-            }
-
-            if (!IsBareDatabaseName(entry.Name)
-                || !string.Equals(entry.FullName, entry.Name, StringComparison.Ordinal)
-                || !seenNames.Add(entry.Name)
-                || entry.Length > int.MaxValue
-                || entry.Length < SqliteWasmWorkerBridge.SqliteHeaderMagic.Length)
-            {
-                return null;
-            }
-
-            using var entryMs = new MemoryStream(checked((int)entry.Length));
-            await using (var entryStream = entry.Open())
-            {
-                await entryStream.CopyToAsync(entryMs, cancellationToken);
-            }
-
-            var bytes = entryMs.ToArray();
-            if (bytes.Length < SqliteWasmWorkerBridge.SqliteHeaderMagic.Length
-                || !bytes.AsSpan(0, SqliteWasmWorkerBridge.SqliteHeaderMagic.Length)
-                    .SequenceEqual(SqliteWasmWorkerBridge.SqliteHeaderMagic))
-            {
-                return null;
-            }
-
-            if (requireVfsPageShape
-                && (bytes.Length == 0 || bytes.Length % PlainVfsSlotSize != 0))
-            {
-                return null;
-            }
-
-            result.Add(new PlainZipEntry(entry.Name, bytes));
-        }
-
-        return result.Count == 0 ? null : result;
-    }
-
     public ValueTask<string?> ReadEnvelopeCredentialIdHintAsync(
         ReadOnlyMemory<byte> envelope,
         CancellationToken cancellationToken = default)
@@ -1168,17 +1179,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         return ValueTask.FromResult<string?>(header.CredentialIdHint);
     }
 
-    private static bool IsBareDatabaseName(string name)
-        => !string.IsNullOrWhiteSpace(name)
-            && name != "."
-            && name != ".."
-            && name.IndexOf('/') < 0
-            && name.IndexOf('\\') < 0
-            && string.Equals(name, Path.GetFileName(name), StringComparison.Ordinal);
-
 }
-
-internal sealed record PlainZipEntry(string Name, byte[] Bytes);
 
 [MessagePackObject(AllowPrivate = true)]
 internal sealed class DiskManifestBody

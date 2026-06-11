@@ -470,6 +470,89 @@ export function importDiskStreamCommitFromSession(
 }
 
 /**
+ * JSImport entry — multi-DB plain export. Drives the worker's <c>.dbs</c>
+ * envelope assembly (Plain: verbatim per file; Encrypted+Unlocked: decrypt
+ * per file), accumulates the streamed envelope bytes into one Blob,
+ * triggers anchor-click download. C# never sees the bytes.
+ */
+export function exportDatabasesToDownload(
+    filename: string,
+    dbNamesJson: string,
+): Promise<boolean> {
+    if (!worker) {
+        return Promise.reject(new Error('Worker not initialized'));
+    }
+    const dbNames = JSON.parse(dbNamesJson) as string[];
+    if (!Array.isArray(dbNames) || dbNames.length === 0) {
+        return Promise.reject(new Error('exportDatabasesToDownload: dbNames must be non-empty array'));
+    }
+    const streamId = nextStreamId--;
+    const chunks: Blob[] = [];
+    return new Promise((resolve, reject) => {
+        streamHandlers.set(streamId, {
+            onChunk(_name, data) {
+                chunks.push(new Blob([data as Uint8Array<ArrayBuffer>]));
+            },
+            onDone() {
+                streamHandlers.delete(streamId);
+                try {
+                    triggerEnvelopeDownload(filename, new Blob(chunks));
+                    resolve(true);
+                } catch (e) {
+                    reject(e instanceof Error ? e : new Error(String(e)));
+                }
+            },
+            onError(message) {
+                streamHandlers.delete(streamId);
+                reject(new Error(message));
+            },
+        });
+        worker!.postMessage({
+            streamId,
+            data: { type: 'exportDatabasesToSession', databases: dbNames },
+        });
+    });
+}
+
+/**
+ * JSImport entry — multi-DB plain import. Composes the BlobSession parts
+ * into a Blob, posts to the worker's <c>importDatabasesFromSession</c>
+ * handler, which wipes the pool then writes each envelope file via the
+ * chunked SAH path (Plain: verbatim; Encrypted+Unlocked: rekey-on-write).
+ */
+export function importDatabasesFromSession(
+    sessionId: number,
+): Promise<number> {
+    if (!worker) {
+        return Promise.reject(new Error('Worker not initialized'));
+    }
+    const parts = blobSessionPartsRef(sessionId);
+    const blob = new Blob(parts);
+    const streamId = nextStreamId--;
+    return new Promise((resolve, reject) => {
+        streamHandlers.set(streamId, {
+            onChunk() {
+                streamHandlers.delete(streamId);
+                reject(new Error('Unexpected streamChunk during importDatabasesFromSession'));
+            },
+            onDone(result) {
+                streamHandlers.delete(streamId);
+                resolve(typeof result === 'number' ? result : 0);
+            },
+            onError(message) {
+                streamHandlers.delete(streamId);
+                reject(new Error(message));
+            },
+        });
+        worker!.postMessage({
+            streamId,
+            data: { type: 'importDatabasesFromSession' },
+            blob,
+        });
+    });
+}
+
+/**
  * JSImport entry — single-DB plain export. Drives the worker's per-DB
  * chunked export (Plain disk: verbatim; Encrypted+Unlocked: decrypt to
  * plain pages), accumulates chunks into a single Blob (no envelope
@@ -619,7 +702,9 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     importDiskStreamPreflightFromSession,
     importDiskStreamCommitFromSession,
     importDatabaseFromSession,
+    importDatabasesFromSession,
     exportDatabaseToDownload,
+    exportDatabasesToDownload,
 };
 
 (globalThis as any).__sqliteWasmLogger = logger;

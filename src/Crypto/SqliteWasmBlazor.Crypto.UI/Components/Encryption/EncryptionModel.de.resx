@@ -47,23 +47,18 @@
   <data name="Status_DiskImported" xml:space="preserve"><value>Festplatte importiert; alle Datenbanken wurden durch den Inhalt des Umschlags ersetzt.</value></data>
   <data name="Status_SingleDbImported" xml:space="preserve"><value>Einzelne Datenbank {0} importiert.</value></data>
   <data name="Status_SingleDbExported" xml:space="preserve"><value>{0} als {1} exportiert.</value></data>
-  <data name="Btn_ExportSingleDatabase" xml:space="preserve"><value>Ausgewählte Datenbank exportieren (.db)</value></data>
-  <data name="Lbl_SelectDatabase" xml:space="preserve"><value>Datenbank</value></data>
-  <data name="Status_AllExported" xml:space="preserve"><value>Alle Datenbanken exportiert ({0}) als {1}.</value></data>
-  <data name="Status_AllImported" xml:space="preserve"><value>Alle Datenbanken importiert; der Pool wurde durch den Inhalt des ZIPs ersetzt.</value></data>
+  <data name="Status_DbsExported" xml:space="preserve"><value>{0} Datenbanken als {1} exportiert.</value></data>
+  <data name="Status_DbsImported" xml:space="preserve"><value>{0} importiert; der Pool wurde durch den Inhalt des Envelopes ersetzt.</value></data>
+  <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Zu exportierende Datenbanken</value></data>
   <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Verschlüsselte Festplatte sichern</value></data>
   <data name="Btn_ExportDiskForRecipient" xml:space="preserve"><value>Festplatte für Empfänger exportieren</value></data>
-  <data name="Btn_ExportAllDatabases" xml:space="preserve"><value>Alle Datenbanken exportieren (ZIP)</value></data>
-  <data name="Btn_ImportAllDatabases" xml:space="preserve"><value>Alle Datenbanken importieren (ZIP)</value></data>
-  <data name="Btn_ImportFile" xml:space="preserve"><value>Datenbank-Datei importieren (.eds, .zip oder .db)</value></data>
-  <data name="Hint_ImportFileSize" xml:space="preserve"><value>.eds und .db: gestreamt, keine Größenbegrenzung. .zip: auf Mobilgeräten begrenzt auf 100 MiB (für eine große Datenbank .db verwenden).</value></data>
-  <data name="Btn_ImportFile_ZipOnly" xml:space="preserve"><value>Datenbanken importieren (.zip)</value></data>
-  <data name="Btn_ImportFile_ZipOrDb" xml:space="preserve"><value>Datenbanken importieren (.zip oder einzelne .db)</value></data>
+  <data name="Btn_ExportDatabases" xml:space="preserve"><value>Ausgewählte Datenbanken exportieren</value></data>
+  <data name="Btn_ImportDatabases" xml:space="preserve"><value>Datenbanken importieren</value></data>
+  <data name="Btn_ImportFile" xml:space="preserve"><value>Datenbank-Datei importieren (.eds, .db oder .dbs)</value></data>
+  <data name="Hint_ImportFileSize" xml:space="preserve"><value>Alle Dateitypen werden in Chunks gestreamt; keine Größenbegrenzung.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Eine vorhandene Datenbank mit dem gleichen Namen wird ersetzt.</value></data>
-  <data name="Error_ZipTooLarge" xml:space="preserve"><value>Die ausgewählte ZIP-Datei ({0}, {1}) überschreitet das Import-Limit von {2}. ZIP-Archive mit mehreren Datenbanken oberhalb dieser Größe werden auf mobilen Browsern nicht unterstützt — sie sprengen den WASM-Heap. Für eine einzelne große Datenbank exportieren und re-importieren Sie sie als .db-Datei (der .db-Picker streamt sie ohne Größenbegrenzung in Chunks).</value></data>
-  <data name="Confirm_ImportAllDatabases" xml:space="preserve"><value>Beim Importieren werden alle Datenbanken im Pool ersetzt. Fortfahren?</value></data>
-  <data name="Confirm_ImportAllDatabases_Locked" xml:space="preserve"><value>Beim Importieren wird die verschlüsselte Festplatte gelöscht UND die Verschlüsselung entfernt — der aktuelle Passkey schützt danach keine Daten mehr. Anschließend kann die Festplatte unter einem beliebigen neuen Passkey neu verschlüsselt werden. Fortfahren?</value></data>
-  <data name="Confirm_ImportAllDatabases_Unlocked" xml:space="preserve"><value>Beim Importieren werden alle Datenbanken im verschlüsselten Pool ersetzt. Die Verschlüsselung bleibt unter dem aktuellen Passkey bestehen — die importierten Datenbanken werden beim Schreiben neu verschlüsselt. Fortfahren?</value></data>
+  <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im Pool ersetzt. Fortfahren?</value></data>
+  <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im verschlüsselten Pool ersetzt. Die Verschlüsselung bleibt unter dem aktuellen Passkey bestehen — die importierten Datenbanken werden beim Schreiben neu verschlüsselt. Fortfahren?</value></data>
   <data name="Status_OperationCancelled" xml:space="preserve"><value>Vorgang abgebrochen.</value></data>
   <data name="Btn_Cancel" xml:space="preserve"><value>Abbrechen</value></data>
 

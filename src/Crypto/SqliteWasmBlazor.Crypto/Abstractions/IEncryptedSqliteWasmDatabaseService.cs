@@ -50,12 +50,12 @@ public sealed record EncryptedDiskState(bool Encrypted, bool Unlocked, string? H
 /// </para>
 ///
 /// <para>
-/// <b>Wire format.</b> Export/Import always uses the opaque MessagePack
-/// <see cref="EncryptedDiskEnvelope"/> bundle (multi-DB inside one blob,
-/// per-file ciphertext under either the current globalKey or a recipient
-/// key). For native SQLite interop, the canonical path is
-/// <see cref="LeaveEncryptedAsync"/> → plain interface
-/// <c>ExportAllDatabasesAsync()</c> (ZIP of native .db).
+/// <b>Wire formats.</b> Encrypted whole-disk uses the asymmetric
+/// <c>.eds</c> envelope (ECIES-wrapped per-export key, slot-format
+/// ciphertext). Plain interop is per-DB <c>.db</c> files (one file per
+/// database) or a multi-DB <c>.dbs</c> envelope (uncompressed MessagePack
+/// array of <c>[name, bytes]</c>). All three are streamed end-to-end —
+/// no managed <see cref="byte"/>[] of the full payload at any layer.
 /// </para>
 ///
 /// <para>
@@ -193,43 +193,6 @@ public interface IEncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// State-aware plain-ZIP disk import. The ZIP is the same format produced
-    /// by <see cref="ISqliteWasmDatabaseService.ExportAllDatabasesAsync"/> —
-    /// one entry per DB, each entry a plain SQLite file. The destination disk
-    /// state determines what survives the wipe:
-    /// <list type="bullet">
-    ///   <item><b>Plain</b> → delegates to
-    ///     <see cref="ISqliteWasmDatabaseService.ImportAllDatabasesAsync"/>;
-    ///     state stays Plain.</item>
-    ///   <item><b>Encrypted+Locked</b> → drops <c>globalKey</c>, clears the
-    ///     manifest, deletes every DB, then unpacks the ZIP. The act of
-    ///     importing plain bytes onto a Locked disk is the recovery path
-    ///     when the passkey is unreachable; state ends Plain. Caller can
-    ///     <see cref="EnterEncryptedAsync"/> under any new passkey afterwards.</item>
-    ///   <item><b>Encrypted+Unlocked</b> → keeps <c>globalKey</c> + manifest +
-    ///     passkey binding, deletes every DB, then re-encrypts each ZIP entry
-    ///     under the existing <c>globalKey</c> on write. State stays
-    ///     Encrypted+Unlocked.</item>
-    /// </list>
-    ///
-    /// <para>
-    /// <b>Caller is responsible for explicit user confirmation in UI</b> —
-    /// the wipe is destructive and non-recoverable after preflight. Preflight
-    /// validates that every ZIP entry is a plain SQLite file (first 16 bytes
-    /// match <c>"SQLite format 3\0"</c>); a mismatched entry returns
-    /// <see cref="DiskImportResult.WRONG_KEY"/> without touching the disk.
-    /// </para>
-    /// </summary>
-    /// <returns>
-    /// <see cref="DiskImportResult.OK"/> on success;
-    /// <see cref="DiskImportResult.WRONG_KEY"/> if any ZIP entry fails the
-    /// SQLite-magic preflight (wipe is skipped in this case).
-    /// </returns>
-    Task<DiskImportResult> ImportAllDatabasesAsync(
-        byte[] zipBytes,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Peek inside a v3 disk-import envelope (or its first ~4 KB) to
     /// extract the embedded <c>CredentialIdHint</c>. Used by the
     /// guided-import UI to know which passkey to drive WebAuthn against
@@ -296,6 +259,44 @@ public interface IEncryptedSqliteWasmDatabaseService
     Task ExportDatabaseToDownloadAsync(
         string databaseName,
         string filename,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming multi-DB plain export — downloads the selected DBs as a
+    /// <c>.dbs</c> envelope (MessagePack <c>array</c> of <c>[name, bytes]</c>
+    /// tuples; no compression). State-aware: Plain disk emits each file
+    /// verbatim; Encrypted+Unlocked decrypts each file slot-by-slot to
+    /// plain pages before emit; Encrypted+Locked throws.
+    ///
+    /// <para>
+    /// One-element <paramref name="databaseNames"/> short-circuits to
+    /// <see cref="ExportDatabaseToDownloadAsync"/> so the download is a
+    /// vanilla <c>.db</c> file (no envelope wrapper). Callers can pass a
+    /// list of any length without branching at the call site.
+    /// </para>
+    /// </summary>
+    Task ExportDatabasesToDownloadAsync(
+        IReadOnlyList<string> databaseNames,
+        string filename,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming multi-DB plain import — reads a <c>.dbs</c> envelope from
+    /// <paramref name="envelopeStream"/>. Wipes the existing pool first
+    /// (matches the old plain-ZIP-on-Plain semantics) then writes each
+    /// envelope entry through the chunked SAH path. State-aware: Plain
+    /// disk writes plain pages; Encrypted+Unlocked rekey-on-writes under
+    /// the registered globalKey; Encrypted+Locked throws.
+    ///
+    /// <para>
+    /// C# managed-heap peak: one ArrayPool chunk (~1 MB). The envelope is
+    /// streamed into a JS-side BlobSession chunk by chunk; the worker
+    /// reads via <c>blob.stream()</c> + the streaming MessagePack decoder.
+    /// </para>
+    /// </summary>
+    Task ImportDatabasesFromStreamAsync(
+        Stream envelopeStream,
+        long envelopeSize,
         CancellationToken cancellationToken = default);
 
     /// <summary>

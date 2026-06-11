@@ -5,15 +5,16 @@ namespace SqliteWasmBlazor;
 
 /// <summary>
 /// Outcome returned by <see cref="ISqliteWasmDatabaseService.ImportDatabaseAsync"/>
-/// and <see cref="ISqliteWasmDatabaseService.ImportAllDatabasesAsync"/>.
-/// Plain (non-opaque) imports always return <see cref="OK"/> on success and
-/// throw on byte-level failures. Opaque (encrypted) imports go through the
-/// refuse-on-existing + verify-on-write policy: a fresh-path import that
-/// AEAD-verifies under the registered key returns <see cref="OK"/>; an
-/// import refused because a DB already exists at the path returns
-/// <see cref="EXISTING_DB_REFUSED"/>; an import whose slot 0 fails AEAD
-/// under the registered key returns <see cref="WRONG_KEY"/> after the
-/// worker has rolled back (unlinked) the partial file.
+/// and the streaming import paths on
+/// <c>IEncryptedSqliteWasmDatabaseService</c>. Plain (non-opaque) imports
+/// always return <see cref="OK"/> on success and throw on byte-level
+/// failures. Opaque (encrypted) imports go through the refuse-on-existing
+/// + verify-on-write policy: a fresh-path import that AEAD-verifies under
+/// the registered key returns <see cref="OK"/>; an import refused because
+/// a DB already exists at the path returns <see cref="EXISTING_DB_REFUSED"/>;
+/// an import whose slot 0 fails AEAD under the registered key returns
+/// <see cref="WRONG_KEY"/> after the worker has rolled back (unlinked) the
+/// partial file.
 /// </summary>
 public enum DiskImportResult
 {
@@ -43,17 +44,16 @@ public enum DiskImportResult
 /// Plain SQLite database management on OPFS. Single-DB ops (Exists / Delete
 /// / Rename / Close / Import / Export native <c>.db</c>), the pool-wide
 /// <see cref="ListDatabasesAsync"/>, plain bulk row insert
-/// (<see cref="ImportRowsAsync"/>), and batch
-/// <see cref="ExportAllDatabasesAsync"/> /
-/// <see cref="ImportAllDatabasesAsync"/> via standard ZIP archives.
+/// (<see cref="ImportRowsAsync"/>).
 ///
 /// <para>
 /// <b>Audience.</b> Anyone using SQLite-on-OPFS — encryption-aware apps
 /// (which also use <see cref="IEncryptedSqliteWasmDatabaseService"/>) and
-/// pure plain apps. Native SQLite interop: per-DB <c>.db</c> bytes from
-/// <see cref="ExportDatabaseAsync"/> open in <c>sqlite3</c>; ZIP archives
-/// from <see cref="ExportAllDatabasesAsync"/> unzip to a folder of
-/// <c>.db</c> files, each interop-friendly.
+/// pure plain apps. Per-DB <c>.db</c> bytes from
+/// <see cref="ExportDatabaseAsync"/> open in <c>sqlite3</c>; multi-DB
+/// transfers go through the streaming <c>.dbs</c> envelope on the
+/// encrypted plane (<c>ExportDatabasesToDownloadAsync</c> /
+/// <c>ImportDatabasesFromStreamAsync</c>).
 /// </para>
 ///
 /// <para>
@@ -143,9 +143,10 @@ public interface ISqliteWasmDatabaseService
     /// for a consistent snapshot — caller must re-open afterwards.
     ///
     /// <para>
-    /// For batch (multi-DB) export, use <see cref="ExportAllDatabasesAsync"/>
-    /// (returns a ZIP archive). For whole-disk encrypted backup / share,
-    /// use <see cref="IEncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyAsync"/>.
+    /// For multi-DB plain export use the encrypted plane's
+    /// <c>IEncryptedSqliteWasmDatabaseService.ExportDatabasesToDownloadAsync</c>
+    /// (a streamed <c>.dbs</c> envelope) — that path avoids the managed-byte[]
+    /// allocation this byte[]-returning per-DB primitive still incurs.
     /// </para>
     /// </summary>
     /// <param name="databaseName">The database filename (e.g., "mydb.db").</param>
@@ -173,56 +174,5 @@ public interface ISqliteWasmDatabaseService
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of rows imported.</returns>
     Task<int> ImportRowsAsync(string databaseName, byte[] data,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Batch export of every database in the SAH pool as a single
-    /// <b>ZIP archive</b>. Each entry inside the ZIP is a native
-    /// <c>.db</c> file named after the DB (e.g. <c>TodoDb.db</c>) — opens
-    /// directly in <c>sqlite3</c> after unzipping. Suitable for
-    /// "back up all my plain DBs to one file" workflows.
-    ///
-    /// <para>
-    /// Implementation: loops <see cref="ListDatabasesAsync"/> and calls
-    /// <see cref="ExportDatabaseAsync"/> per file, packaging into a
-    /// <see cref="System.IO.Compression.ZipArchive"/>. ZIP container is
-    /// the standard cross-tool folder representation; no MessagePack /
-    /// custom format involved.
-    /// </para>
-    /// <para>
-    /// For whole-disk encrypted backup, use
-    /// <see cref="IEncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyAsync"/>
-    /// instead — that produces an opaque MessagePack envelope of slot-
-    /// format ciphertext, suitable for re-import as an encrypted disk.
-    /// </para>
-    /// </summary>
-    /// <returns>ZIP archive bytes; one entry per database in the pool.</returns>
-    Task<byte[]> ExportAllDatabasesAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Batch import: replace the entire SAH pool with the contents of the
-    /// supplied <b>ZIP archive</b>. Wipes every currently-registered DB
-    /// before unpacking, then imports each ZIP entry as a fresh DB named
-    /// after the entry. Auto-detects per-entry plain-vs-ciphertext via the
-    /// SQLite magic-header probe inside <see cref="ImportDatabaseAsync"/>.
-    ///
-    /// <para>
-    /// <b>Caller is responsible for explicit user confirmation in UI.</b>
-    /// The wipe step is destructive and non-recoverable. Per the
-    /// disk-as-unit model, partial imports are not supported: either the
-    /// ZIP replaces the pool or the call throws (malformed ZIP) / returns
-    /// non-OK (per-file failure).
-    /// </para>
-    /// </summary>
-    /// <param name="zipBytes">A ZIP archive previously produced by
-    /// <see cref="ExportAllDatabasesAsync"/> (or any ZIP whose entries are
-    /// SQLite-format files named after their target DB).</param>
-    /// <returns>
-    /// <see cref="DiskImportResult.OK"/> on success; the first per-file
-    /// non-OK result if any ZIP entry fails to import (e.g.
-    /// <see cref="DiskImportResult.WRONG_KEY"/> when ciphertext lands on a
-    /// disk holding a different key).
-    /// </returns>
-    Task<DiskImportResult> ImportAllDatabasesAsync(byte[] zipBytes,
         CancellationToken cancellationToken = default);
 }

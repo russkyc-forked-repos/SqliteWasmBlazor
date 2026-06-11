@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.Localization;
+using ObservableCollections;
 using RxBlazorV2.Interface;
 using RxBlazorV2.Model;
 using RxBlazorV2.MudBlazor.Components;
@@ -36,28 +37,20 @@ public partial class EncryptionModel : ObservableModel
     /// <summary>
     /// Names of every DB in the SAH pool (sourced from
     /// <c>ISqliteWasmDatabaseService.ListDatabasesAsync</c> at the last
-    /// <see cref="RefreshAsync"/>). Drives the per-DB single-file export
-    /// picker on Plain + Unlocked branches. Empty list → the affordance
-    /// hides itself.
+    /// <see cref="RefreshAsync"/>). Drives the multi-select DB picker for
+    /// the unified export affordance. Empty list → the picker hides itself.
     /// </summary>
     public partial IReadOnlyList<string> DatabaseNames { get; set; } = Array.Empty<string>();
 
     /// <summary>
-    /// Currently-selected DB name for the per-DB export affordance. UI
-    /// binds it to a MudSelect populated from <see cref="DatabaseNames"/>.
+    /// Currently-selected DB names for the unified export affordance. UI
+    /// binds a list of checkboxes (one per <see cref="DatabaseNames"/>
+    /// entry) to <see cref="ObservableList{T}.Add"/> /
+    /// <see cref="ObservableList{T}.Remove"/> on this list. Cardinality
+    /// decides the export shape: one entry → vanilla <c>.db</c> file;
+    /// ≥ 2 entries → <c>.dbs</c> MessagePack envelope (no compression).
     /// </summary>
-    public partial string? SelectedDatabase { get; set; }
-
-    /// <summary>
-    /// Mirror of <see cref="IHostDatabaseService.HasAnyDataAsync"/> at
-    /// the last <see cref="RefreshAsync"/>. Drives the visibility of the
-    /// Plain-disk ZIP-export affordance — the reset service already knows
-    /// the host's DbContext factories, so it's the natural place to ask
-    /// "any rows?". Defaults to <c>true</c> so the very first paint
-    /// doesn't briefly flash the affordance missing before Refresh
-    /// completes.
-    /// </summary>
-    public partial bool HasPlainData { get; set; } = true;
+    public partial ObservableList<string> SelectedDatabases { get; private init; } = new();
 
     /// <summary>True when the VFS is plain (no passkey registered yet).</summary>
     public bool IsPlain => State?.Encrypted == false;
@@ -90,8 +83,7 @@ public partial class EncryptionModel : ObservableModel
 
     // Encrypted-disk envelope ops. Encrypted+Unlocked only. Two flavours:
     // backup (verbatim ciphertext under current K, no re-encryption cost)
-    // and recipient share (rekey to recipient K). Plain export off this
-    // surface; migrate via LeaveEncrypted → ExportAllDatabases.
+    // and recipient share (rekey to recipient K).
     [ObservableCommand(nameof(ExportDiskBackupAsync), nameof(CanExportDisk), nameof(FormatOperationError))]
     public partial IObservableCommandAsync ExportDiskBackup { get; }
 
@@ -105,32 +97,23 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ImportDiskCmdAsync), nameof(CanImportDisk), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportDisk { get; }
 
-    // Replaces (or creates) a single named DB. Caller owns the
-    // confirmation dialog. Stream-shaped — large .db files don't pin
-    // managed memory. Service dispatches by disk state: Plain writes
-    // plain pages; Unlocked rekey-on-writes under globalKey; Locked is
-    // refused (caller's CanExecute gates the button).
-    [ObservableCommand(nameof(ImportSingleDatabaseCmdAsync), nameof(CanImportSingleDatabase), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync<IBrowserFile> ImportSingleDatabase { get; }
+    // Unified plain export. Reads <see cref="SelectedDatabases"/> and
+    // dispatches by cardinality: 1 → vanilla .db download; ≥ 2 →
+    // streaming .dbs envelope (MessagePack array of [name, bytes],
+    // no compression). Plain disk emits verbatim; Encrypted+Unlocked
+    // decrypts slot-by-slot before emit; Encrypted+Locked is refused
+    // (CanExportDatabases gates).
+    [ObservableCommand(nameof(ExportDatabasesCmdAsync), nameof(CanExportDatabases), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync ExportDatabases { get; }
 
-    // Single-DB plain export. Streams the chosen DB as a plain .db file
-    // download; on Encrypted+Unlocked the worker decrypts slot-by-slot
-    // before emit so the result is a vanilla SQLite file. Locked is
-    // refused (CanExportSingleDatabase gates).
-    [ObservableCommand(nameof(ExportSingleDatabaseAsync), nameof(CanExportSingleDatabase), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync ExportSingleDatabase { get; }
-
-    // Plain-disk ZIP batch ops. Each ZIP entry is a standard .db any
-    // SQLite tool can open.
-    [ObservableCommand(nameof(ExportAllDatabasesAsync), nameof(CanExportAllDatabases), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync ExportAllDatabases { get; }
-
-    [ObservableCommand(nameof(ImportAllDatabasesCmdAsync), nameof(CanImportAllDatabases), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync<byte[]> ImportAllDatabases { get; }
-
-    // Page-side component-trigger so the model layer stays JSInterop-free.
-    [ObservableComponentTriggerAsync]
-    public partial PendingDownload? PendingDownload { get; set; }
+    // Unified plain import. One file picker; dispatch is by extension:
+    // <c>.db</c> → streaming single-DB write under existing name;
+    // <c>.dbs</c> → streaming envelope replace-pool. Plain writes plain
+    // pages; Encrypted+Unlocked rekey-on-writes under globalKey;
+    // Encrypted+Locked is refused (the .eds guided import is the
+    // rebind-to-new-credential path).
+    [ObservableCommand(nameof(ImportDatabasesCmdAsync), nameof(CanImportDatabases), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<IBrowserFile> ImportDatabases { get; }
 
     private bool CanEnterEncrypted() =>
         IsPlain
@@ -150,40 +133,34 @@ public partial class EncryptionModel : ObservableModel
     // Reset+Import, not an Import.
     private bool CanImportDisk() => IsPlain || IsLocked;
 
-    // Single-DB streaming import allowed on Plain (writes plain pages)
-    // and Encrypted+Unlocked (rekey-on-write under globalKey). Locked is
-    // refused — the service throws otherwise, but disabling the button
-    // gives clearer UX.
-    private bool CanImportSingleDatabase() => IsPlain || IsUnlocked;
+    // Plain export needs at least one DB selected and a disk state that can
+    // produce plain pages. Plain disks emit verbatim; Encrypted+Unlocked
+    // decrypts on read. Locked has no key to decrypt with — refuse.
+    private bool CanExportDatabases() =>
+        (IsPlain || IsUnlocked) && SelectedDatabases.Count > 0;
 
-    // Single-DB streaming export needs Plain or Unlocked + a chosen DB.
-    // Plain disks emit verbatim; Unlocked decrypts on read. Locked has
-    // no key to decrypt with, so the service throws.
-    private bool CanExportSingleDatabase() =>
-        (IsPlain || IsUnlocked) && !string.IsNullOrEmpty(SelectedDatabase);
-
-    // Plain ZIP export only makes sense on a Plain disk — on an encrypted
-    // disk the native .db pages would be unreadable until LeaveEncrypted runs.
-    private bool CanExportAllDatabases() => IsPlain;
-
-    // Plain ZIP import is state-aware: Plain → unpack as-is; Locked → break
-    // encryption (recovery path); Unlocked → re-encrypt on write under the
-    // existing globalKey. Session.ImportAllDatabasesAsync owns the dispatch.
-    private bool CanImportAllDatabases() => IsPlain || IsLocked || IsUnlocked;
+    // Plain import (single .db or multi-DB .dbs envelope) needs a writable
+    // state. Plain writes plain pages; Encrypted+Unlocked rekey-on-writes.
+    // Locked is refused — the .eds guided import is the rebind-to-new-
+    // credential path; this affordance assumes the disk's key is installed.
+    private bool CanImportDatabases() => IsPlain || IsUnlocked;
 
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
         State = await Session.GetStateAsync(cancellationToken);
-        HasPlainData = await HostDatabaseService.HasAnyDataAsync(cancellationToken);
         // Refresh the DB list — single-DB export picker hangs off this.
         // Read on every state transition so a newly-created or freshly-
         // imported DB shows up immediately.
         DatabaseNames = await DatabaseService.ListDatabasesAsync(cancellationToken);
-        // If the selected DB has been deleted, drop the selection so the
-        // export button disables itself.
-        if (!string.IsNullOrEmpty(SelectedDatabase) && !DatabaseNames.Contains(SelectedDatabase))
+        // Drop any selections that point at DBs no longer in the pool so the
+        // export button disables itself once the last surviving choice is
+        // gone. ObservableList has no RemoveWhere, so collect doomed names
+        // first to avoid mutating during iteration.
+        var alive = new HashSet<string>(DatabaseNames, StringComparer.Ordinal);
+        var doomed = SelectedDatabases.Where(name => !alive.Contains(name)).ToArray();
+        foreach (var name in doomed)
         {
-            SelectedDatabase = null;
+            SelectedDatabases.Remove(name);
         }
     }
 
@@ -286,31 +263,46 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Streams the currently-selected DB to a plain <c>.db</c> file download.
-    /// Filename derives from the DB name + a timestamp; user can rename in
-    /// the browser save dialog. Plain disks emit verbatim; Encrypted+Unlocked
-    /// decrypts on read so the downloaded file is a vanilla SQLite database
-    /// any tool can open.
+    /// Unified plain-export command. One picked DB → vanilla <c>.db</c>
+    /// download (filename = <c>{stem}-{stamp}.db</c>); multiple DBs →
+    /// streaming <c>.dbs</c> envelope (filename =
+    /// <c>databases-{stamp}.dbs</c>). Plain disks emit verbatim;
+    /// Encrypted+Unlocked decrypts each file slot-by-slot so downloads are
+    /// vanilla SQLite any tool can open. The service primitive
+    /// (<c>ExportDatabasesToDownloadAsync</c>) handles single-vs-multi
+    /// dispatch internally; we only choose the filename + status string.
     /// </summary>
-    private async Task ExportSingleDatabaseAsync(CancellationToken cancellationToken)
+    private async Task ExportDatabasesCmdAsync(CancellationToken cancellationToken)
     {
-        var dbName = SelectedDatabase;
-        if (string.IsNullOrEmpty(dbName))
+        var picked = SelectedDatabases.ToArray();
+        if (picked.Length == 0)
         {
             throw new InvalidOperationException(
-                "Select a database from the list before exporting.");
+                "Select at least one database before exporting.");
         }
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        // Most DB names end in .db already; strip + re-add so the stamp
-        // sits between name and extension (e.g. TodoDb-20260520-202132.db).
-        var stem = dbName.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
-            ? dbName[..^3]
-            : dbName;
-        var fileName = $"{stem}-{stamp}.db";
-        await Session.ExportDatabaseToDownloadAsync(dbName, fileName, cancellationToken);
+        string fileName;
+        string statusKey;
+        if (picked.Length == 1)
+        {
+            var dbName = picked[0];
+            var stem = dbName.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
+                ? dbName[..^3]
+                : dbName;
+            fileName = $"{stem}-{stamp}.db";
+            statusKey = "Status_SingleDbExported";
+        }
+        else
+        {
+            fileName = $"databases-{stamp}.dbs";
+            statusKey = "Status_DbsExported";
+        }
+        await Session.ExportDatabasesToDownloadAsync(picked, fileName, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_SingleDbExported", dbName, fileName],
-            nameof(ExportSingleDatabase));
+            picked.Length == 1
+                ? Localizer[statusKey, picked[0], fileName]
+                : Localizer[statusKey, picked.Length, fileName],
+            nameof(ExportDatabases));
     }
 
     /// <summary>
@@ -421,59 +413,47 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Single-DB plain import — picks one .db file and routes it through
-    /// the streaming BlobSession path. Bypasses the byte[] cliff the
-    /// multi-DB ZIP path hits at ~150 MB on iPad. Dispatches by disk
-    /// state inside the service: Plain → writes plain pages; Unlocked →
-    /// rekey-on-write under globalKey; Locked is refused (button is
-    /// disabled by CanImportSingleDatabase).
+    /// Unified plain-import command. Dispatches by file extension:
+    /// <c>.db</c> → single-DB streaming import under the file's name (one
+    /// DB replace-or-create); <c>.dbs</c> → multi-DB envelope import that
+    /// wipes the existing pool and replays every <c>[name, bytes]</c>
+    /// entry through the chunked write path. Both paths use the JS-side
+    /// BlobSession so C# managed heap stays bounded regardless of file
+    /// size. Plain disks write plain pages; Encrypted+Unlocked
+    /// rekey-on-writes under <c>globalKey</c>; Encrypted+Locked is refused
+    /// (the <c>.eds</c> guided import is the rebind-to-new-credential
+    /// path; <see cref="CanImportDatabases"/> gates the button).
     /// </summary>
-    private async Task ImportSingleDatabaseCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
+    private async Task ImportDatabasesCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
     {
         if (file is null || file.Size == 0)
         {
             throw new InvalidOperationException(
-                "Pick a .db file before importing.");
+                "Pick a .db or .dbs file before importing.");
         }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
-        await Session.ImportDatabaseFromStreamAsync(
-            file.Name, stream, file.Size, cancellationToken);
-        await RefreshAsync(cancellationToken);
-        StatusModel.AddSuccess(
-            Localizer["Status_SingleDbImported", file.Name],
-            nameof(ImportSingleDatabase));
-    }
-
-    private async Task ExportAllDatabasesAsync(CancellationToken cancellationToken)
-    {
-        var zip = await DatabaseService.ExportAllDatabasesAsync(cancellationToken);
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        var fileName = $"databases-{stamp}.zip";
-        await DownloadBytesAsync(zip, fileName);
-        StatusModel.AddSuccess(
-            Localizer["Status_AllExported", FormatSize(zip.Length), fileName],
-            nameof(ExportAllDatabases));
-    }
-
-    private async Task ImportAllDatabasesCmdAsync(byte[] zipBytes, CancellationToken cancellationToken)
-    {
-        if (zipBytes is null || zipBytes.Length == 0)
+        if (file.Name.EndsWith(".dbs", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                "Pick a .zip archive before importing.");
+            await Session.ImportDatabasesFromStreamAsync(stream, file.Size, cancellationToken);
+            await RefreshAsync(cancellationToken);
+            StatusModel.AddSuccess(
+                Localizer["Status_DbsImported", file.Name],
+                nameof(ImportDatabases));
+            return;
         }
-        // Route via Session (encrypted-side dispatcher) so Plain/Locked/Unlocked
-        // each land on the right wipe/encrypt path. The base bridge's
-        // ImportAllDatabasesAsync is Plain-disk only and would corrupt an
-        // encrypted pool by writing 4096-byte plain pages at slot offsets.
-        var result = await Session.ImportAllDatabasesAsync(zipBytes, cancellationToken);
-        if (result != DiskImportResult.OK)
+        if (file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"ImportAllDatabases failed: {result}");
+            await Session.ImportDatabaseFromStreamAsync(
+                file.Name, stream, file.Size, cancellationToken);
+            await RefreshAsync(cancellationToken);
+            StatusModel.AddSuccess(
+                Localizer["Status_SingleDbImported", file.Name],
+                nameof(ImportDatabases));
+            return;
         }
-        await RefreshAsync(cancellationToken);
-        StatusModel.AddSuccess(Localizer["Status_AllImported"], nameof(ImportAllDatabases));
+        throw new InvalidOperationException(
+            $"Unsupported import file extension '{file.Name}': expected .db or .dbs.");
     }
 
     private async ValueTask<byte[]> DeriveVfsKeyAsync()
@@ -550,20 +530,6 @@ public partial class EncryptionModel : ObservableModel
         return (base64Key, metadata.CredentialId);
     }
 
-    private async Task DownloadBytesAsync(byte[] bytes, string fileName)
-    {
-        var tcs = new TaskCompletionSource();
-        PendingDownload = new PendingDownload(bytes, fileName, tcs);
-        await tcs.Task;
-    }
-
-    private static string FormatSize(long bytes) => bytes switch
-    {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-        _ => $"{bytes / 1024.0 / 1024.0:F2} MB",
-    };
-
     private string FormatOperationError(Exception ex) => ex switch
     {
         OperationCanceledException => Localizer["Status_OperationCancelled"],
@@ -571,5 +537,3 @@ public partial class EncryptionModel : ObservableModel
         _ => Localizer["Error_Operation", ex.Message],
     };
 }
-
-public sealed record PendingDownload(byte[] Bytes, string FileName, TaskCompletionSource Done);

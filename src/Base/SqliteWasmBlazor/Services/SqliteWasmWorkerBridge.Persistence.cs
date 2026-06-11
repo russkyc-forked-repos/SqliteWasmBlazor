@@ -8,8 +8,7 @@ using MessagePack;
 namespace SqliteWasmBlazor;
 
 // Persistence partial: single-DB import/export (opaque or plain, with REKEY/
-// ENCRYPT and asymmetric verify+import variants), ZIP-bundled multi-DB
-// import/export, and bulk row import.
+// ENCRYPT and asymmetric verify+import variants) and bulk row import.
 internal sealed partial class SqliteWasmWorkerBridge
 {
     /// <summary>
@@ -156,77 +155,6 @@ internal sealed partial class SqliteWasmWorkerBridge
             _pendingBinaryRequests.TryRemove(requestId, out _);
             throw;
         }
-    }
-
-    /// <inheritdoc />
-    public async Task<byte[]> ExportAllDatabasesAsync(
-        CancellationToken cancellationToken = default)
-    {
-        // Loop ListDatabasesAsync → ExportDatabaseAsync(name) (VERBATIM)
-        // and pack into a ZIP archive with one .db entry per DB. Standard
-        // cross-tool format; recipient unzips and opens each .db in any
-        // SQLite tool. For whole-disk encrypted backup, use
-        // IEncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyAsync
-        // (asymmetric MessagePack envelope of slot-format ciphertext).
-        var names = await ListDatabasesAsync(cancellationToken);
-        using var ms = new MemoryStream();
-        using (var zip = new System.IO.Compression.ZipArchive(
-            ms, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
-        {
-            foreach (var name in names)
-            {
-                var bytes = await ExportDatabaseAsync(name, cancellationToken);
-                var entry = zip.CreateEntry(name, System.IO.Compression.CompressionLevel.Fastest);
-                await using var entryStream = entry.Open();
-                await entryStream.WriteAsync(bytes, cancellationToken);
-            }
-        }
-        return ms.ToArray();
-    }
-
-    /// <inheritdoc />
-    public async Task<DiskImportResult> ImportAllDatabasesAsync(
-        byte[] zipBytes,
-        CancellationToken cancellationToken = default)
-    {
-        if (zipBytes is null || zipBytes.Length == 0)
-        {
-            throw new ArgumentException(
-                "ImportAllDatabasesAsync: zipBytes must be a non-empty ZIP archive.",
-                nameof(zipBytes));
-        }
-
-        // Replace-all semantics: wipe the pool first, then unpack each ZIP
-        // entry. Caller is responsible for explicit user confirmation in UI.
-        var existing = await ListDatabasesAsync(cancellationToken);
-        foreach (var name in existing)
-        {
-            await DeleteDatabaseAsync(name, cancellationToken);
-        }
-
-        using var ms = new MemoryStream(zipBytes);
-        using var zip = new System.IO.Compression.ZipArchive(
-            ms, System.IO.Compression.ZipArchiveMode.Read);
-
-        foreach (var entry in zip.Entries)
-        {
-            if (string.IsNullOrEmpty(entry.Name))
-            {
-                continue; // skip directory entries
-            }
-            using var entryMs = new MemoryStream(checked((int)entry.Length));
-            await using (var entryStream = entry.Open())
-            {
-                await entryStream.CopyToAsync(entryMs, cancellationToken);
-            }
-            var bytes = entryMs.ToArray();
-            var result = await ImportDatabaseAsync(entry.Name, bytes, cancellationToken);
-            if (result != DiskImportResult.OK)
-            {
-                return result;
-            }
-        }
-        return DiskImportResult.OK;
     }
 
     public async Task<int> ImportRowsAsync(
