@@ -7,11 +7,19 @@ conversion wrapper, and the disk-level PRF cache/import lifecycle.
 ## Files
 
 - `vfs.spthy` models the per-slot AEAD, global-key registration, verification, and
-  rekey primitive.
+  rekey primitive. Encrypted rekey sources arrive over the attacker-controlled
+  disk channel (`In()`), mirroring how the implementation feeds `rekeySlots`
+  from exported OPFS bytes — so the rekey-soundness lemmas are authenticity
+  theorems against forged input, not restatements of the write rule. Rekey to
+  plain releases the plaintext to the attacker (`Out`), making the secrecy
+  lemma's plain-export escape clause load-bearing.
 - `vfs-inplace-lifecycle.spthy` models the operational wrapper around export
   and in-place conversion: source-shape preconditions, worker global-key
   lifecycle, temp/backup replacement, rollback, and disk-level
-  decrypt-to-plain key purge.
+  decrypt-to-plain key purge. The worker's single global-key slot is one
+  linear token per device (unique-init restriction), so the temporal lemmas
+  genuinely exercise the install/clear state machine rather than re-reading
+  labels off the rule that fired.
 - `vfs-cache-import-lifecycle.spthy` models PRF seed / JS key-cache expiry,
   `KeyCacheStrategy.NONE` one-shot consumption, manifest-MAC-verified unlock,
   lock-on-expiry, deferred manifest persistence, and whole-disk import
@@ -47,15 +55,21 @@ Plain VFS mode and rekey-to-plain are represented as events, not confidentiality
 claims. The implementation returns plain bytes to the trusted caller in those
 modes; the at-rest attacker proof is about encrypted disk material.
 
-## Proved Lemmas
+## Lemmas
 
-Run:
+Run `docs/formal/verify.sh` (all lemmas must report `verified`), then
+`docs/formal/mutation-check.sh` (deliberately broken model copies must
+FALSIFY their lemma — the anti-vacuity check). Equivalent manual run:
 
 ```sh
 tamarin-prover --prove docs/formal/vfs-tamarin/vfs.spthy
 tamarin-prover --prove docs/formal/vfs-tamarin/vfs-inplace-lifecycle.spthy
 tamarin-prover --prove docs/formal/vfs-tamarin/vfs-cache-import-lifecycle.spthy
 ```
+
+Every theory also carries `sanity_*` exists-trace lemmas: the universal
+security lemmas would verify vacuously over unreachable events, so each
+event they quantify over has a reachability witness.
 
 Expected `vfs.spthy` summary:
 
@@ -67,6 +81,7 @@ Expected `vfs.spthy` summary:
 - `rekey_encrypted_to_encrypted_sound`
 - `legacy_ciphertexts_not_read_as_v1`
 - `nonce_never_reused`
+- `sanity_encrypted_write_reachable` … `sanity_rekey_encrypted_to_encrypted_reachable` (5 exists-trace)
 
 Expected `vfs-inplace-lifecycle.spthy` summary:
 
@@ -84,6 +99,11 @@ Expected `vfs-inplace-lifecycle.spthy` summary:
 - `decrypt_failure_restores_encrypted_original`
 - `encrypt_success_poststate`
 - `decrypt_success_poststate`
+- `encrypt_in_place_no_live_key` (temporal: every earlier installed key was cleared first)
+- `export_encrypt_no_live_key` (temporal)
+- `decrypt_in_place_key_live_since_install` (temporal: reported key installed earlier, never cleared since)
+- `export_plain_key_live_since_install` (temporal)
+- `sanity_encrypt_commit_reachable` … `sanity_leave_encrypted_reachable` (8 exists-trace)
 
 Expected `vfs-cache-import-lifecycle.spthy` summary:
 
@@ -104,6 +124,16 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 - `pool_wipe_requires_validated_source`
 - `rejected_import_preserves_disk_state`
 - `rejected_import_never_wipes`
+- `sanity_unlock_accept_reachable` … `sanity_pool_wipe_reachable` (11 exists-trace)
 
-All are `verified` with Tamarin 1.12.0 in the local toolchain used when this was
-written.
+## Verification status
+
+- All lemmas as of commit `ef336d2` were `verified` with Tamarin 1.12.0
+  locally (vfs: 8, inplace-lifecycle: 14, cache-import-lifecycle: 17).
+- The 2026-06-12 re-evaluation pass (rekey rules sourced from the attacker
+  channel, single-key-token restriction, 4 temporal key-state lemmas,
+  24 sanity lemmas, mutation-check harness) parses (`--parse-only`) but is
+  **not yet machine-verified** — the authoring machine could not run the
+  proof search. Run `docs/formal/verify.sh` followed by
+  `docs/formal/mutation-check.sh` on a machine with a few GB of free RAM
+  and update this section with the result.

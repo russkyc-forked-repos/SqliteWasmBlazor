@@ -52,25 +52,35 @@ begin
 
 // ---------------------------------------------------------------------------
 // Initial file/global-key states.
+//
+// The worker holds exactly ONE globalKey slot (key-registry.ts is a single
+// module-level field). The key state is therefore a single linear token per
+// device that cycles GlobalEmpty <-> GlobalKey, minted exactly once by
+// InitDevice. File-init rules deliberately do NOT mint key-state tokens:
+// duplicating the token per file would let the model install several
+// concurrent global keys for one device, which the implementation cannot do
+// — and would silently weaken every key-state lemma below.
 // ---------------------------------------------------------------------------
+
+rule InitDevice:
+    [ ]
+  --[ DeviceInitialized($Device) ]->
+    [ GlobalEmpty($Device) ]
+
+restriction device_initialized_once:
+    "All Device #i #j.
+        DeviceInitialized(Device) @ #i & DeviceInitialized(Device) @ #j
+        ==> #i = #j"
 
 rule InitPlainFile:
     [ Fr(~plain_blob) ]
-  --[ FileInitialized($Device, $Path, 'plain', ~plain_blob)
-    , PostState($Device, $Path, 'plain', 'globalEmpty')
-    ]->
-    [ File($Device, $Path, 'plain', ~plain_blob)
-    , GlobalEmpty($Device)
-    ]
+  --[ FileInitialized($Device, $Path, 'plain', ~plain_blob) ]->
+    [ File($Device, $Path, 'plain', ~plain_blob) ]
 
 rule InitEncryptedFileLocked:
     [ Fr(~cipher_blob) ]
-  --[ FileInitialized($Device, $Path, 'encrypted', ~cipher_blob)
-    , PostState($Device, $Path, 'encrypted', 'globalEmpty')
-    ]->
-    [ File($Device, $Path, 'encrypted', ~cipher_blob)
-    , GlobalEmpty($Device)
-    ]
+  --[ FileInitialized($Device, $Path, 'encrypted', ~cipher_blob) ]->
+    [ File($Device, $Path, 'encrypted', ~cipher_blob) ]
 
 rule UnlockGlobalKey:
     [ GlobalEmpty($Device)
@@ -322,5 +332,81 @@ lemma decrypt_success_poststate:
         DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
         ==> ReplaceCommitted(Device, path, 'encrypted', 'plain') @ #t
           & PostState(Device, path, 'plain', 'globalKey') @ #t"
+
+/*
+ * Temporal key-state lemmas.
+ *
+ * The SourceState / PostState lemmas above pin the labels each rule
+ * carries; these lemmas instead exercise the linear key-state token
+ * across time, so they would catch a rule that *claims* the right
+ * source state in its labels while its premises no longer enforce it.
+ */
+
+// A plain-source operation can only run while the device key slot is
+// empty: every key installed before it was cleared before it.
+lemma encrypt_in_place_no_live_key:
+    "All Device path plain_blob cipher_blob target_key #t.
+        EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+        ==> All k #t1.
+              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
+              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
+
+lemma export_encrypt_no_live_key:
+    "All Device path plain_blob cipher_blob target_key #t.
+        ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+        ==> All k #t1.
+              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
+              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
+
+// An encrypted-source operation runs under exactly the key that was
+// installed earlier and not cleared since — the key it reports is the
+// live one, not a stale or future key.
+lemma decrypt_in_place_key_live_since_install:
+    "All Device path cipher_blob plain_blob k_old #t.
+        DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
+          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
+
+lemma export_plain_key_live_since_install:
+    "All Device path cipher_blob plain_blob k_old #t.
+        ExportPlainAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
+          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
+
+/*
+ * Reachability sanity lemmas (exists-trace) — the universal lemmas above
+ * would verify vacuously over unreachable events.
+ */
+lemma sanity_encrypt_commit_reachable:
+    exists-trace
+    "Ex D p pb cb tk #t. EncryptInPlaceAccepted(D, p, pb, cb, tk) @ #t"
+
+lemma sanity_encrypt_rollback_reachable:
+    exists-trace
+    "Ex D p pb cb tk #t. EncryptInPlaceFailed(D, p, pb, cb, tk) @ #t"
+
+lemma sanity_decrypt_commit_reachable:
+    exists-trace
+    "Ex D p cb pb k #t. DecryptInPlaceAccepted(D, p, cb, pb, k) @ #t"
+
+lemma sanity_decrypt_rollback_reachable:
+    exists-trace
+    "Ex D p cb pb k #t. DecryptInPlaceFailed(D, p, cb, pb, k) @ #t"
+
+lemma sanity_export_encrypt_reachable:
+    exists-trace
+    "Ex D p pb cb tk #t. ExportEncryptAccepted(D, p, pb, cb, tk) @ #t"
+
+lemma sanity_export_plain_reachable:
+    exists-trace
+    "Ex D p cb pb k #t. ExportPlainAccepted(D, p, cb, pb, k) @ #t"
+
+lemma sanity_export_rekey_reachable:
+    exists-trace
+    "Ex D p cb ncb k tk #t. ExportRekeyAccepted(D, p, cb, ncb, k, tk) @ #t"
+
+lemma sanity_leave_encrypted_reachable:
+    exists-trace
+    "Ex D k #t. LeaveEncryptedAccepted(D, k) @ #t"
 
 end

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Mutation checks: deliberately break the models and assert that the
+# corresponding security lemma is FALSIFIED. A lemma that cannot fail when
+# its mechanism is removed proves nothing — this script is the anti-vacuity
+# companion to verify.sh (which asserts everything passes on the intact
+# models).
+#
+# Each mutation is applied to a temp copy; the repo files are never touched.
+# Memory note: same as verify.sh — run on a machine with a few GB free.
+set -u
+cd "$(dirname "$0")/../.."
+SRC=docs/formal/vfs-tamarin
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+FAIL=0
+
+# run_mutation <name> <theory> <lemma> <perl -0pe substitution>
+run_mutation() {
+    local name="$1" theory="$2" lemma="$3" subst="$4"
+    local mut="$TMP/${theory}.spthy"
+    cp "$SRC/${theory}.spthy" "$mut"
+    perl -0pi -e "$subst" "$mut"
+    if cmp -s "$SRC/${theory}.spthy" "$mut"; then
+        echo "MUTATION NOT APPLIED (pattern drifted?): $name"
+        FAIL=1
+        return
+    fi
+    local result
+    result=$(tamarin-prover --prove="$lemma" "$mut" 2>&1 \
+        | sed -n '/summary of summaries/,$p' | grep -F "$lemma ")
+    if echo "$result" | grep -q 'falsified'; then
+        echo "OK   $name: $lemma falsified as expected"
+    else
+        echo "FAIL $name: expected '$lemma' to be falsified, got: ${result:-<no summary>}"
+        FAIL=1
+    fi
+}
+
+# 1. Drop the dbPath binding from the encrypted read pattern -> a ciphertext
+#    written for one path is accepted as a read of another (cross-DB swap).
+run_mutation "vfs/read-ignores-path" vfs encrypted_read_authenticity \
+    's/aad\(.v1., \$Path, \$SlotIdx\), <nonce, m>>, k\)/aad('"'"'v1'"'"', \$OtherPath, \$SlotIdx), <nonce, m>>, k)/'
+
+# 2. Make the invalid-envelope rejection path wipe the pool -> the
+#    wipe-after-validate invariant must break.
+run_mutation "cache-import/reject-wipes" vfs-cache-import-lifecycle rejected_import_never_wipes \
+    "s/ImportRejected\(\\\$Device, 'encryptedUnlocked', \\\$Kind, 'invalidEnvelope'\)/ImportRejected(\$Device, 'encryptedUnlocked', \$Kind, 'invalidEnvelope'), PoolWiped(\$Device)/"
+
+# 3. Let the key install fire without consuming the empty-slot token -> a
+#    second live key can exist during a plain-source operation.
+run_mutation "inplace/install-unguarded" vfs-inplace-lifecycle encrypt_in_place_no_live_key \
+    's/\[ GlobalEmpty\(\$Device\)\n    , Fr\(~k\)\n    \]/[ Fr(~k) ]/'
+
+if [ "$FAIL" -eq 0 ]; then
+    echo "ALL MUTATION CHECKS PASSED"
+else
+    echo "MUTATION CHECKS FAILED"
+fi
+exit "$FAIL"

@@ -545,4 +545,53 @@ lemma rejected_import_never_wipes:
         ImportRejected(Device, State, Kind, Reason) @ #t
         ==> not( PoolWiped(Device) @ #t )"
 
+/*
+ * Reachability sanity lemmas (exists-trace) — every universal lemma above
+ * would verify vacuously over unreachable events.
+ */
+lemma sanity_unlock_accept_reachable:
+    exists-trace
+    "Ex Device #t. UnlockAccepted(Device) @ #t"
+
+lemma sanity_unlock_reject_reachable:
+    exists-trace
+    "Ex Device #t. UnlockRejected(Device) @ #t"
+
+lemma sanity_cache_expiry_reachable:
+    exists-trace
+    "Ex Device seed #t. CacheExpiredWhileUnlocked(Device, seed) @ #t"
+
+lemma sanity_none_seed_consumed_reachable:
+    exists-trace
+    "Ex Device seed #t. SeedConsumed(Device, seed) @ #t"
+
+lemma sanity_plain_import_on_unlocked_reachable:
+    exists-trace
+    "Ex Device #t. ImportAccepted(Device, 'encryptedUnlocked', 'plain') @ #t"
+
+lemma sanity_plain_import_on_locked_reachable:
+    exists-trace
+    "Ex Device #t. ImportAccepted(Device, 'encryptedLocked', 'plain') @ #t"
+
+lemma sanity_cipher_import_on_unlocked_reachable:
+    exists-trace
+    "Ex Device #t. ImportAccepted(Device, 'encryptedUnlocked', 'cipher') @ #t"
+
+lemma sanity_guided_cipher_import_from_plain_reachable:
+    exists-trace
+    "Ex Device #t. ImportAccepted(Device, 'plain', 'cipher') @ #t"
+
+lemma sanity_guided_cipher_import_from_locked_reachable:
+    exists-trace
+    "Ex Device #t. ImportAccepted(Device, 'encryptedLocked', 'cipher') @ #t"
+
+lemma sanity_invalid_envelope_reject_reachable:
+    exists-trace
+    "Ex Device State Kind #t.
+        ImportRejected(Device, State, Kind, 'invalidEnvelope') @ #t"
+
+lemma sanity_pool_wipe_reachable:
+    exists-trace
+    "Ex Device #t. PoolWiped(Device) @ #t"
+
 end
