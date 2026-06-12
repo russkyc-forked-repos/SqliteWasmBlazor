@@ -115,7 +115,9 @@ rule EncryptedReadSlot:
     [ !GlobalVfsKey($Device, generation, k)
     , In(<nonce, senc(<aad('v1', $Path, $SlotIdx), <nonce, m>>, k)>)
     ]
-  --[ EncryptedSlotRead($Device, $Path, $SlotIdx, m, k, nonce) ]->
+  --[ EncryptedSlotRead($Device, $Path, $SlotIdx, m, k, nonce)
+    , InCipher($Device, $Path, $SlotIdx, m, k, nonce)
+    ]->
     [ ]
 
 // Legacy/cross-version ciphertexts may exist on disk. Reads use the v1 AAD
@@ -141,7 +143,9 @@ rule VerifyEncryptionKeyMatch:
     [ !GlobalVfsKey($Device, generation, k)
     , In(<nonce, senc(<aad('v1', $Path, 'slot0'), <nonce, m>>, k)>)
     ]
-  --[ VerifyKeyMatched($Device, $Path, m, k, nonce) ]->
+  --[ VerifyKeyMatched($Device, $Path, m, k, nonce)
+    , InCipher($Device, $Path, 'slot0', m, k, nonce)
+    ]->
     [ ]
 
 // ---------------------------------------------------------------------------
@@ -191,6 +195,7 @@ rule RekeyEncryptedToPlain:
     , In(<nonce_old, senc(<aad('v1', $Path, $SlotIdx), <nonce_old, m>>, k_old)>)
     ]
   --[ RekeyedEncryptedToPlain($Device, $Path, $SlotIdx, m, k_old, nonce_old)
+    , InCipher($Device, $Path, $SlotIdx, m, k_old, nonce_old)
     , PlainSlotExported($Device, $Path, $SlotIdx, m)
     ]->
     [ Out(m) ]
@@ -202,9 +207,28 @@ rule RekeyEncryptedToEncrypted:
     , Fr(~nonce_new)
     ]
   --[ RekeyedEncryptedToEncrypted($Device, $Path, $SlotIdx, m, k_old, k_new, nonce_old, ~nonce_new)
+    , InCipher($Device, $Path, $SlotIdx, m, k_old, nonce_old)
     , CiphertextProduced($Device, $Path, $SlotIdx, m, k_new, ~nonce_new, 'v1')
     ]->
     [ Out(<~nonce_new, senc(<aad('v1', $Path, $SlotIdx), <~nonce_new, m>>, k_new)>) ]
+
+// ---------------------------------------------------------------------------
+// Sources lemma.
+//
+// Every In-consuming rule (read, verify, both encrypted-source rekeys) is
+// annotated with InCipher. Without this lemma the backward search can chase
+// RekeyEncryptedToEncrypted as its own ciphertext source indefinitely (it
+// consumes a 'current'-key ciphertext and emits a 'next'-key one; the
+// generation mismatch only surfaces after unbounded unfolding). The sources
+// lemma closes that loop during precomputation: any accepted ciphertext is
+// either honestly produced or the attacker already knew its payload.
+// ---------------------------------------------------------------------------
+
+lemma cipher_sources [sources]:
+    "All Device path i m k nonce #t.
+        InCipher(Device, path, i, m, k, nonce) @ #t
+        ==> (Ex #t2. CiphertextProduced(Device, path, i, m, k, nonce, 'v1') @ #t2 & #t2 < #t)
+          | (Ex #t2. KU(m) @ #t2 & #t2 < #t)"
 
 // ---------------------------------------------------------------------------
 // Lemmas.

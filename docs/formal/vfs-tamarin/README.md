@@ -128,12 +128,18 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 
 ## Verification status
 
-- All lemmas as of commit `ef336d2` were `verified` with Tamarin 1.12.0
-  locally (vfs: 8, inplace-lifecycle: 14, cache-import-lifecycle: 17).
-- The 2026-06-12 re-evaluation pass (rekey rules sourced from the attacker
-  channel, single-key-token restriction, 4 temporal key-state lemmas,
-  24 sanity lemmas, mutation-check harness) parses (`--parse-only`) but is
-  **not yet machine-verified** — the authoring machine could not run the
-  proof search. Run `docs/formal/verify.sh` followed by
-  `docs/formal/mutation-check.sh` on a machine with a few GB of free RAM
-  and update this section with the result.
+- `vfs.spthy`: **fully verified** (Tamarin 1.12.0 + maude 3.5.1, 2026-06-12,
+  0.9 s) — 8 security lemmas, `cipher_sources [sources]`, 5 sanity lemmas.
+  The sources lemma is required: without it the In()-sourced rekey rules
+  send the backward search into unbounded `RekeyEncryptedToEncrypted`
+  source-chains (observed: >58 min / >45 GB, non-terminating).
+- `vfs-inplace-lifecycle.spthy` / `vfs-cache-import-lifecycle.spthy`:
+  all *all-traces* lemmas verify in seconds (incl. the three
+  wipe-after-validate lemmas, 8 steps). **Reachability (`sanity_*`) and the
+  4 temporal lemmas hang in precomputation** — and this is NOT a defect the
+  2026-06-12 changes introduced: the ef336d2 rule set hangs identically the
+  moment any exists-trace lemma is added. The original theories' `verified`
+  stamps never required the prover to construct a single execution trace.
+  Until the state encoding is reworked for tractable trace construction,
+  the lifecycle theories' universal lemmas should be read with that caveat.
+  Hardware does not help (the hang is divergence, not slowness).
