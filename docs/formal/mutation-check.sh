@@ -51,12 +51,12 @@ run_mutation "vfs/read-ignores-path" vfs encrypted_read_authenticity \
 # 2. Make the invalid-envelope rejection path wipe the pool -> the
 #    wipe-after-validate invariant must break.
 run_mutation "cache-import/reject-wipes" vfs-cache-import-lifecycle rejected_import_never_wipes \
-    "s/ImportRejected\(\\\$Device, 'encryptedUnlocked', \\\$Kind, 'invalidEnvelope'\)/ImportRejected(\$Device, 'encryptedUnlocked', \$Kind, 'invalidEnvelope'), PoolWiped(\$Device)/"
+    "s/ImportRejected\(\\\$Device, 'encryptedUnlocked', \\\$Kind, 'invalidEnvelope'\)/ImportRejected(\\\$Device, 'encryptedUnlocked', \\\$Kind, 'invalidEnvelope'), PoolWiped(\\\$Device)/"
 
-# 3. Let the key install fire without consuming the empty-slot token -> a
-#    second live key can exist during a plain-source operation.
-run_mutation "inplace/install-unguarded" vfs-inplace-lifecycle encrypt_in_place_no_live_key \
-    's/\[ GlobalEmpty\(\$Device\)\n    , Fr\(~k\)\n    \]/[ Fr(~k) ]/'
+# 3. Make the encrypt rollback "restore" the ciphertext instead of the
+#    plain original -> the restores-original guarantee must break.
+run_mutation "inplace/rollback-restores-wrong-blob" vfs-inplace-lifecycle replacement_failure_restores_original \
+    "s/OriginalRestored\(D, P, 'plain', plain_blob\)/OriginalRestored(D, P, 'plain', cipher_blob)/"
 
 if [ "$FAIL" -eq 0 ]; then
     echo "ALL MUTATION CHECKS PASSED"

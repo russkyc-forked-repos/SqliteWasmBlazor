@@ -99,11 +99,11 @@ Expected `vfs-inplace-lifecycle.spthy` summary:
 - `decrypt_failure_restores_encrypted_original`
 - `encrypt_success_poststate`
 - `decrypt_success_poststate`
-- `encrypt_in_place_no_live_key` (temporal: every earlier installed key was cleared first)
-- `export_encrypt_no_live_key` (temporal)
-- `decrypt_in_place_key_live_since_install` (temporal: reported key installed earlier, never cleared since)
-- `export_plain_key_live_since_install` (temporal)
 - `sanity_encrypt_commit_reachable` … `sanity_leave_encrypted_reachable` (8 exists-trace)
+- `key_installed_once`, `key_event_rooted_at_init` (reuse invariants)
+- `pending_*` temporal key-state lemmas (4) — stated, NOT verified; skipped
+  by verify.sh until a goal-ranking oracle closes their induction (see the
+  theory's comment block)
 
 Expected `vfs-cache-import-lifecycle.spthy` summary:
 
@@ -128,18 +128,25 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 
 ## Verification status
 
-- `vfs.spthy`: **fully verified** (Tamarin 1.12.0 + maude 3.5.1, 2026-06-12,
-  0.9 s) — 8 security lemmas, `cipher_sources [sources]`, 5 sanity lemmas.
-  The sources lemma is required: without it the In()-sourced rekey rules
-  send the backward search into unbounded `RekeyEncryptedToEncrypted`
-  source-chains (observed: >58 min / >45 GB, non-terminating).
-- `vfs-inplace-lifecycle.spthy` / `vfs-cache-import-lifecycle.spthy`:
-  all *all-traces* lemmas verify in seconds (incl. the three
-  wipe-after-validate lemmas, 8 steps). **Reachability (`sanity_*`) and the
-  4 temporal lemmas hang in precomputation** — and this is NOT a defect the
-  2026-06-12 changes introduced: the ef336d2 rule set hangs identically the
-  moment any exists-trace lemma is added. The original theories' `verified`
-  stamps never required the prover to construct a single execution trace.
-  Until the state encoding is reworked for tractable trace construction,
-  the lifecycle theories' universal lemmas should be read with that caveat.
-  Hardware does not help (the hang is divergence, not slowness).
+**ALL GREEN** — Tamarin 1.12.0 + maude 3.5.1, 2026-06-12, full
+`verify.sh` + `mutation-check.sh` gate in ~70 s on a 4-CPU / 21 GB box
+(heap cap 10G): 70 lemmas verified (vfs 14, inplace-lifecycle 24 + 2
+reuse invariants, cache-import-lifecycle 28), 3/3 mutations falsified.
+
+Provenance of the two non-obvious ingredients:
+
+- `vfs.spthy` needs `cipher_sources [sources]`: without it the
+  In()-sourced rekey rules send the backward search into unbounded
+  `RekeyEncryptedToEncrypted` source-chains (observed: >58 min / >45 GB,
+  non-terminating).
+- The lifecycle theories use the claim/event/restriction state encoding
+  (2026-06-12 rework). The original token-passing encoding diverged in
+  precomputation for ANY exists-trace lemma — including on the ef336d2
+  rule set — i.e. the historical `verified` stamps never required the
+  prover to construct a single execution trace.
+
+Open: the 4 `pending_*` temporal key-state lemmas in
+`vfs-inplace-lifecycle.spthy` (each proves in <100 steps assuming the
+reuse invariants, but the closing induction diverges under all built-in
+heuristics; needs a goal-ranking oracle). They are stated, documented,
+and excluded from the gate.

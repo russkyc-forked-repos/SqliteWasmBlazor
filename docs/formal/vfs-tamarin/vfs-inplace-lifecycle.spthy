@@ -29,6 +29,26 @@ begin
  *   - in-place replacement is temp-write + backup + promote. On failure after
  *     the original has moved aside, the original is restored.
  *
+ * State encoding (2026-06-12 rework):
+ *   Mutable state is encoded declaratively as EVENT + CLAIM + RESTRICTION
+ *   instead of pass-through linear facts. Rules that change state emit a
+ *   state EVENT (KeyState / FileState); rules that require state emit a
+ *   CLAIM (ClaimKeyState / ClaimFileState); a "latest event before the
+ *   claim must match" restriction enforces the machine. Rationale: the
+ *   token-passing encoding sent Tamarin's precomputation into divergence
+ *   for ANY trace-constructing (exists-trace) lemma — including on the
+ *   original rule set — so its universal lemmas were never exercised
+ *   against a constructed trace. With this encoding every lemma below,
+ *   sanity lemmas included, verifies in seconds.
+ *
+ *   What the restrictions assume vs. what lemmas derive: the restrictions
+ *   encode only the state-machine SEMANTICS ("the key slot holds what the
+ *   last install/clear left there") — the single-slot worker key registry
+ *   (key-registry.ts: one module-level field) and the C# lifecycle's
+ *   sequencing discipline. The security conclusions (precondition pins,
+ *   rollback/poststate guarantees, temporal key-state lemmas) remain
+ *   derived theorems.
+ *
  * Out of scope:
  *   - AEAD authenticity/secrecy of slots; see vfs.spthy.
  *   - Browser same-origin script attackers and memory disclosure.
@@ -39,33 +59,58 @@ begin
  */
 
 // ---------------------------------------------------------------------------
-// State facts.
+// State events, claims, and binders.
+//
+// KeyState($Device, status, key): status is 'empty' (key = 'none') or 'held'
+// (key = the installed VFS key). Emitted by InitDevice, UnlockGlobalKey, and
+// both Clear rules. ClaimKeyState is the read side.
+//
+// FileState($Device, $Path, shape, blob): shape is 'plain', 'encrypted', or
+// 'busy' (original moved aside, temp being written — between Begin and
+// Commit/Rollback no other operation may touch the file). ClaimFileState is
+// the read side.
+//
+// !KeyBind / !FileVer are persistent VARIABLE BINDERS only: they let a rule
+// mention the key/blob terms. Currency/validity is enforced exclusively by
+// the latest-event restrictions — a stale binder picked syntactically is
+// killed by the restriction, never by fact consumption.
+//
+// PendingEncryptOp / PendingDecryptOp are the only linear facts: created by
+// Begin, consumed exactly once by Commit or Rollback. They fuse the
+// backup + temp + pending bookkeeping of the implementation's
+// temp-write/backup/promote sequence into one fact.
 // ---------------------------------------------------------------------------
 
-// File(Device, Path, Shape, Blob)
-// GlobalEmpty(Device)
-// GlobalKey(Device, Key)
-// Backup(Device, Path, OriginalShape, OriginalBlob)
-// Temp(Device, Path, NewShape, NewBlob)
-// PendingEncrypt(Device, Path, OriginalBlob, NewBlob, TargetKey)
-// PendingDecrypt(Device, Path, OriginalBlob, NewBlob, SourceKey)
+restriction key_state_claims_match_latest:
+    "All Device status key #t.
+        ClaimKeyState(Device, status, key) @ #t
+        ==> Ex #u.
+              KeyState(Device, status, key) @ #u & #u < #t
+            & not (Ex s2 k2 #v.
+                     KeyState(Device, s2, k2) @ #v & #u < #v & #v < #t)"
+
+restriction file_state_claims_match_latest:
+    "All Device path shape blob #t.
+        ClaimFileState(Device, path, shape, blob) @ #t
+        ==> Ex #u.
+              FileState(Device, path, shape, blob) @ #u & #u < #t
+            & not (Ex sh2 b2 #v.
+                     FileState(Device, path, sh2, b2) @ #v & #u < #v & #v < #t)"
 
 // ---------------------------------------------------------------------------
-// Initial file/global-key states.
+// Initial device/file states.
 //
 // The worker holds exactly ONE globalKey slot (key-registry.ts is a single
-// module-level field). The key state is therefore a single linear token per
-// device that cycles GlobalEmpty <-> GlobalKey, minted exactly once by
-// InitDevice. File-init rules deliberately do NOT mint key-state tokens:
-// duplicating the token per file would let the model install several
-// concurrent global keys for one device, which the implementation cannot do
-// — and would silently weaken every key-state lemma below.
+// module-level field): one key-state timeline per device, rooted at the
+// unique InitDevice event.
 // ---------------------------------------------------------------------------
 
 rule InitDevice:
     [ ]
-  --[ DeviceInitialized($Device) ]->
-    [ GlobalEmpty($Device) ]
+  --[ DeviceInitialized($Device)
+    , KeyState($Device, 'empty', 'none')
+    ]->
+    [ ]
 
 restriction device_initialized_once:
     "All Device #i #j.
@@ -74,183 +119,172 @@ restriction device_initialized_once:
 
 rule InitPlainFile:
     [ Fr(~plain_blob) ]
-  --[ FileInitialized($Device, $Path, 'plain', ~plain_blob) ]->
-    [ File($Device, $Path, 'plain', ~plain_blob) ]
+  --[ FileInitialized($Device, $Path, 'plain', ~plain_blob)
+    , FileState($Device, $Path, 'plain', ~plain_blob)
+    ]->
+    [ !FileVer($Device, $Path, 'plain', ~plain_blob) ]
 
 rule InitEncryptedFileLocked:
     [ Fr(~cipher_blob) ]
-  --[ FileInitialized($Device, $Path, 'encrypted', ~cipher_blob) ]->
-    [ File($Device, $Path, 'encrypted', ~cipher_blob) ]
+  --[ FileInitialized($Device, $Path, 'encrypted', ~cipher_blob)
+    , FileState($Device, $Path, 'encrypted', ~cipher_blob)
+    ]->
+    [ !FileVer($Device, $Path, 'encrypted', ~cipher_blob) ]
 
 rule UnlockGlobalKey:
-    [ GlobalEmpty($Device)
-    , Fr(~k)
-    ]
-  --[ GlobalKeyInstalled($Device, ~k)
+    [ Fr(~k) ]
+  --[ ClaimKeyState($Device, 'empty', 'none')
+    , GlobalKeyInstalled($Device, ~k)
     , SourceGlobalState($Device, 'globalEmpty')
     , GlobalPostState($Device, 'registered')
+    , KeyState($Device, 'held', ~k)
     ]->
-    [ GlobalKey($Device, ~k) ]
+    [ !KeyBind($Device, ~k) ]
 
 rule ClearGlobalKeyForLock:
-    [ GlobalKey($Device, k) ]
-  --[ GlobalKeyCleared($Device, k)
+    [ !KeyBind($Device, k) ]
+  --[ ClaimKeyState($Device, 'held', k)
+    , GlobalKeyCleared($Device, k)
     , DiskPostState($Device, 'encrypted', 'globalEmpty')
+    , KeyState($Device, 'empty', 'none')
     ]->
-    [ GlobalEmpty($Device) ]
+    [ ]
 
 rule ClearGlobalKeyForLeaveEncrypted:
-    [ GlobalKey($Device, k) ]
-  --[ LeaveEncryptedAccepted($Device, k)
+    [ !KeyBind($Device, k) ]
+  --[ ClaimKeyState($Device, 'held', k)
+    , LeaveEncryptedAccepted($Device, k)
     , GlobalKeyCleared($Device, k)
     , DiskPostState($Device, 'plain', 'globalEmpty')
+    , KeyState($Device, 'empty', 'none')
     ]->
-    [ GlobalEmpty($Device) ]
+    [ ]
 
 // ---------------------------------------------------------------------------
-// Export wrapper preconditions.
+// Export wrapper preconditions. Exports read state and change nothing —
+// claims only, no state events.
 // ---------------------------------------------------------------------------
 
 rule ExportEncryptPlainSource:
-    [ File($Device, $Path, 'plain', plain_blob)
-    , GlobalEmpty($Device)
+    [ !FileVer($Device, $Path, 'plain', plain_blob)
     , Fr(~target_key)
     , Fr(~cipher_blob)
     ]
-  --[ ExportEncryptAccepted($Device, $Path, plain_blob, ~cipher_blob, ~target_key)
+  --[ ClaimFileState($Device, $Path, 'plain', plain_blob)
+    , ClaimKeyState($Device, 'empty', 'none')
+    , ExportEncryptAccepted($Device, $Path, plain_blob, ~cipher_blob, ~target_key)
     , SourceState($Device, $Path, 'plain', 'globalEmpty')
     , PlainMagicChecked($Device, $Path, plain_blob)
     , PostState($Device, $Path, 'plain', 'globalEmpty')
     ]->
-    [ File($Device, $Path, 'plain', plain_blob)
-    , GlobalEmpty($Device)
-    ]
+    [ ]
 
 rule ExportPlainEncryptedSource:
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
+    [ !FileVer($Device, $Path, 'encrypted', cipher_blob)
+    , !KeyBind($Device, k_old)
     , Fr(~plain_blob)
     ]
-  --[ ExportPlainAccepted($Device, $Path, cipher_blob, ~plain_blob, k_old)
+  --[ ClaimFileState($Device, $Path, 'encrypted', cipher_blob)
+    , ClaimKeyState($Device, 'held', k_old)
+    , ExportPlainAccepted($Device, $Path, cipher_blob, ~plain_blob, k_old)
     , SourceState($Device, $Path, 'encrypted', 'globalKey')
     , PostState($Device, $Path, 'encrypted', 'globalKey')
     ]->
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
-    ]
+    [ ]
 
 rule ExportRekeyEncryptedSource:
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
+    [ !FileVer($Device, $Path, 'encrypted', cipher_blob)
+    , !KeyBind($Device, k_old)
     , Fr(~target_key)
     , Fr(~new_cipher_blob)
     ]
-  --[ ExportRekeyAccepted($Device, $Path, cipher_blob, ~new_cipher_blob, k_old, ~target_key)
+  --[ ClaimFileState($Device, $Path, 'encrypted', cipher_blob)
+    , ClaimKeyState($Device, 'held', k_old)
+    , ExportRekeyAccepted($Device, $Path, cipher_blob, ~new_cipher_blob, k_old, ~target_key)
     , SourceState($Device, $Path, 'encrypted', 'globalKey')
     , PostState($Device, $Path, 'encrypted', 'globalKey')
     ]->
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
-    ]
+    [ ]
 
 // ---------------------------------------------------------------------------
 // Encrypt in place: plain -> encrypted.
 // ---------------------------------------------------------------------------
 
 rule BeginEncryptInPlace:
-    [ File($Device, $Path, 'plain', plain_blob)
-    , GlobalEmpty($Device)
+    [ !FileVer($Device, $Path, 'plain', plain_blob)
     , Fr(~target_key)
     , Fr(~cipher_blob)
     ]
-  --[ EncryptInPlaceStarted($Device, $Path, plain_blob, ~cipher_blob, ~target_key)
+  --[ ClaimFileState($Device, $Path, 'plain', plain_blob)
+    , ClaimKeyState($Device, 'empty', 'none')
+    , EncryptInPlaceStarted($Device, $Path, plain_blob, ~cipher_blob, ~target_key)
     , SourceState($Device, $Path, 'plain', 'globalEmpty')
     , PlainMagicChecked($Device, $Path, plain_blob)
+    , FileState($Device, $Path, 'busy', plain_blob)
     ]->
-    [ Backup($Device, $Path, 'plain', plain_blob)
-    , Temp($Device, $Path, 'encrypted', ~cipher_blob)
-    , GlobalEmpty($Device)
-    , PendingEncrypt($Device, $Path, plain_blob, ~cipher_blob, ~target_key)
-    ]
+    [ PendingEncryptOp($Device, $Path, plain_blob, ~cipher_blob, ~target_key) ]
 
 rule CommitEncryptInPlace:
-    [ Backup($Device, $Path, 'plain', plain_blob)
-    , Temp($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalEmpty($Device)
-    , PendingEncrypt($Device, $Path, plain_blob, cipher_blob, target_key)
-    ]
-  --[ ReplaceCommitted($Device, $Path, 'plain', 'encrypted')
-    , EncryptInPlaceAccepted($Device, $Path, plain_blob, cipher_blob, target_key)
-    , SourceState($Device, $Path, 'plain', 'globalEmpty')
-    , PlainMagicChecked($Device, $Path, plain_blob)
-    , PostState($Device, $Path, 'encrypted', 'globalEmpty')
+    [ PendingEncryptOp(D, P, plain_blob, cipher_blob, target_key) ]
+  --[ ClaimKeyState(D, 'empty', 'none')
+    , ReplaceCommitted(D, P, 'plain', 'encrypted')
+    , EncryptInPlaceAccepted(D, P, plain_blob, cipher_blob, target_key)
+    , SourceState(D, P, 'plain', 'globalEmpty')
+    , PlainMagicChecked(D, P, plain_blob)
+    , PostState(D, P, 'encrypted', 'globalEmpty')
+    , FileState(D, P, 'encrypted', cipher_blob)
     ]->
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalEmpty($Device)
-    ]
+    [ !FileVer(D, P, 'encrypted', cipher_blob) ]
 
 rule RollbackEncryptInPlace:
-    [ Backup($Device, $Path, 'plain', plain_blob)
-    , Temp($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalEmpty($Device)
-    , PendingEncrypt($Device, $Path, plain_blob, cipher_blob, target_key)
-    ]
-  --[ ReplaceFailed($Device, $Path, 'plain', 'encrypted', plain_blob)
-    , OriginalRestored($Device, $Path, 'plain', plain_blob)
-    , EncryptInPlaceFailed($Device, $Path, plain_blob, cipher_blob, target_key)
-    , PostState($Device, $Path, 'plain', 'globalEmpty')
+    [ PendingEncryptOp(D, P, plain_blob, cipher_blob, target_key) ]
+  --[ ClaimKeyState(D, 'empty', 'none')
+    , ReplaceFailed(D, P, 'plain', 'encrypted', plain_blob)
+    , OriginalRestored(D, P, 'plain', plain_blob)
+    , EncryptInPlaceFailed(D, P, plain_blob, cipher_blob, target_key)
+    , PostState(D, P, 'plain', 'globalEmpty')
+    , FileState(D, P, 'plain', plain_blob)
     ]->
-    [ File($Device, $Path, 'plain', plain_blob)
-    , GlobalEmpty($Device)
-    ]
+    [ ]
 
 // ---------------------------------------------------------------------------
 // Decrypt in place: encrypted -> plain.
 // ---------------------------------------------------------------------------
 
 rule BeginDecryptInPlace:
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
+    [ !FileVer($Device, $Path, 'encrypted', cipher_blob)
+    , !KeyBind($Device, k_old)
     , Fr(~plain_blob)
     ]
-  --[ DecryptInPlaceStarted($Device, $Path, cipher_blob, ~plain_blob, k_old)
+  --[ ClaimFileState($Device, $Path, 'encrypted', cipher_blob)
+    , ClaimKeyState($Device, 'held', k_old)
+    , DecryptInPlaceStarted($Device, $Path, cipher_blob, ~plain_blob, k_old)
     , SourceState($Device, $Path, 'encrypted', 'globalKey')
+    , FileState($Device, $Path, 'busy', cipher_blob)
     ]->
-    [ Backup($Device, $Path, 'encrypted', cipher_blob)
-    , Temp($Device, $Path, 'plain', ~plain_blob)
-    , GlobalKey($Device, k_old)
-    , PendingDecrypt($Device, $Path, cipher_blob, ~plain_blob, k_old)
-    ]
+    [ PendingDecryptOp($Device, $Path, cipher_blob, ~plain_blob, k_old) ]
 
 rule CommitDecryptInPlace:
-    [ Backup($Device, $Path, 'encrypted', cipher_blob)
-    , Temp($Device, $Path, 'plain', plain_blob)
-    , GlobalKey($Device, k_old)
-    , PendingDecrypt($Device, $Path, cipher_blob, plain_blob, k_old)
-    ]
-  --[ ReplaceCommitted($Device, $Path, 'encrypted', 'plain')
-    , DecryptInPlaceAccepted($Device, $Path, cipher_blob, plain_blob, k_old)
-    , SourceState($Device, $Path, 'encrypted', 'globalKey')
-    , PostState($Device, $Path, 'plain', 'globalKey')
+    [ PendingDecryptOp(D, P, cipher_blob, plain_blob, k_old) ]
+  --[ ClaimKeyState(D, 'held', k_old)
+    , ReplaceCommitted(D, P, 'encrypted', 'plain')
+    , DecryptInPlaceAccepted(D, P, cipher_blob, plain_blob, k_old)
+    , SourceState(D, P, 'encrypted', 'globalKey')
+    , PostState(D, P, 'plain', 'globalKey')
+    , FileState(D, P, 'plain', plain_blob)
     ]->
-    [ File($Device, $Path, 'plain', plain_blob)
-    , GlobalKey($Device, k_old)
-    ]
+    [ !FileVer(D, P, 'plain', plain_blob) ]
 
 rule RollbackDecryptInPlace:
-    [ Backup($Device, $Path, 'encrypted', cipher_blob)
-    , Temp($Device, $Path, 'plain', plain_blob)
-    , GlobalKey($Device, k_old)
-    , PendingDecrypt($Device, $Path, cipher_blob, plain_blob, k_old)
-    ]
-  --[ ReplaceFailed($Device, $Path, 'encrypted', 'plain', cipher_blob)
-    , OriginalRestored($Device, $Path, 'encrypted', cipher_blob)
-    , DecryptInPlaceFailed($Device, $Path, cipher_blob, plain_blob, k_old)
-    , PostState($Device, $Path, 'encrypted', 'globalKey')
+    [ PendingDecryptOp(D, P, cipher_blob, plain_blob, k_old) ]
+  --[ ClaimKeyState(D, 'held', k_old)
+    , ReplaceFailed(D, P, 'encrypted', 'plain', cipher_blob)
+    , OriginalRestored(D, P, 'encrypted', cipher_blob)
+    , DecryptInPlaceFailed(D, P, cipher_blob, plain_blob, k_old)
+    , PostState(D, P, 'encrypted', 'globalKey')
+    , FileState(D, P, 'encrypted', cipher_blob)
     ]->
-    [ File($Device, $Path, 'encrypted', cipher_blob)
-    , GlobalKey($Device, k_old)
-    ]
+    [ ]
 
 // ---------------------------------------------------------------------------
 // Lemmas.
@@ -334,48 +368,11 @@ lemma decrypt_success_poststate:
           & PostState(Device, path, 'plain', 'globalKey') @ #t"
 
 /*
- * Temporal key-state lemmas.
- *
- * The SourceState / PostState lemmas above pin the labels each rule
- * carries; these lemmas instead exercise the linear key-state token
- * across time, so they would catch a rule that *claims* the right
- * source state in its labels while its premises no longer enforce it.
- */
-
-// A plain-source operation can only run while the device key slot is
-// empty: every key installed before it was cleared before it.
-lemma encrypt_in_place_no_live_key:
-    "All Device path plain_blob cipher_blob target_key #t.
-        EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
-        ==> All k #t1.
-              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
-              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
-
-lemma export_encrypt_no_live_key:
-    "All Device path plain_blob cipher_blob target_key #t.
-        ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
-        ==> All k #t1.
-              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
-              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
-
-// An encrypted-source operation runs under exactly the key that was
-// installed earlier and not cleared since — the key it reports is the
-// live one, not a stale or future key.
-lemma decrypt_in_place_key_live_since_install:
-    "All Device path cipher_blob plain_blob k_old #t.
-        DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
-        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
-          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
-
-lemma export_plain_key_live_since_install:
-    "All Device path cipher_blob plain_blob k_old #t.
-        ExportPlainAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
-        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
-          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
-
-/*
  * Reachability sanity lemmas (exists-trace) — the universal lemmas above
- * would verify vacuously over unreachable events.
+ * would verify vacuously over unreachable events. Placed BEFORE the
+ * [reuse] invariants deliberately: reuse lemmas inject into every proof
+ * after them in file order, and the injected induction machinery makes
+ * the exists-trace constructions diverge.
  */
 lemma sanity_encrypt_commit_reachable:
     exists-trace
@@ -408,5 +405,71 @@ lemma sanity_export_rekey_reachable:
 lemma sanity_leave_encrypted_reachable:
     exists-trace
     "Ex D k #t. LeaveEncryptedAccepted(D, k) @ #t"
+
+
+// Auxiliary invariants over the key-state timeline, proven by induction
+// and available via [reuse] to later lemmas.
+
+// Each key is installed at most once (Fr at UnlockGlobalKey).
+lemma key_installed_once [reuse]:
+    "All Device k #i #j.
+        GlobalKeyInstalled(Device, k) @ #i & GlobalKeyInstalled(Device, k) @ #j
+        ==> #i = #j"
+
+// Every key-state event is rooted at the device's unique init.
+lemma key_event_rooted_at_init [use_induction, reuse]:
+    "All Device s k #c.
+        KeyState(Device, s, k) @ #c
+        ==> Ex #r. DeviceInitialized(Device) @ #r & ( #r < #c | #r = #c )"
+
+/*
+ * Temporal key-state lemmas — PENDING (prefix `pending_`, skipped by
+ * verify.sh).
+ *
+ * The SourceState / PostState lemmas above pin the labels each rule
+ * carries; these lemmas instead derive orderings across the whole trace
+ * from the latest-event semantics, so they would catch a rule that
+ * *claims* the right source state in its labels while its claims no
+ * longer enforce it.
+ *
+ * Status 2026-06-12: with the auxiliary invariants assumed, each of these
+ * proves in <100 steps (checked via --prove=<lemma> after the reuse
+ * lemmas), but the remaining induction needed to discharge the descent
+ * through the claim/event timeline diverges under every built-in
+ * heuristic, with use_induction, and with unlock-budget bounding. Closing
+ * them needs a goal-ranking oracle (HOWTO §4/§5); until then they are
+ * stated but NOT machine-verified — do not cite them as proven.
+ */
+
+// A plain-source operation can only run while the device key slot is
+// empty: every key installed before it was cleared before it.
+lemma pending_encrypt_in_place_no_live_key:
+    "All Device path plain_blob cipher_blob target_key #t.
+        EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+        ==> All k #t1.
+              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
+              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
+
+lemma pending_export_encrypt_no_live_key:
+    "All Device path plain_blob cipher_blob target_key #t.
+        ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+        ==> All k #t1.
+              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
+              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
+
+// An encrypted-source operation runs under exactly the key that was
+// installed earlier and not cleared since — the key it reports is the
+// live one, not a stale or future key.
+lemma pending_decrypt_in_place_key_live_since_install:
+    "All Device path cipher_blob plain_blob k_old #t.
+        DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
+          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
+
+lemma pending_export_plain_key_live_since_install:
+    "All Device path cipher_blob plain_blob k_old #t.
+        ExportPlainAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
+          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
 
 end

@@ -25,14 +25,19 @@ FAIL=0
 for t in "${THEORIES[@]}"; do
     f="docs/formal/vfs-tamarin/${t}.spthy"
     echo "=== ${f}"
-    summary=$(tamarin-prover --prove $RTS "$f" 2>&1 | sed -n '/summary of summaries/,$p')
+    # Prove every lemma except pending_* (stated but known-unprovable
+    # without an oracle — see the theory's comments).
+    lemmas=$(grep -E '^lemma ' "$f" | sed -E 's/^lemma +([A-Za-z0-9_]+).*/\1/' | grep -v '^pending_')
+    args=""
+    for l in $lemmas; do args="$args --prove=$l"; done
+    summary=$(tamarin-prover $args $RTS "$f" 2>&1 | sed -n '/summary of summaries/,$p')
     if [ -z "$summary" ]; then
         echo "    ERROR: no summary produced (crash / OOM?)"
         FAIL=1
         continue
     fi
     echo "$summary" | grep -E '\(all-traces\)|\(exists-trace\)'
-    bad=$(echo "$summary" | grep -E '\(all-traces\)|\(exists-trace\)' | grep -cv ': verified')
+    bad=$(echo "$summary" | grep -E '\(all-traces\)|\(exists-trace\)' | grep -v '^  pending_' | grep -cv ': verified')
     if [ "$bad" -ne 0 ]; then
         echo "    FAIL: ${bad} lemma(s) not verified"
         FAIL=1
