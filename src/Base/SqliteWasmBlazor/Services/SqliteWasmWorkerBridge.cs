@@ -69,6 +69,25 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     private readonly ConcurrentDictionary<int, TaskCompletionSource<byte[]>> _pendingBinaryRequests = new();
     private readonly HashSet<string> _openDatabases = new();
     private int _nextRequestId;
+
+    /// <summary>
+    /// Allocate the next worker request id. Request ids live in the
+    /// positive int space; the JS bridge allocates stream ids from a
+    /// NEGATIVE counter to stay collision-free — so an int overflow here
+    /// (wrapping into the negative range) must fail loudly instead of
+    /// silently colliding with an in-flight stream.
+    /// </summary>
+    private int NextRequestId()
+    {
+        var id = Interlocked.Increment(ref _nextRequestId);
+        if (id < 0)
+        {
+            throw new InvalidOperationException(
+                "Worker request id space exhausted (int overflow into the " +
+                "stream-id range) — reload the application.");
+        }
+        return id;
+    }
     private bool _isInitialized;
     private volatile bool _diskLocked;
     private static TaskCompletionSource<bool>? _initializationTcs;
@@ -301,7 +320,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         await EnsureInitializedAsync(cancellationToken);
         ThrowIfDiskLocked($"ExecuteSqlWithBlobs on '{database}'");
 
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<SqlQueryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingRequests[requestId] = tcs;
 
@@ -419,7 +438,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     // continue to see this method exactly as before.
     internal async Task<SqlQueryResult> SendRequestAsync(object request, CancellationToken cancellationToken)
     {
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<SqlQueryResult>();
 
         _pendingRequests[requestId] = tcs;
@@ -496,7 +515,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<SqlQueryResult>();
         _pendingRequests[requestId] = tcs;
 
@@ -531,7 +550,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         TimeSpan? timeout = null)
     {
         await EnsureInitializedAsync(cancellationToken);
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<SqlQueryResult>();
         _pendingRequests[requestId] = tcs;
 
@@ -571,7 +590,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         TimeSpan? timeout = null)
     {
         await EnsureInitializedAsync(cancellationToken);
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<byte[]>();
         _pendingBinaryRequests[requestId] = tcs;
 
@@ -612,7 +631,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         TimeSpan? timeout = null)
     {
         await EnsureInitializedAsync(cancellationToken);
-        var requestId = Interlocked.Increment(ref _nextRequestId);
+        var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<byte[]>();
         _pendingBinaryRequests[requestId] = tcs;
 

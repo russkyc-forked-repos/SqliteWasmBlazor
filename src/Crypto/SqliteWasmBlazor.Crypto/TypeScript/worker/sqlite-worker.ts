@@ -34,6 +34,7 @@ import {
     importDatabaseFromBlob,
     assertImportFileCount,
 } from './vfs-prf/import-streamed';
+import { StreamCreditGate } from './stream-credit';
 import {
     BufferedStreamReader,
     readArrayHeader,
@@ -227,6 +228,15 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
     // Handle log level changes (no response needed)
     if ('type' in event.data && event.data.type === 'setLogLevel' && 'level' in event.data) {
         logger.setLogLevel(event.data.level);
+        return;
+    }
+
+    // Chunk acks from the bridge — backpressure credit for an in-flight
+    // export stream. Routed before the streaming-request dispatch: acks
+    // carry a streamId but are not requests.
+    if ('streamAck' in event.data && (event.data as any).streamAck === true) {
+        const ack = event.data as unknown as { streamId: number; seq: number };
+        routeStreamAck(ack.streamId, ack.seq);
         return;
     }
 
@@ -485,11 +495,14 @@ async function exportDatabaseToSessionHandler(
     });
 
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
+    const gate = new StreamCreditGate();
+    streamCreditGates.set(streamId, gate);
     try {
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
             const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
             const sourceOffset = slotBase * sourceSlotSize;
             const sourceBytes = slotCount * sourceSlotSize;
+            const seq = await gate.beforeSend();
 
             let sourceChunk: Uint8Array | null = null;
             let plainChunk: Uint8Array | null = null;
@@ -520,6 +533,7 @@ async function exportDatabaseToSessionHandler(
                         name: dbName,
                         data: plainChunk,
                         isFirst, isLast,
+                        seq,
                     },
                     [plainChunk!.buffer],
                 );
@@ -534,6 +548,7 @@ async function exportDatabaseToSessionHandler(
         debugLog(op, 'singleExport.done', { name: dbName });
         self.postMessage({ streamId, streamDone: true });
     } finally {
+        streamCreditGates.delete(streamId);
         if (globalKey !== undefined) { clearBytes(globalKey); }
     }
 }
@@ -591,9 +606,11 @@ async function exportDatabasesToSessionHandler(
     });
 
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
+    const gate = new StreamCreditGate();
+    streamCreditGates.set(streamId, gate);
     try {
         // Outer array header. Per file: array(2) + str(name) + bin(plainSize).
-        emitEnvelopeBytes(streamId, packArrayHeader(dbNames.length));
+        emitEnvelopeBytes(streamId, packArrayHeader(dbNames.length), await gate.beforeSend());
 
         for (const dbName of dbNames) {
             const dbPath = `/databases/${dbName}`;
@@ -607,11 +624,11 @@ async function exportDatabasesToSessionHandler(
             const totalSlots = fileSize / sourceSlotSize;
             const plainSize = totalSlots * PLAIN_SLOT_SIZE;
 
-            emitEnvelopeBytes(streamId, packArrayHeader(2));
+            emitEnvelopeBytes(streamId, packArrayHeader(2), await gate.beforeSend());
             for (const part of packStr(dbName)) {
-                emitEnvelopeBytes(streamId, part);
+                emitEnvelopeBytes(streamId, part, await gate.beforeSend());
             }
-            emitEnvelopeBytes(streamId, packBinHeader(plainSize));
+            emitEnvelopeBytes(streamId, packBinHeader(plainSize), await gate.beforeSend());
 
             debugLog(op, 'multiExport.file.start', { name: dbName, slots: totalSlots });
 
@@ -619,6 +636,7 @@ async function exportDatabasesToSessionHandler(
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
                 const sourceOffset = slotBase * sourceSlotSize;
                 const sourceBytes = slotCount * sourceSlotSize;
+                const seq = await gate.beforeSend();
 
                 let sourceChunk: Uint8Array | null = null;
                 let plainChunk: Uint8Array | null = null;
@@ -632,7 +650,7 @@ async function exportDatabasesToSessionHandler(
                         sourceChunk = null;
                     }
                     self.postMessage(
-                        { streamId, streamChunk: true, data: plainChunk },
+                        { streamId, streamChunk: true, data: plainChunk, seq },
                         [plainChunk!.buffer],
                     );
                     plainChunk = null;
@@ -647,18 +665,31 @@ async function exportDatabasesToSessionHandler(
         debugLog(op, 'multiExport.done', {});
         self.postMessage({ streamId, streamDone: true });
     } finally {
+        streamCreditGates.delete(streamId);
         if (globalKey !== undefined) { clearBytes(globalKey); }
     }
 }
 
+// Per-stream backpressure gates for the export producers. Created by each
+// export handler, removed in its finally. Acks arrive as
+// { streamAck: true, streamId, seq } messages from the bridge.
+const streamCreditGates = new Map<number, StreamCreditGate>();
+
+export function routeStreamAck(streamId: number, seq: number): boolean {
+    const gate = streamCreditGates.get(streamId);
+    if (gate === undefined) { return false; }
+    gate.onAck(seq);
+    return true;
+}
+
 /** Helper: postMessage a small header byte block as a streamChunk (transferable). */
-function emitEnvelopeBytes(streamId: number, bytes: Uint8Array<ArrayBuffer>): void {
+function emitEnvelopeBytes(streamId: number, bytes: Uint8Array<ArrayBuffer>, seq?: number): void {
     // Copy into a fresh buffer so the call site can keep using `bytes`
     // (packStr returns tuple parts the caller iterates over).
     const copy = new Uint8Array(bytes.length);
     copy.set(bytes);
     self.postMessage(
-        { streamId, streamChunk: true, data: copy },
+        { streamId, streamChunk: true, data: copy, seq },
         [copy.buffer],
     );
 }
@@ -880,6 +911,8 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
 
     const op = nextOpId();
     const globalKey = snapshotGlobalKey()!;
+    const gate = new StreamCreditGate();
+    streamCreditGates.set(streamId, gate);
     try {
         const names = poolUtil.listDatabases();
         debugLog(op, 'export.enter', {});
@@ -903,6 +936,7 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
                 const encryptedBytes = slotCount * ENCRYPTED_SLOT_SIZE;
                 const isFirst = slotBase === 0;
                 const isLast = slotBase + slotCount === totalSlots;
+                const seq = await gate.beforeSend();
 
                 let sourceChunk: Uint8Array | null = null;
                 let rekeyedChunk: Uint8Array | null = null;
@@ -923,6 +957,7 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
                             data: rekeyedChunk,
                             isFirst,
                             isLast,
+                            seq,
                         },
                         [rekeyedChunk!.buffer],
                     );
@@ -941,6 +976,7 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
         debugLog(op, 'export.done', {});
         self.postMessage({ streamId, streamDone: true });
     } finally {
+        streamCreditGates.delete(streamId);
         // globalKey snapshot — clear so K doesn't linger past export.
         clearBytes(globalKey);
     }

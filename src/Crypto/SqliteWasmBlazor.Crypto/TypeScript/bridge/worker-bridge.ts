@@ -100,6 +100,18 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
                     isFirst,
                     isLast,
                 );
+                // Backpressure credit: tell the worker this chunk has been
+                // consumed (wrapped into a Blob part) so its export loop can
+                // release the next one. Workers predating the credit gate
+                // ignore unknown messages; new workers degrade gracefully if
+                // WE predate them — see worker/stream-credit.ts.
+                if (typeof event.data.seq === 'number') {
+                    worker!.postMessage({
+                        streamAck: true,
+                        streamId: event.data.streamId,
+                        seq: event.data.seq,
+                    });
+                }
             } else if (event.data.streamDone === true) {
                 handler.onDone(
                     typeof event.data.result === 'number' ? event.data.result : undefined);

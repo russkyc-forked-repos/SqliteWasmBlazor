@@ -656,6 +656,22 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     private int _nextSessionId;
 
     /// <summary>
+    /// Allocate the next BlobSession id. Same overflow contract as the
+    /// bridge's request ids: session ids must stay positive (the JS side
+    /// uses negative ids for streams), so wraparound fails loudly.
+    /// </summary>
+    private int NextSessionId()
+    {
+        var id = Interlocked.Increment(ref _nextSessionId);
+        if (id < 0)
+        {
+            throw new InvalidOperationException(
+                "Blob session id space exhausted (int overflow) — reload the application.");
+        }
+        return id;
+    }
+
+    /// <summary>
     /// Streaming guided-import variant: the envelope arrives as a Stream
     /// (typically <c>IBrowserFile.OpenReadStream</c>) and is shipped to
     /// the JS-side BlobSession one ArrayPool chunk at a time. C# managed
@@ -702,7 +718,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "credential and is only allowed from Plain or Locked.");
         }
 
-        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
 
         byte[]? wrapKey = null;
@@ -963,7 +979,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "to a different credential.");
         }
 
-        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
         try
         {
@@ -1046,7 +1062,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "a different credential.");
         }
 
-        var sessionId = Interlocked.Increment(ref _nextSessionId);
+        var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
         try
         {
