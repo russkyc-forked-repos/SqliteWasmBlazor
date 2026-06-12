@@ -10,13 +10,22 @@
 set -u
 cd "$(dirname "$0")/../.."
 
+# The theories contain UTF-8 in comments; GHC's runtime decodes files with
+# the ambient locale and hard-fails under POSIX/C (common on fresh cloud
+# boxes): "hGetContents: invalid argument".
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
+# Hard heap cap (HOWTO §5): on shared boxes tamarin must fail politely, not
+# squeeze co-tenant workloads. Override e.g. TAMARIN_RTS="+RTS -M40G -RTS".
+RTS=${TAMARIN_RTS:-"+RTS -M16G -RTS"}
+
 THEORIES=(${1:-vfs vfs-inplace-lifecycle vfs-cache-import-lifecycle})
 FAIL=0
 
 for t in "${THEORIES[@]}"; do
     f="docs/formal/vfs-tamarin/${t}.spthy"
     echo "=== ${f}"
-    summary=$(tamarin-prover --prove "$f" 2>&1 | sed -n '/summary of summaries/,$p')
+    summary=$(tamarin-prover --prove $RTS "$f" 2>&1 | sed -n '/summary of summaries/,$p')
     if [ -z "$summary" ]; then
         echo "    ERROR: no summary produced (crash / OOM?)"
         FAIL=1

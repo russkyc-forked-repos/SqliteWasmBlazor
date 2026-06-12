@@ -9,6 +9,13 @@
 # Memory note: same as verify.sh — run on a machine with a few GB free.
 set -u
 cd "$(dirname "$0")/../.."
+
+# UTF-8 comments in the theories vs GHC locale decoding — see verify.sh.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
+# Hard heap cap on shared boxes — see verify.sh.
+RTS=${TAMARIN_RTS:-"+RTS -M16G -RTS"}
+
 SRC=docs/formal/vfs-tamarin
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -26,7 +33,7 @@ run_mutation() {
         return
     fi
     local result
-    result=$(tamarin-prover --prove="$lemma" "$mut" 2>&1 \
+    result=$(tamarin-prover --prove="$lemma" $RTS "$mut" 2>&1 \
         | sed -n '/summary of summaries/,$p' | grep -F "$lemma ")
     if echo "$result" | grep -q 'falsified'; then
         echo "OK   $name: $lemma falsified as expected"
