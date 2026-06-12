@@ -217,7 +217,10 @@ export async function readArrayHeader(reader: BufferedStreamReader): Promise<num
     }
     if (head === 0xdd) {
         const lenBytes = await reader.read(4);
-        return (lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3];
+        // >>> 0 coerces to unsigned — without it a length with bit 31 set
+        // becomes a negative JS number, which silently skips count-driven
+        // loops downstream instead of failing validation.
+        return (((lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3]) >>> 0);
     }
     throw new Error(`readArrayHeader: expected array marker, got 0x${head.toString(16)}`);
 }
@@ -239,7 +242,8 @@ export async function readBinHeader(reader: BufferedStreamReader): Promise<numbe
     }
     if (head === 0xc6) {
         const lenBytes = await reader.read(4);
-        return (lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3];
+        // >>> 0: same unsigned coercion as readArrayHeader / readUint.
+        return (((lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3]) >>> 0);
     }
     throw new Error(`readBinHeader: expected bin marker, got 0x${head.toString(16)}`);
 }
@@ -257,7 +261,8 @@ export async function readStr(reader: BufferedStreamReader): Promise<string> {
         len = (lenBytes[0] << 8) | lenBytes[1];
     } else if (head === 0xdb) {
         const lenBytes = await reader.read(4);
-        len = (lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3];
+        // >>> 0: same unsigned coercion as readArrayHeader / readUint.
+        len = (((lenBytes[0] << 24) | (lenBytes[1] << 16) | (lenBytes[2] << 8) | lenBytes[3]) >>> 0);
     } else {
         throw new Error(`readStr: expected str marker, got 0x${head.toString(16)}`);
     }

@@ -62,8 +62,18 @@ byte-for-byte vendor SAHPool behavior.
    existing encrypted disk. Plane 2 rejects via a slot-0 AEAD probe
    (`verifyEncryptionKey`) and a manifest MAC bound to the credential.
 7. **Mistargeted import.** A `.eds` envelope encrypted for a different
-   recipient is imported. The import path preflights the envelope's MAC and
-   page-shape before any destructive operation on the current disk.
+   recipient is imported. The ECIES unwrap of K_wrap fails (or the slot-0
+   AEAD probe rejects), before any destructive operation on the current
+   disk.
+8. **Destructive import of a tampered / truncated / crafted envelope.**
+   Importing a disk replaces the existing pool, so a malformed source must
+   never be able to trigger the wipe. The import paths validate the entire
+   source on a read-only pass first — `.eds`: AEAD-verify every slot of
+   every file under K_wrap; `.dbs` / `.db`: full structural walk including
+   per-file SQLite magic — and only then wipe and commit. Commit stages all
+   files to temp slots and promotes them only after the whole envelope has
+   been processed. Note this protects the *existing* data's integrity only;
+   it does not authenticate the envelope's *origin* (see §8).
 
 ## 4. Out of scope
 
@@ -87,7 +97,7 @@ byte-for-byte vendor SAHPool behavior.
 | .NET ↔ Worker (intra-page) | `postMessage` request/response envelope | Same-origin, structured cloning. No application-layer crypto. |
 | Worker ↔ OPFS (Plane 1) | Raw SQLite pages | None — relies on OS file permissions. |
 | Worker ↔ OPFS (Plane 2) | `[ciphertext(4096) \| nonce(12) \| tag(16)]` per slot | ChaCha20-Poly1305 AEAD with AAD `"prf-vfs-v1\|" + dbPath + "\|" + slotIndex_LE32`. Slot-0 probe gates unlock. Manifest MAC binds to credential. |
-| Whole-disk export (`.eds`) | MessagePacked `EncryptedDiskEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD; envelope-level MAC over `(credentialIdHint, slot headers)`. |
+| Whole-disk export (`.eds`) | MessagePacked `EncryptedDiskEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD with path+slot-bound AAD, verified over the whole envelope before any pool mutation on import. No sender authenticity: ECIES is anonymous-sender, so the envelope proves only that it was sealed *to* the recipient, not *by* whom (see §8). |
 | Whole-disk export (`.zip` plain) | ZIP of `.db` files | None at this layer. Confidentiality is on Plane 1 storage. |
 
 ## 6. Cryptographic primitives
@@ -123,4 +133,5 @@ in-place conversion lifecycle, and key-cache / manifest unlock lemmas.
 | No defense against whole-disk rollback to a prior valid encrypted snapshot. | The AEAD authenticates pages but not disk monotonicity. A signed manifest at a higher layer can close this if needed. |
 | No defense against live-process memory dump after unlock. | The worker holds the global key in clear while a DB is open; this is fundamental to the at-rest model. |
 | No defense against same-origin script compromise. | A malicious script running in the page can read decrypted data straight from the worker. CSP, dependency hygiene, and code review are the host's job. |
-| Plain export (`.zip`) carries no application-layer authenticity. | Transport is the host's responsibility. The encrypted `.eds` export does carry an envelope MAC and is the recommended cross-device path. |
+| Plain export (`.zip` / `.dbs` / `.db`) carries no application-layer authenticity. | Transport is the host's responsibility. The encrypted `.eds` export is the recommended cross-device path: its per-slot AEAD detects any in-transit tampering. |
+| `.eds` envelopes carry no sender authenticity. | The K_wrap is ECIES-sealed under the recipient's public key with an ephemeral sender key, and recipient pubkeys are not secret. Anyone holding one can craft an envelope that imports cleanly — the guided import is a user-confirmed *replace-my-disk* operation, so the user must trust the file's provenance. Full pre-wipe verification guarantees a hostile envelope can replace data only via a completed, valid import, never destroy it via a half-failed one. Sign the envelope at a higher layer (Ed25519 detached signature) if sender authenticity matters. |

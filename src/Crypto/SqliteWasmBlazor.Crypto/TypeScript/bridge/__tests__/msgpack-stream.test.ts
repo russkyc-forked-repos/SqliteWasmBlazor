@@ -10,6 +10,10 @@ import {
     packBinHeader,
     packStr,
     packUint,
+    BufferedStreamReader,
+    readArrayHeader,
+    readBinHeader,
+    readStr,
 } from '../msgpack-stream';
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -104,5 +108,47 @@ describe('msgpack-stream packers', () => {
         const file0 = files[0] as unknown[];
         expect(file0[0]).toBe('TodoDb.db');
         expect((file0[1] as Uint8Array).length).toBe(4);
+    });
+});
+
+// The stream readers decode lengths from UNTRUSTED import files. A 32-bit
+// length with bit 31 set must come back as a large positive number, never
+// a negative one — a negative array count silently skips count-driven
+// loops downstream (the import-preflight bypass), and negative bin/str
+// lengths relied on incidental downstream checks.
+describe('msgpack-stream readers: 32-bit lengths are unsigned', () => {
+    function readerFor(bytes: Uint8Array<ArrayBuffer>): BufferedStreamReader {
+        return new BufferedStreamReader(new Blob([bytes]).stream().getReader());
+    }
+
+    it('readArrayHeader decodes array32 with bit 31 set as positive', async () => {
+        const r = readerFor(Uint8Array.of(0xdd, 0xff, 0xff, 0xff, 0xff));
+        await expect(readArrayHeader(r)).resolves.toBe(4294967295);
+        const r2 = readerFor(Uint8Array.of(0xdd, 0x80, 0x00, 0x00, 0x00));
+        await expect(readArrayHeader(r2)).resolves.toBe(2147483648);
+    });
+
+    it('readBinHeader decodes bin32 with bit 31 set as positive', async () => {
+        const r = readerFor(Uint8Array.of(0xc6, 0x80, 0x00, 0x00, 0x01));
+        await expect(readBinHeader(r)).resolves.toBe(2147483649);
+    });
+
+    it('readStr treats a bit-31 str32 length as a huge read, not a negative one', async () => {
+        // The decoded length is internal to readStr; the observable signal
+        // is the failure mode of reading ~2 GiB from a 0-byte stream: EOF
+        // (or allocation failure), never the read(n < 0) guard that the
+        // signed decode used to hit.
+        const r = readerFor(Uint8Array.of(0xdb, 0x80, 0x00, 0x00, 0x00));
+        const err = await readStr(r).then(
+            () => { throw new Error('readStr unexpectedly resolved'); },
+            (e: unknown) => e,
+        );
+        expect(String(err)).not.toMatch(/must be >= 0/);
+        expect(String(err)).toMatch(/stream ended|allocat|Invalid|length/i);
+    });
+
+    it('readArrayHeader still decodes uncontroversial 32-bit lengths', async () => {
+        const r = readerFor(Uint8Array.of(0xdd, 0x00, 0x01, 0x00, 0x00));
+        await expect(readArrayHeader(r)).resolves.toBe(65536);
     });
 });

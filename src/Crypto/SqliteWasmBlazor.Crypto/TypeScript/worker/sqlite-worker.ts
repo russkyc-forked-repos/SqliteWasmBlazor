@@ -32,6 +32,7 @@ import {
     importDiskStreamPreflight,
     importDiskStreamCommit,
     importDatabaseFromBlob,
+    assertImportFileCount,
 } from './vfs-prf/import-streamed';
 import {
     BufferedStreamReader,
@@ -664,10 +665,16 @@ function emitEnvelopeBytes(streamId: number, bytes: Uint8Array<ArrayBuffer>): vo
 
 /**
  * Streaming multi-DB plain-import handler — consumes a `.dbs` envelope
- * from <paramref name="blob"/>. Wipes the existing pool first (matches
- * the old ZIP-on-Plain semantics), then per-file: read name + bin
- * length, stream-write that many plain pages through the chunked SAH
- * path with rekey-on-write if a globalKey is registered.
+ * from <paramref name="blob"/>. Two passes over the re-streamable Blob:
+ *
+ *   1. Validate: walk the whole envelope read-only — file count, tuple
+ *      arity, page-aligned lengths, SQLite magic per file, no premature
+ *      EOF — BEFORE any destructive pool operation. A truncated or
+ *      crafted .dbs fails here with the existing disk intact.
+ *   2. Commit:   wipe the pool (the destructive replace-the-disk
+ *      contract — caller owns the user-facing confirmation), then
+ *      per-file stream-write the plain pages through the chunked SAH
+ *      path with rekey-on-write if a globalKey is registered.
  *
  * State dispatch matches the single-DB import: Plain writes plain;
  * Encrypted+Unlocked rekey-on-writes; Encrypted+Locked is refused by
@@ -685,8 +692,44 @@ async function importDatabasesFromSessionHandler(
     const encrypted = hasGlobalKey();
     debugLog(op, 'multiImport.enter', { blobSize: blob.size, encrypted });
 
-    // Wipe the pool first — same destructive contract the old plain-ZIP
-    // import had. Caller owns the user-facing confirmation.
+    // Pass 1 — validate the entire envelope before touching the pool.
+    {
+        const probe = new BufferedStreamReader(blob.stream().getReader());
+        try {
+            const fileCount = await readArrayHeader(probe);
+            assertImportFileCount(fileCount, 'importDatabasesFromSession');
+            for (let i = 0; i < fileCount; i++) {
+                const tupleLen = await readArrayHeader(probe);
+                if (tupleLen !== 2) {
+                    throw new Error(
+                        `importDatabasesFromSession: file ${i} must be array(2), got array(${tupleLen})`);
+                }
+                const name = await readStr(probe);
+                const plainSize = await readBinHeader(probe);
+                if (plainSize === 0 || plainSize % PLAIN_SLOT_SIZE !== 0) {
+                    throw new Error(
+                        `importDatabasesFromSession: file '${name}' plain length ${plainSize} ` +
+                        `is not a non-zero multiple of ${PLAIN_SLOT_SIZE}.`);
+                }
+                const head = await probe.read(SQLITE_MAGIC_HEADER.length);
+                if (!hasSqliteMagicHeader(head)) {
+                    throw new Error(
+                        `importDatabasesFromSession: file '${name}' does not start with the ` +
+                        `SQLite magic header — refusing to import a non-plain source.`);
+                }
+                // skip() throws on premature EOF, so a truncated envelope
+                // is also caught here, pre-wipe.
+                await probe.skip(plainSize - SQLITE_MAGIC_HEADER.length);
+            }
+        } finally {
+            probe.releaseLock();
+        }
+    }
+    debugLog(op, 'multiImport.validated', {});
+
+    // Pass 2 — wipe the pool, then commit. Only reached once the whole
+    // envelope has validated; the wipe stays the documented destructive
+    // contract of a *successful* import, not of a malformed file.
     const existing = poolUtil.listDatabases();
     for (const name of existing) {
         try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
@@ -696,9 +739,6 @@ async function importDatabasesFromSessionHandler(
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
     try {
         const fileCount = await readArrayHeader(reader);
-        if (fileCount === 0) {
-            throw new Error('importDatabasesFromSession: envelope is empty');
-        }
         debugLog(op, 'multiImport.files', { count: fileCount });
 
         for (let i = 0; i < fileCount; i++) {

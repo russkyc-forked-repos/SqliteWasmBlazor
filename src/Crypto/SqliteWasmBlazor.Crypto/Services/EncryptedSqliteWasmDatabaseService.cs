@@ -787,8 +787,11 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     $"got {wrapKey.Length}.");
             }
 
-            // Pass 1 — preflight. Worker AEAD-verifies slot 0 of every
-            // file via blob.stream(). Read-only; no pool mutation.
+            // Pass 1 — preflight. Worker AEAD-verifies EVERY slot of
+            // EVERY file via blob.stream(). Read-only; no pool mutation.
+            // Full coverage is the wipe-after-validate invariant: the
+            // WipePoolAsync below destroys the existing disk, so nothing
+            // the commit pass decrypts may be unverified at that point.
             var preflight = await SqliteWasmWorkerBridge.ImportDiskStreamPreflightFromSessionAsync(
                 sessionId, new ArraySegment<byte>(wrapKey));
             if (preflight != (int)DiskImportResult.OK)

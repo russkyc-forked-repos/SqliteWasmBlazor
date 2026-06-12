@@ -4,17 +4,22 @@
 // blob.stream() — never materialises the whole envelope as a single buffer
 // in the worker. Two passes (run separately from C#):
 //
-//   1. Preflight: walk the file table, AEAD-decrypt slot 0 of each file
-//      under K_wrap with `prf-vfs-v1|{dbPath}|0` AAD. Tag failure means
-//      WRONG_KEY; abort with no writes done.
+//   1. Preflight: walk the file table, AEAD-decrypt EVERY slot of EVERY
+//      file under K_wrap with `prf-vfs-v1|{dbPath}|{slot}` AAD,
+//      discarding the plaintext. Slot-0 tag failure means WRONG_KEY;
+//      a later slot's failure means a tampered/corrupt envelope and
+//      throws. Either way: abort with no writes done.
 //   2. Commit:    re-stream the envelope, write each file as a temp slot
-//      via writeFileSlice chunk-by-chunk under globalKey, then
-//      atomicReplaceFile to promote.
+//      via writeFileSlice chunk-by-chunk under globalKey, then promote
+//      all temps via atomicReplaceFile only after every file has been
+//      fully decrypted + rewritten.
 //
 // Why two passes: preflight preserves the wipe-after-validate invariant
-// the legacy whole-buffer import had. blob.stream() is re-callable on
-// the same Blob, so we re-open between passes — the bytes never live
-// concatenated in JS heap.
+// the legacy whole-buffer import had — the caller wipes the existing
+// pool only after preflight has authenticated every byte of ciphertext
+// in the envelope, so a crafted/corrupt envelope can never destroy the
+// existing disk. blob.stream() is re-callable on the same Blob, so we
+// re-open between passes — the bytes never live concatenated in JS heap.
 
 import {
     encryptChaCha20Poly1305,
@@ -40,6 +45,27 @@ const ENVELOPE_VERSION = 3;
 const ENVELOPE_ARRAY_LEN = 8;
 const ENVELOPE_AAD_VERSION = 'v1';
 const PRF_SALT_LEN = 32;
+
+/**
+ * Upper bound on the Files array of any import envelope. The SAH pool
+ * starts at capacity 25 and grows on demand, but no legitimate export
+ * comes anywhere near this — the bound exists so a crafted count can't
+ * drive the import loops.
+ */
+export const MAX_IMPORT_FILES = 256;
+
+/**
+ * Validate an untrusted Files-array count before using it as a loop
+ * bound. Rejects zero, non-integers, and anything above
+ * {@link MAX_IMPORT_FILES}. (Negative values can no longer arrive —
+ * readArrayHeader coerces unsigned — but reject them anyway.)
+ */
+export function assertImportFileCount(count: number, context: string): void {
+    if (!Number.isInteger(count) || count <= 0 || count > MAX_IMPORT_FILES) {
+        throw new Error(
+            `${context}: envelope Files count ${count} is outside 1..${MAX_IMPORT_FILES} — refusing import.`);
+    }
+}
 
 /**
  * Mirrors the C# `DiskImportResult` enum so callers can branch on the
@@ -261,11 +287,19 @@ function writeEncryptedSlot(
 }
 
 /**
- * Pass 1 — preflight. Walks the envelope's Files array, AEAD-verifies
- * slot 0 of each file under K_wrap. Returns OK if every file's slot 0
- * authenticates; WRONG_KEY on the first tag failure (no writes happen
- * in this pass). Caller (C# service) must hold off any pool-mutating
- * operation until this returns OK.
+ * Pass 1 — preflight. Walks the envelope's Files array and AEAD-verifies
+ * EVERY slot of EVERY file under K_wrap, discarding the plaintext.
+ * Returns OK only if the entire envelope authenticates; WRONG_KEY on a
+ * slot-0 tag failure (the key doesn't match); throws on a later slot's
+ * tag failure (slot 0 authenticated, so the key is right — the envelope
+ * itself is tampered or corrupt). No writes happen in this pass.
+ *
+ * Full coverage here is the security invariant, not an optimisation
+ * choice: the caller (C# service) wipes the existing pool between
+ * preflight and commit, so anything preflight does not authenticate
+ * could otherwise fail in commit AFTER the user's data is gone. A
+ * crafted envelope that authenticates slot 0 but corrupts slot k>0
+ * must be rejected here, while the existing disk is still intact.
  */
 export async function importDiskStreamPreflight(
     blob: Blob,
@@ -276,6 +310,7 @@ export async function importDiskStreamPreflight(
     try {
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
+        assertImportFileCount(fileCount, 'importDiskStreamed[preflight]');
         if (traceOp) { debugLog(traceOp, 'preflight.files', { count: fileCount }); }
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
@@ -290,22 +325,30 @@ export async function importDiskStreamPreflight(
                     `importDiskStreamed[preflight]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
             }
             if (traceOp) { debugLog(traceOp, 'preflight.file', { name, bytes: binLen }); }
-            const slot0 = await reader.read(PHYSICAL_SLOT_SIZE);
             const dbPath = `/databases/${name}`;
-            const aad = buildPageAad(dbPath, 0);
-            try {
-                const plaintext = decryptSlot(slot0, kWrap, aad);
-                clearBytes(plaintext);
-            } catch {
-                return DiskImportResult.WRONG_KEY;
-            } finally {
-                clearBytes(slot0);
+            const totalSlots = binLen / PHYSICAL_SLOT_SIZE;
+            for (let slotIdx = 0; slotIdx < totalSlots; slotIdx++) {
+                const slot = await reader.read(PHYSICAL_SLOT_SIZE);
+                const aad = buildPageAad(dbPath, slotIdx);
+                try {
+                    const plaintext = decryptSlot(slot, kWrap, aad);
+                    clearBytes(plaintext);
+                } catch {
+                    // Only the very first slot of the envelope says anything
+                    // about the key. Once any slot has authenticated, the key
+                    // is right and a later failure means the envelope itself
+                    // is tampered or corrupt.
+                    if (i === 0 && slotIdx === 0) {
+                        return DiskImportResult.WRONG_KEY;
+                    }
+                    throw new Error(
+                        `importDiskStreamed[preflight]: file '${name}' slot ${slotIdx} failed AEAD ` +
+                        `authentication although earlier slots verified — envelope is tampered ` +
+                        `or corrupt; refusing import (existing disk untouched).`);
+                } finally {
+                    clearBytes(slot);
+                }
             }
-            // Discard slots 1..N-1 of this file (preflight only checks
-            // slot 0; tag-correctness on slot 0 is sufficient evidence the
-            // K_wrap matches the file's encryption key — the file's
-            // remaining slots share the same key by construction).
-            await reader.skip(binLen - PHYSICAL_SLOT_SIZE);
         }
         return DiskImportResult.OK;
     } finally {
@@ -317,8 +360,10 @@ export async function importDiskStreamPreflight(
  * Pass 2 — commit. Re-streams the envelope and for each file decrypts
  * every slot under K_wrap + re-encrypts under <paramref name="globalKey"/>,
  * writing each rekeyed slot batch via `writeFileSlice` to a temp slot in
- * the SAH pool, then atomic-promotes temp → final path. JS heap peak per
- * file is one chunk (~1 MB) regardless of DB size.
+ * the SAH pool. Temp → final promotion is deferred until EVERY file has
+ * been staged, so a mid-envelope failure unlinks the temps and modifies
+ * no final dbPath. JS heap peak per file is one chunk (~1 MB) regardless
+ * of DB size.
  *
  * Caller (C# service) must have already wiped the pool and registered
  * <paramref name="globalKey"/> as the worker's globalKey before calling
@@ -336,9 +381,15 @@ export async function importDiskStreamCommit(
     const COMMIT_CHUNK_SLOTS = 256;
     const reader = new BufferedStreamReader(blob.stream().getReader());
     const tempPaths: string[] = [];
+    // Deferred promotion list: temp → final renames happen only after
+    // every file in the envelope has been fully decrypted, rekeyed and
+    // written. A failure anywhere before that point unlinks the temps
+    // and leaves no final dbPath modified.
+    const pendingPromotions: Array<{ tempPath: string; dbPath: string; name: string }> = [];
     try {
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
+        assertImportFileCount(fileCount, 'importDiskStreamed[commit]');
         if (traceOp) { debugLog(traceOp, 'commit.files', { count: fileCount }); }
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
@@ -384,17 +435,23 @@ export async function importDiskStreamCommit(
                     chunkBuf = null;
                 }
             }
-            // Atomic-promote temp → dbPath. From this point on, dbPath
-            // points at the freshly-imported encrypted DB; any later
-            // file's failure leaves earlier files committed (same
-            // window the legacy multi-file import had).
+            pendingPromotions.push({ tempPath, dbPath, name });
+            if (traceOp) { debugLog(traceOp, 'commit.file.staged', { name }); }
+        }
+        // Every file decrypted, rekeyed and staged — promote them all.
+        // Doing this only after the full envelope has been processed means
+        // a mid-envelope failure (truncation, AEAD, write error) never
+        // leaves the pool with a partial mix of old and new DBs.
+        for (const { tempPath, dbPath, name } of pendingPromotions) {
             if (traceOp) { debugLog(traceOp, 'commit.atomicReplace', { name }); }
             poolUtil.atomicReplaceFile(tempPath, dbPath);
             if (traceOp) { debugLog(traceOp, 'commit.file.done', { name }); }
         }
     } catch (error) {
-        // Unlink any temp slot we created but didn't promote. Already-
-        // promoted dbPaths are committed and stay.
+        // Unlink any staged temp that wasn't promoted. Promotion runs as
+        // the last step, so a pre-promotion failure cleans up everything;
+        // a failure inside the promotion loop itself (rename error) keeps
+        // already-promoted dbPaths and unlinks the rest.
         for (const tempPath of tempPaths) {
             try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
         }

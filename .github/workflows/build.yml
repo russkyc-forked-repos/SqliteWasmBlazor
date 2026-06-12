@@ -65,6 +65,24 @@ jobs:
       run: npm install
       working-directory: src/Crypto/SqliteWasmBlazor.Crypto/TypeScript
 
+    # Run the vitest suites before the expensive .NET / Playwright stages.
+    # These cover security-critical pure-TS logic that the browser E2E run
+    # exercises only indirectly: the untrusted-import MessagePack parser,
+    # the .eds preflight's full-envelope AEAD verification (wipe-after-
+    # validate invariant), crypto envelope/rekey helpers, and the crypto
+    # message handlers.
+    - name: Unit tests (TypeScript-Crypto)
+      run: npm test
+      working-directory: src/Base/SqliteWasmBlazor/TypeScript-Crypto
+
+    - name: Unit tests (SqliteWasmBlazor worker)
+      run: npm test
+      working-directory: src/Base/SqliteWasmBlazor/TypeScript
+
+    - name: Unit tests (Crypto worker)
+      run: npm test
+      working-directory: src/Crypto/SqliteWasmBlazor.Crypto/TypeScript
+
     # Build each csproj individually in dependency order. We deliberately
     # avoid `dotnet restore SqliteWasmBlazor.slnx` followed by `dotnet build
     # --no-restore`: the solution-wide restore evaluates BOTH branches of the
