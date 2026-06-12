@@ -11,6 +11,7 @@ begin
  *   src/Crypto/SqliteWasmBlazor.Crypto/Services/EncryptedSqliteWasmDatabaseService.cs
  *   src/Base/SqliteWasmBlazor/Services/SqliteWasmWorkerBridge.cs
  *   src/Base/SqliteWasmBlazor/TypeScript/worker/sqlite-worker.ts
+ *   src/Crypto/SqliteWasmBlazor.Crypto/TypeScript/worker/vfs-prf/import-streamed.ts
  *
  * Concrete contract modeled:
  *   - PRF authentication installs a C# seed cache entry and a JS key bundle.
@@ -23,19 +24,25 @@ begin
  *     leaves the disk Encrypted+Locked.
  *   - Expiry of the seed cache while unlocked clears globalKey and leaves the
  *     disk Encrypted+Locked with the passkey hint preserved.
- *   - Whole-disk import preflights every file before deleting the existing
- *     pool. Plain ZIP imports are accepted on Plain, Encrypted+Locked, and
- *     Encrypted+Unlocked disks after a full plain-entry preflight; Locked
- *     breaks encryption and ends Plain, Unlocked re-encrypts and stays
- *     Encrypted+Unlocked. Cipher envelopes require ECIES unwrap + AEAD
- *     preflight before any wipe; guided imports from Plain/Locked then bind
- *     the disk to the imported credential.
+ *   - Whole-disk import validates the ENTIRE source on a read-only pass
+ *     before deleting the existing pool (`PoolWiped`). Plain sources
+ *     (.zip / .dbs) get a full structural walk including per-file SQLite
+ *     magic; cipher envelopes (.eds) require ECIES unwrap + AEAD
+ *     verification of every slot of every file under K_wrap. Plain imports
+ *     are accepted on Plain, Encrypted+Locked, and Encrypted+Unlocked
+ *     disks; Locked breaks encryption and ends Plain, Unlocked re-encrypts
+ *     and stays Encrypted+Unlocked. Guided cipher imports from Plain/Locked
+ *     bind the disk to the imported credential. A tampered / truncated /
+ *     crafted source fails the validation pass and is rejected with the
+ *     disk state unchanged — rejection can never trigger the wipe.
  *
  * Out of scope:
  *   - WebAuthn ceremony details and HKDF byte equality.
  *   - Per-slot AEAD secrecy/authenticity; see vfs.spthy.
  *   - Multi-file iteration; one envelope fact represents "all files passed
- *     the same predicate".
+ *     the same predicate". Since the full-envelope preflight (2026-06-11)
+ *     the implementation verifies every slot of every file pre-wipe, so
+ *     this atomic abstraction is faithful rather than optimistic.
  */
 
 // ---------------------------------------------------------------------------
@@ -268,6 +275,7 @@ rule ImportPlainZipOnPlain:
     [ Disk($Device, 'plain') ]
   --[ ImportSourceState($Device, 'plain')
     , PlainImportPreflightOk($Device)
+    , PoolWiped($Device)
     , ImportAccepted($Device, 'plain', 'plain')
     , DiskState($Device, 'plain')
     ]->
@@ -280,6 +288,7 @@ rule ImportPlainZipOnUnlocked:
     ]
   --[ ImportSourceState($Device, 'encryptedUnlocked')
     , PlainImportPreflightOk($Device)
+    , PoolWiped($Device)
     , ImportAccepted($Device, 'encryptedUnlocked', 'plain')
     , DiskState($Device, 'encryptedUnlocked')
     ]->
@@ -294,6 +303,7 @@ rule ImportPlainZipOnLockedBreaksEncryption:
     ]
   --[ ImportSourceState($Device, 'encryptedLocked')
     , PlainImportPreflightOk($Device)
+    , PoolWiped($Device)
     , EncryptionBrokenByPlainImport($Device)
     , ImportAccepted($Device, 'encryptedLocked', 'plain')
     , DiskState($Device, 'plain')
@@ -316,6 +326,7 @@ rule ImportCipherEnvelopeOnUnlocked:
     ]
   --[ ImportSourceState($Device, 'encryptedUnlocked')
     , EncryptedImportPreflightOk($Device, ~wrap)
+    , PoolWiped($Device)
     , ImportAccepted($Device, 'encryptedUnlocked', 'cipher')
     , DiskState($Device, 'encryptedUnlocked')
     ]->
@@ -336,6 +347,7 @@ rule ImportCipherEnvelopeGuidedOnPlain:
     , DiskEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , EncryptedImportPreflightOk($Device, ~wrap)
+    , PoolWiped($Device)
     , HintWritten($Device)
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
@@ -360,6 +372,7 @@ rule ImportCipherEnvelopeGuidedOnLocked:
     , DiskEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , EncryptedImportPreflightOk($Device, ~wrap)
+    , PoolWiped($Device)
     , HintWritten($Device)
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
@@ -369,6 +382,50 @@ rule ImportCipherEnvelopeGuidedOnLocked:
     [ Disk($Device, 'encryptedUnlocked')
     , Hint($Device)
     , GlobalKey($Device, ~k)
+    ]
+
+// A tampered / truncated / crafted source fails the read-only validation
+// pass and is rejected with the disk untouched. The implementation
+// validates the ENTIRE source before the destructive wipe (.eds: every
+// slot of every file AEAD-verified under K_wrap; .zip/.dbs: full
+// structural walk incl. per-file SQLite magic), so rejection happens
+// strictly pre-wipe: disk state, hint, and (when unlocked) globalKey all
+// survive. $Kind ranges over the source kinds ('plain' / 'cipher') —
+// the invariant is kind-independent. One rule per reachable source state.
+
+rule RejectInvalidEnvelopeOnPlain:
+    [ Disk($Device, 'plain') ]
+  --[ ImportSourceState($Device, 'plain')
+    , ImportRejected($Device, 'plain', $Kind, 'invalidEnvelope')
+    , DiskState($Device, 'plain')
+    ]->
+    [ Disk($Device, 'plain') ]
+
+rule RejectInvalidEnvelopeOnUnlocked:
+    [ Disk($Device, 'encryptedUnlocked')
+    , Hint($Device)
+    , GlobalKey($Device, k)
+    ]
+  --[ ImportSourceState($Device, 'encryptedUnlocked')
+    , ImportRejected($Device, 'encryptedUnlocked', $Kind, 'invalidEnvelope')
+    , DiskState($Device, 'encryptedUnlocked')
+    ]->
+    [ Disk($Device, 'encryptedUnlocked')
+    , Hint($Device)
+    , GlobalKey($Device, k)
+    ]
+
+rule RejectInvalidEnvelopeOnLocked:
+    [ Disk($Device, 'encryptedLocked')
+    , Hint($Device)
+    ]
+  --[ ImportSourceState($Device, 'encryptedLocked')
+    , ImportRejected($Device, 'encryptedLocked', $Kind, 'invalidEnvelope')
+    , HintPresent($Device)
+    , DiskState($Device, 'encryptedLocked')
+    ]->
+    [ Disk($Device, 'encryptedLocked')
+    , Hint($Device)
     ]
 
 // ---------------------------------------------------------------------------
@@ -463,5 +520,29 @@ lemma plain_disk_rejects_cipher_import:
         ImportRejected(Device, 'plain', 'cipher', 'wrongKey') @ #t
         ==> ImportSourceState(Device, 'plain') @ #t
           & DiskState(Device, 'plain') @ #t"
+
+// Wipe-after-validate: the destructive pool wipe fires only inside an
+// import whose ENTIRE source already passed the read-only validation
+// pass (full structural walk for plain, full-envelope AEAD for cipher).
+lemma pool_wipe_requires_validated_source:
+    "All Device #t.
+        PoolWiped(Device) @ #t
+        ==> PlainImportPreflightOk(Device) @ #t
+          | (Ex k. EncryptedImportPreflightOk(Device, k) @ #t)"
+
+// A rejected import is observationally a no-op on the disk: the state
+// the import found is the state it leaves.
+lemma rejected_import_preserves_disk_state:
+    "All Device State Kind #t.
+        ImportRejected(Device, State, Kind, 'invalidEnvelope') @ #t
+        ==> ImportSourceState(Device, State) @ #t
+          & DiskState(Device, State) @ #t"
+
+// Rejection and the wipe are mutually exclusive events — a malformed
+// source can never trigger the destructive path.
+lemma rejected_import_never_wipes:
+    "All Device State Kind Reason #t.
+        ImportRejected(Device, State, Kind, Reason) @ #t
+        ==> not( PoolWiped(Device) @ #t )"
 
 end

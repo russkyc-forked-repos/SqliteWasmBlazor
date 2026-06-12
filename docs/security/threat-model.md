@@ -124,7 +124,9 @@ provides identical algorithms for offline test scenarios.
 The Plane-2 VFS is modeled symbolically with Tamarin. See
 [`docs/formal/README.md`](../formal/README.md) and the three `.spthy`
 theories under `docs/formal/vfs-tamarin/` for per-slot AEAD soundness,
-in-place conversion lifecycle, and key-cache / manifest unlock lemmas.
+in-place conversion lifecycle, key-cache / manifest unlock lemmas, and the
+import wipe-after-validate invariant (threat #8): `pool_wipe_requires_validated_source`,
+`rejected_import_preserves_disk_state`, `rejected_import_never_wipes`.
 
 ## 8. Known limitations
 

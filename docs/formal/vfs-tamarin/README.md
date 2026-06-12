@@ -14,7 +14,9 @@ conversion wrapper, and the disk-level PRF cache/import lifecycle.
   decrypt-to-plain key purge.
 - `vfs-cache-import-lifecycle.spthy` models PRF seed / JS key-cache expiry,
   `KeyCacheStrategy.NONE` one-shot consumption, manifest-MAC-verified unlock,
-  lock-on-expiry, deferred manifest persistence, and whole-disk import preflight.
+  lock-on-expiry, deferred manifest persistence, and whole-disk import
+  wipe-after-validate (full-source validation gating the destructive pool
+  wipe; invalid sources rejected with disk state preserved).
 
 ## Scope
 
@@ -35,8 +37,11 @@ The model covers the encrypted at-rest channel:
   see `vfs-cache-import-lifecycle.spthy` for the rule shape and the
   `crypto-vfs.md` "NONE" note for the runtime rationale),
 - manifest MAC verification before unlock acceptance,
-- whole-disk plain-ZIP and cipher-envelope import acceptance/rejection by
-  current disk state, per-file content kind, and pre-destructive preflight.
+- whole-disk plain (.zip / .dbs) and cipher-envelope (.eds) import
+  acceptance/rejection by current disk state, per-file content kind, and
+  pre-destructive validation: the pool wipe (`PoolWiped`) fires only after
+  the entire source has validated read-only, and a tampered / truncated /
+  crafted source is rejected with disk state, hint, and globalKey intact.
 
 Plain VFS mode and rekey-to-plain are represented as events, not confidentiality
 claims. The implementation returns plain bytes to the trusted caller in those
@@ -96,6 +101,9 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 - `guided_cipher_import_from_plain_ends_unlocked`
 - `guided_cipher_import_from_locked_ends_unlocked`
 - `plain_disk_rejects_cipher_import`
+- `pool_wipe_requires_validated_source`
+- `rejected_import_preserves_disk_state`
+- `rejected_import_never_wipes`
 
 All are `verified` with Tamarin 1.12.0 in the local toolchain used when this was
 written.

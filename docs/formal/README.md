@@ -19,7 +19,8 @@ with [Tamarin Prover](https://tamarin-prover.com/).
 - `vfs-tamarin/vfs-cache-import-lifecycle.spthy` — PRF seed / JS key-cache
   expiry, `KeyCacheStrategy.NONE` one-shot consumption, manifest-MAC-verified
   unlock, lock-on-expiry, deferred manifest persistence, and whole-disk import
-  preflight.
+  wipe-after-validate (pool wipe only after full-source validation; invalid
+  sources rejected with the disk untouched).
 
 ## Running
 
