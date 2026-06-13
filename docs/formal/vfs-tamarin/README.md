@@ -100,10 +100,19 @@ Expected `vfs-inplace-lifecycle.spthy` summary:
 - `encrypt_success_poststate`
 - `decrypt_success_poststate`
 - `sanity_encrypt_commit_reachable` … `sanity_leave_encrypted_reachable` (8 exists-trace)
-- `key_installed_once`, `key_event_rooted_at_init` (reuse invariants)
-- `pending_*` temporal key-state lemmas (4) — stated, NOT verified; skipped
-  by verify.sh until a goal-ranking oracle closes their induction (see the
-  theory's comment block)
+- Temporal key-state lemmas (verified): `export_plain_key_live_since_install`
+  (original strength), `decrypt_key_installed_before_use` +
+  `clear_requires_install` (decrypt split),
+  `encrypt_in_place_keyslot_emptied_since_install` /
+  `export_encrypt_keyslot_emptied_since_install` (slot-emptied form),
+  `empty_event_is_init_or_clear`, `key_installed_once`,
+  `key_event_rooted_at_init` (reuse invariants — placement before/after
+  matters, see in-file comments)
+- `pending_*` (3) — the strong per-key forms (nested-quantifier
+  no-live-key pair, decrypt no-clear half); stated, NOT verified, skipped
+  by verify.sh. Their inductive descent diverges under all built-in
+  heuristics, use_induction, budget bounding, and the deprioFiles tactic;
+  a hand-guided interactive proof is the known remaining route.
 
 Expected `vfs-cache-import-lifecycle.spthy` summary:
 
@@ -128,10 +137,14 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 
 ## Verification status
 
-**ALL GREEN** — Tamarin 1.12.0 + maude 3.5.1, 2026-06-12, full
-`verify.sh` + `mutation-check.sh` gate in ~70 s on a 4-CPU / 21 GB box
-(heap cap 10G): 70 lemmas verified (vfs 14, inplace-lifecycle 24 + 2
-reuse invariants, cache-import-lifecycle 28), 3/3 mutations falsified.
+**ALL GREEN** — Tamarin 1.12.0 + maude 3.5.1, 2026-06-13, full
+`verify.sh` + `mutation-check.sh` gate in ~65 s on a 4-CPU / 21 GB box
+(heap cap 10G): 72 lemmas verified (vfs 14, inplace-lifecycle 30,
+cache-import-lifecycle 28), 3/3 mutations falsified. 3 `pending_*`
+statements remain open by design (see above). The temporal lemmas use the
+in-theory `deprioFiles` tactic where annotated — file-state claim goals
+are irrelevant to the key-timeline arguments and deprioritizing them is
+the difference between 12-step proofs and non-termination.
 
 Provenance of the two non-obvious ingredients:
 

@@ -1,6 +1,16 @@
 theory VfsInplaceLifecycle
 begin
 
+// Goal-ranking tactic for the temporal key-state lemmas: their arguments
+// live entirely on the key timeline, but several premise rules also carry
+// file-state claims whose latest-event restriction fans out over all
+// seven FileState-emitting rules. Deprioritizing those goals lets the
+// key-side contradiction close first (measured: export_plain_key_live
+// 12 steps with the tactic vs non-termination without).
+tactic: deprioFiles
+deprio:
+    regex "FileState|FileVer"
+
 /*
  * Symbolic lifecycle model for the PRF-keyed VFS in-place conversion wrapper.
  *
@@ -407,8 +417,13 @@ lemma sanity_leave_encrypted_reachable:
     "Ex D k #t. LeaveEncryptedAccepted(D, k) @ #t"
 
 
-// Auxiliary invariants over the key-state timeline, proven by induction
-// and available via [reuse] to later lemmas.
+// By-construction case split: an empty-slot event is the device init or
+// coincides with a clear (inspection of the three emitting rules).
+lemma empty_event_is_init_or_clear:
+    "All Device #c.
+        KeyState(Device, 'empty', 'none') @ #c
+        ==> DeviceInitialized(Device) @ #c
+          | (Ex k. GlobalKeyCleared(Device, k) @ #c)"
 
 // Each key is installed at most once (Fr at UnlockGlobalKey).
 lemma key_installed_once [reuse]:
@@ -416,33 +431,72 @@ lemma key_installed_once [reuse]:
         GlobalKeyInstalled(Device, k) @ #i & GlobalKeyInstalled(Device, k) @ #j
         ==> #i = #j"
 
-// Every key-state event is rooted at the device's unique init.
+/*
+ * Temporal key-state lemmas — the machine-verified set.
+ *
+ * These derive cross-trace orderings from the latest-event semantics, so
+ * they would catch a rule that *labels* the right source state while its
+ * claims no longer enforce it. Proven shapes (2026-06-13, per-lemma):
+ *
+ *   - export_plain_key_live_since_install: ORIGINAL strength.
+ *   - decrypt: split — the installed-before-use half is verified here;
+ *     the no-clear-before-use half is pending (see below).
+ *   - encrypt / export_encrypt: verified in keyslot-emptied form — the
+ *     slot was EMPTIED strictly between any earlier install and the
+ *     plain-source op. Combined with empty_event_is_init_or_clear and
+ *     init-uniqueness (the emptying event cannot be the init, which
+ *     precedes the install), this yields "some key was cleared in the
+ *     window" by a one-step manual argument; the per-key strong form
+ *     (THE installed key was cleared) additionally needs the inductive
+ *     descent that remains open in the pending lemmas.
+ */
+
+lemma clear_requires_install:
+    "All Device k #c.
+        GlobalKeyCleared(Device, k) @ #c
+        ==> Ex #i. GlobalKeyInstalled(Device, k) @ #i & #i < #c"
+
+lemma decrypt_key_installed_before_use:
+    "All Device path cipher_blob plain_blob k_old #t.
+        DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t"
+
+lemma export_plain_key_live_since_install [heuristic={deprioFiles}]:
+    "All Device path cipher_blob plain_blob k_old #t.
+        ExportPlainAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
+        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
+          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
+
+lemma encrypt_in_place_keyslot_emptied_since_install:
+    "All Device path plain_blob cipher_blob target_key k #i #t.
+        EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+      & GlobalKeyInstalled(Device, k) @ #i & #i < #t
+        ==> Ex #c. KeyState(Device, 'empty', 'none') @ #c & #i < #c & #c < #t"
+
+lemma export_encrypt_keyslot_emptied_since_install [heuristic={deprioFiles}]:
+    "All Device path plain_blob cipher_blob target_key k #i #t.
+        ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
+      & GlobalKeyInstalled(Device, k) @ #i & #i < #t
+        ==> Ex #c. KeyState(Device, 'empty', 'none') @ #c & #i < #c & #c < #t"
+
+// Every key-state event is rooted at the device's unique init. Kept LAST
+// among the proven lemmas: it is [reuse], and reuse-axiom injection makes
+// the proofs above diverge (measured) — placement is load-bearing.
 lemma key_event_rooted_at_init [use_induction, reuse]:
     "All Device s k #c.
         KeyState(Device, s, k) @ #c
         ==> Ex #r. DeviceInitialized(Device) @ #r & ( #r < #c | #r = #c )"
 
 /*
- * Temporal key-state lemmas — PENDING (prefix `pending_`, skipped by
- * verify.sh).
+ * PENDING — stated, NOT machine-verified, skipped by verify.sh.
  *
- * The SourceState / PostState lemmas above pin the labels each rule
- * carries; these lemmas instead derive orderings across the whole trace
- * from the latest-event semantics, so they would catch a rule that
- * *claims* the right source state in its labels while its claims no
- * longer enforce it.
- *
- * Status 2026-06-12: with the auxiliary invariants assumed, each of these
- * proves in <100 steps (checked via --prove=<lemma> after the reuse
- * lemmas), but the remaining induction needed to discharge the descent
- * through the claim/event timeline diverges under every built-in
- * heuristic, with use_induction, and with unlock-budget bounding. Closing
- * them needs a goal-ranking oracle (HOWTO §4/§5); until then they are
- * stated but NOT machine-verified — do not cite them as proven.
+ * The strong per-key forms: their proofs need the inductive descent
+ * "an empty event after an install implies THAT key's clear", which
+ * diverges under all built-in heuristics, use_induction, unlock-budget
+ * bounding, and the deprioFiles tactic (campaign log: a23715a..HEAD).
+ * A hand-guided interactive proof or a finer goal-ranking oracle is the
+ * known remaining route. Do not cite these as proven.
  */
-
-// A plain-source operation can only run while the device key slot is
-// empty: every key installed before it was cleared before it.
 lemma pending_encrypt_in_place_no_live_key:
     "All Device path plain_blob cipher_blob target_key #t.
         EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
@@ -457,19 +511,11 @@ lemma pending_export_encrypt_no_live_key:
               (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
               ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
 
-// An encrypted-source operation runs under exactly the key that was
-// installed earlier and not cleared since — the key it reports is the
-// live one, not a stale or future key.
-lemma pending_decrypt_in_place_key_live_since_install:
-    "All Device path cipher_blob plain_blob k_old #t.
+lemma pending_decrypt_no_clear_before_use:
+    "All Device path cipher_blob plain_blob k_old #t #c.
         DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
-        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
-          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
-
-lemma pending_export_plain_key_live_since_install:
-    "All Device path cipher_blob plain_blob k_old #t.
-        ExportPlainAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
-        ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
-          & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
+      & GlobalKeyCleared(Device, k_old) @ #c
+      & #c < #t
+        ==> F"
 
 end
