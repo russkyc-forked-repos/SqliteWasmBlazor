@@ -558,6 +558,86 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 "filename must be a non-empty string.", nameof(filename));
         }
+        var ok = await WithPubkeyExportEnvelopeAsync(
+            recipientX25519PublicKeyBase64,
+            recipientCredentialId,
+            (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportDiskToDownloadAsync(
+                filename, metadataJson, wrapKey),
+            cancellationToken);
+        if (!ok)
+        {
+            throw new InvalidOperationException(
+                "ExportDiskToPubkeyAndDownloadAsync: bridge reported failure.");
+        }
+    }
+
+    /// <summary>
+    /// Test/diagnostic seam — assembles the SAME v3 pubkey envelope as
+    /// <see cref="ExportDiskToPubkeyAndDownloadAsync"/>, but returns the
+    /// composed envelope to managed C# as a <c>byte[]</c> instead of
+    /// triggering the anchor-click download.
+    /// <para>
+    /// This deliberately defeats the streaming memory win (it materialises
+    /// the whole envelope on the managed heap), so it is intentionally NOT
+    /// on <see cref="IEncryptedSqliteWasmDatabaseService"/>. Its sole reason
+    /// to exist is that the production export's download side is unreachable
+    /// from in-page test code, so a round-trip test cannot otherwise obtain
+    /// a real <c>.eds</c> envelope to feed back into
+    /// <see cref="ImportDiskGuidedFromStreamAsync"/>. Caller invariant and
+    /// recipient-identity validation are identical to the download variant.
+    /// </para>
+    /// </summary>
+    internal async Task<byte[]> ExportDiskToPubkeyBytesAsync(
+        string recipientX25519PublicKeyBase64,
+        string recipientCredentialId,
+        CancellationToken cancellationToken = default)
+    {
+        var sessionId = NextSessionId();
+        try
+        {
+            var size = await WithPubkeyExportEnvelopeAsync(
+                recipientX25519PublicKeyBase64,
+                recipientCredentialId,
+                (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportDiskToBytesSessionAsync(
+                    metadataJson, wrapKey, sessionId),
+                cancellationToken);
+
+            var envelope = new byte[size];
+            var offset = 0;
+            while (offset < size)
+            {
+                var read = SqliteWasmWorkerBridge.ReadExportBytes(
+                    sessionId, offset, envelope.AsSpan(offset));
+                if (read <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"ExportDiskToPubkeyBytesAsync: ReadExportBytes returned {read} at " +
+                        $"offset {offset} of {size}.");
+                }
+                offset += read;
+            }
+            return envelope;
+        }
+        finally
+        {
+            SqliteWasmWorkerBridge.DiscardExportBytes(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Shared v3 pubkey-export assembly: validate the recipient identity,
+    /// require Encrypted+Unlocked, generate K_wrap, ECIES-wrap it to the
+    /// recipient pubkey, build the metadata JSON, then hand
+    /// (metadataJson, K_wrap) to <paramref name="ship"/> — the only step
+    /// that differs between the anchor-download path and the bytes-return
+    /// test seam. K_wrap is zeroed on every exit (success or throw).
+    /// </summary>
+    private async Task<TResult> WithPubkeyExportEnvelopeAsync<TResult>(
+        string recipientX25519PublicKeyBase64,
+        string recipientCredentialId,
+        Func<string, ArraySegment<byte>, Task<TResult>> ship,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(recipientX25519PublicKeyBase64))
         {
             throw new ArgumentException(
@@ -595,13 +675,12 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         if (!current.Encrypted || !current.Unlocked)
         {
             throw new InvalidOperationException(
-                "ExportDiskToPubkeyAndDownloadAsync requires Encrypted + Unlocked — call UnlockAsync first.");
+                "Pubkey export requires Encrypted + Unlocked — call UnlockAsync first.");
         }
 
-        // Same K_wrap generation + ECIES wrap as the byte[] path. The
-        // wrap key is held in C# only long enough to ship to the worker;
-        // the worker side wipes its copy after the chunked rekey loop
-        // finishes.
+        // K_wrap generation + ECIES wrap. The wrap key is held in C# only
+        // long enough to ship to the worker; the worker side wipes its copy
+        // after the chunked rekey loop finishes.
         var wrapKeyMem = await _cryptoProvider.GenerateContentKeyAsync();
         var wrapKey = wrapKeyMem.ToArray();
         try
@@ -611,7 +690,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             if (!wrappedResult.Success || wrappedResult.Value is null)
             {
                 throw new InvalidOperationException(
-                    $"ExportDiskToPubkeyAndDownloadAsync: ECIES wrap of K_wrap failed " +
+                    $"Pubkey export: ECIES wrap of K_wrap failed " +
                     $"({wrappedResult.ErrorCode}).");
             }
             var wrapped = wrappedResult.Value;
@@ -628,13 +707,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             };
             var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
 
-            var ok = await SqliteWasmWorkerBridge.ExportDiskToDownloadAsync(
-                filename, metadataJson, new ArraySegment<byte>(wrapKey));
-            if (!ok)
-            {
-                throw new InvalidOperationException(
-                    "ExportDiskToPubkeyAndDownloadAsync: bridge reported failure.");
-            }
+            return await ship(metadataJson, new ArraySegment<byte>(wrapKey));
         }
         finally
         {

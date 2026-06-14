@@ -93,6 +93,21 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbStreaming.Name, () => singleDbStreaming.RunAsync()));
 
+                    // Streaming cross-key guided import — the .eds rebind
+                    // path. Plants the recipient X25519 keypair under the PRF
+                    // convention id (needs IPrfService for the salt), exports
+                    // a real envelope via the bytes seam, then guided-imports
+                    // it under a different vfsKey + credential. Closes the
+                    // browser-E2E gap from c239c23.
+                    var prfService = services.GetService(typeof(IPrfService)) as IPrfService;
+                    if (prfService is not null)
+                    {
+                        var guidedCrossKey = new DiskImportGuidedCrossKeyStreamingTest(
+                            prfFactory, databaseService, provider, prfService, session);
+                        _entries.Add(new TestEntry(
+                            "VFS Encryption", guidedCrossKey.Name, () => guidedCrossKey.RunAsync()));
+                    }
+
                     // Multi-DB .dbs envelope streaming import round-trip
                     // — the page emits this envelope from the checkbox
                     // export selector when ≥ 2 DBs are picked; the import

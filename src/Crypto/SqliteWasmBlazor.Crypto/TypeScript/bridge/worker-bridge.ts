@@ -19,6 +19,11 @@ interface IMemoryView {
     slice(): Uint8Array;
     slice(start: number): Uint8Array;
     slice(start: number, end: number): Uint8Array;
+    // Write side of the dotnet MemoryView — copies `source` into the managed
+    // Span this view wraps. Only valid while the originating synchronous
+    // JSImport call is on the stack (the Span is unpinned on return).
+    set(source: Uint8Array, targetOffset?: number): void;
+    readonly byteLength: number;
 }
 
 let worker: Worker | null = null;
@@ -242,6 +247,60 @@ export function exportDiskToDownload(
         triggerEnvelopeDownload(filename, blob);
         return true;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Test/diagnostic export-to-bytes — assembles the identical v3 envelope Blob
+// as {@link exportDiskToDownload}, then makes the bytes drainable by C#
+// instead of triggering the anchor-click download. The whole envelope is
+// materialised in memory (the very thing the streaming download path avoids),
+// so this exists ONLY so in-page round-trip tests can feed a real export back
+// into the guided import. `Task<byte[]>` is not a supported JS-interop return
+// shape, so the protocol is: stash bytes → return length → C# reads chunks
+// into a MemoryView → discard. See the C# JSImports
+// `SqliteWasmWorkerBridge.{ExportDiskToBytesSessionAsync,ReadExportBytes,DiscardExportBytes}`.
+// ---------------------------------------------------------------------------
+
+const exportByteStash = new Map<number, Uint8Array>();
+
+export function exportDiskToBytesSession(
+    metadataJson: string,
+    kWrapView: IMemoryView,
+    sessionId: number,
+): Promise<number> {
+    if (exportByteStash.has(sessionId)) {
+        return Promise.reject(new Error(
+            `exportDiskToBytesSession: sessionId ${sessionId} already in use`));
+    }
+    return _assembleEnvelopeStreamed(metadataJson, kWrapView)
+        .then((blob) => blob.arrayBuffer())
+        .then((buf) => {
+            const bytes = new Uint8Array(buf);
+            exportByteStash.set(sessionId, bytes);
+            return bytes.length;
+        });
+}
+
+export function readExportBytes(
+    sessionId: number,
+    offset: number,
+    destView: IMemoryView,
+): number {
+    const bytes = exportByteStash.get(sessionId);
+    if (!bytes) {
+        throw new Error(`readExportBytes: unknown sessionId ${sessionId}`);
+    }
+    const remaining = bytes.length - offset;
+    if (remaining <= 0) {
+        return 0;
+    }
+    const n = Math.min(destView.byteLength, remaining);
+    destView.set(bytes.subarray(offset, offset + n));
+    return n;
+}
+
+export function discardExportBytes(sessionId: number): void {
+    exportByteStash.delete(sessionId);
 }
 
 /**
@@ -708,6 +767,9 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     sendToWorker,
     sendBinaryToWorker,
     exportDiskToDownload,
+    exportDiskToBytesSession,
+    readExportBytes,
+    discardExportBytes,
     blobSessionOpen,
     blobSessionAppend,
     blobSessionDiscard,

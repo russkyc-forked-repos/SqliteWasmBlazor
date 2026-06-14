@@ -1003,6 +1003,46 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
     /// <summary>
+    /// Test/diagnostic variant of <see cref="ExportDiskToDownloadAsync"/>:
+    /// assembles the identical v3 envelope Blob, materialises it into a JS
+    /// byte stash keyed by <paramref name="sessionId"/>, and resolves with
+    /// the envelope length. The caller then drains the stash via
+    /// <see cref="ReadExportBytes"/> and frees it via
+    /// <see cref="DiscardExportBytes"/>.
+    /// <para>
+    /// Materialising the whole envelope on the heap is the very thing the
+    /// streaming download path exists to avoid, so this is intended ONLY for
+    /// in-page round-trip tests that must feed a real export back into the
+    /// guided import (whose download side is unreachable from test code).
+    /// <c>Task&lt;byte[]&gt;</c> isn't a supported JS-interop return shape
+    /// (SYSLIB1072), hence the length + chunked-MemoryView-read protocol.
+    /// See <c>EncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyBytesAsync</c>.
+    /// </para>
+    /// </summary>
+    [JSImport("exportDiskToBytesSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ExportDiskToBytesSessionAsync(
+        string metadataJson,
+        [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap,
+        int sessionId);
+
+    /// <summary>
+    /// Copies up to <c>dest.Length</c> bytes of the stashed envelope
+    /// (from <see cref="ExportDiskToBytesSessionAsync"/>) starting at
+    /// <paramref name="offset"/> into <paramref name="dest"/>, returning the
+    /// number copied. Synchronous so the <see cref="Span{T}"/> MemoryView
+    /// stays valid for the JS-side write.
+    /// </summary>
+    [JSImport("readExportBytes", "sqliteWasmWorker")]
+    internal static partial int ReadExportBytes(
+        int sessionId,
+        int offset,
+        [JSMarshalAs<JSType.MemoryView>] Span<byte> dest);
+
+    /// <summary>Frees the stashed envelope bytes for <paramref name="sessionId"/>.</summary>
+    [JSImport("discardExportBytes", "sqliteWasmWorker")]
+    internal static partial void DiscardExportBytes(int sessionId);
+
+    /// <summary>
     /// Streaming disk-import — preflight. Builds a Blob from the parts
     /// previously appended to <paramref name="sessionId"/> and posts it to
     /// the worker, which AEAD-verifies slot 0 of each file under
