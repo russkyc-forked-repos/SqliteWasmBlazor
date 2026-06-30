@@ -2,12 +2,16 @@
 
 All notable changes to SqliteWasmBlazor are documented in this file.
 
-## Development Update
+## Version 0.9.2-pre
 
-> **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard recently when Anthropic made their services more or less unusable for my workflow. To get things moving again, I've switched my development pipeline to use **Google Antigravity (agy)**. The transition is complete, and development is fully back on track!
+### A Note on Development Delay & Tooling Change
+> **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard recently when Anthropic made their services more or less unusable for my workflow. To get things moving again, I've switched my development pipeline to use **Google Antigravity (agy)**. The transition is complete, the codebase has undergone a full independent audit, and development is fully back on track!
 
-### Documentation & Fixes
-- **Quick Start (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
+### New Features & Fixes
+- **Streaming Export/Import:** Replaced the memory-heavy byte array exports with an optimized streaming architecture for `SqliteWasmBlazor.Crypto`. This prevents Out-Of-Memory (OOM) errors in browsers and mobile devices when handling large encrypted databases.
+- **Critical Fix (Streaming Data Loss):** Fixed a critical flaw in the streaming implementation where uncheckpointed WAL file data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
+- **Formal Verification (Tamarin):** Successfully achieved 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover. 
+- **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
 
 ## Version 0.9.0-pre
 
