@@ -126,15 +126,6 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
                 await ctx.SaveChangesAsync();
             }
 
-            // Force-close the open DB so WAL is checkpointed into the main
-            // file. The EF provider keeps the SQLite connection pooled open,
-            // so Dispose alone leaves rows in an uncheckpointed .db-wal slot;
-            // the disk export reads only the main-file page slices
-            // (exportDiskStreamHandler walks listDatabases(), never .db-wal),
-            // so without this the envelope would capture a tableless DB.
-            // UnlockAsync re-installs the same key after the close. Mirrors
-            // the reopen pattern in SyntheticPrfSeedRoundTripTest.
-            await _session.UnlockAsync(vfsKeyA);
 
             // ---- Export the real v3 envelope to the recipient pubkey -------
             byte[] envelope;

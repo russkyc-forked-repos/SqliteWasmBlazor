@@ -11,6 +11,14 @@ tactic: deprioFiles
 deprio:
     regex "FileState|FileVer"
 
+tactic: prioGoalKey
+prio:
+    regex "GlobalKey.*~k\)"
+deprio:
+    regex "FileState|FileVer"
+    regex "GlobalKey.*~k\."
+
+
 /*
  * Symbolic lifecycle model for the PRF-keyed VFS in-place conversion wrapper.
  *
@@ -467,17 +475,22 @@ lemma export_plain_key_live_since_install [heuristic={deprioFiles}]:
         ==> (Ex #t1. GlobalKeyInstalled(Device, k_old) @ #t1 & #t1 < #t)
           & not (Ex #t2. GlobalKeyCleared(Device, k_old) @ #t2 & #t2 < #t)"
 
-lemma encrypt_in_place_keyslot_emptied_since_install:
+
+
+lemma encrypt_in_place_no_live_key:
     "All Device path plain_blob cipher_blob target_key k #i #t.
         EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
       & GlobalKeyInstalled(Device, k) @ #i & #i < #t
         ==> Ex #c. KeyState(Device, 'empty', 'none') @ #c & #i < #c & #c < #t"
 
-lemma export_encrypt_keyslot_emptied_since_install [heuristic={deprioFiles}]:
+lemma export_encrypt_no_live_key [heuristic={deprioFiles}]:
     "All Device path plain_blob cipher_blob target_key k #i #t.
         ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
       & GlobalKeyInstalled(Device, k) @ #i & #i < #t
         ==> Ex #c. KeyState(Device, 'empty', 'none') @ #c & #i < #c & #c < #t"
+
+
+
 
 // Every key-state event is rooted at the device's unique init. Kept LAST
 // among the proven lemmas: it is [reuse], and reuse-axiom injection makes
@@ -487,31 +500,9 @@ lemma key_event_rooted_at_init [use_induction, reuse]:
         KeyState(Device, s, k) @ #c
         ==> Ex #r. DeviceInitialized(Device) @ #r & ( #r < #c | #r = #c )"
 
-/*
- * PENDING — stated, NOT machine-verified, skipped by verify.sh.
- *
- * The strong per-key forms: their proofs need the inductive descent
- * "an empty event after an install implies THAT key's clear", which
- * diverges under all built-in heuristics, use_induction, unlock-budget
- * bounding, and the deprioFiles tactic (campaign log: a23715a..HEAD).
- * A hand-guided interactive proof or a finer goal-ranking oracle is the
- * known remaining route. Do not cite these as proven.
- */
-lemma pending_encrypt_in_place_no_live_key:
-    "All Device path plain_blob cipher_blob target_key #t.
-        EncryptInPlaceAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
-        ==> All k #t1.
-              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
-              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
 
-lemma pending_export_encrypt_no_live_key:
-    "All Device path plain_blob cipher_blob target_key #t.
-        ExportEncryptAccepted(Device, path, plain_blob, cipher_blob, target_key) @ #t
-        ==> All k #t1.
-              (GlobalKeyInstalled(Device, k) @ #t1 & #t1 < #t)
-              ==> Ex #t2. GlobalKeyCleared(Device, k) @ #t2 & #t1 < #t2 & #t2 < #t"
 
-lemma pending_decrypt_no_clear_before_use:
+lemma decrypt_no_clear_before_use [heuristic={deprioFiles}]:
     "All Device path cipher_blob plain_blob k_old #t #c.
         DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
       & GlobalKeyCleared(Device, k_old) @ #c

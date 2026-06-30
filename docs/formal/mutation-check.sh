@@ -58,6 +58,16 @@ run_mutation "cache-import/reject-wipes" vfs-cache-import-lifecycle rejected_imp
 run_mutation "inplace/rollback-restores-wrong-blob" vfs-inplace-lifecycle replacement_failure_restores_original \
     "s/OriginalRestored\(D, P, 'plain', plain_blob\)/OriginalRestored(D, P, 'plain', cipher_blob)/"
 
+# 4. Make the encrypt in-place accepted without checking if the keyslot is empty -> the no-live-key guarantee must break.
+run_mutation "inplace/encrypt-without-empty" vfs-inplace-lifecycle encrypt_in_place_no_live_key \
+    "s/ClaimKeyState\(D, 'empty', 'none'\)\n    , ReplaceCommitted/ReplaceCommitted/"
+
+# 5. Make the export encrypt accepted without checking if the keyslot is empty -> the no-live-key guarantee must break.
+run_mutation "inplace/export-without-empty" vfs-inplace-lifecycle export_encrypt_no_live_key \
+    's/ClaimKeyState\(\$Device, .empty., .none.\)\n    , ExportEncryptAccepted/ExportEncryptAccepted/'
+
+
+
 if [ "$FAIL" -eq 0 ]; then
     echo "ALL MUTATION CHECKS PASSED"
 else

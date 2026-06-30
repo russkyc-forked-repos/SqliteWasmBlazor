@@ -919,6 +919,7 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
         debugLog(op, 'export.dbs', { count: names.length });
 
         for (const name of names) {
+            await closeDatabase(name);
             const dbPath = `/databases/${name}`;
             const fileSize = poolUtil.getFileSize(dbPath);
             if (fileSize === 0 || fileSize % ENCRYPTED_SLOT_SIZE !== 0) {
