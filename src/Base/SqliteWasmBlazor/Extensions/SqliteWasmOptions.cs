@@ -15,4 +15,10 @@ public sealed class SqliteWasmOptions : SqliteWasmAssetOptions
     {
         AssetRoot = "_content/SqliteWasmBlazor/";
     }
+
+    /// <summary>
+    /// Enables logging of executed SQL commands and parameters to the browser console.
+    /// This is disabled by default to prevent leaking sensitive application schema or data.
+    /// </summary>
+    public bool EnableCommandSqlLogging { get; set; }
 }

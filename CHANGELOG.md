@@ -12,6 +12,7 @@ All notable changes to SqliteWasmBlazor are documented in this file.
 - **Critical Fix (Streaming Data Loss):** Fixed a critical flaw in the streaming implementation where uncheckpointed WAL file data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
 - **Formal Verification (Tamarin):** Successfully achieved 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover. 
 - **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
+- **Feature (#18):** Made SQL command logging strictly opt-in via `SqliteWasmOptions.EnableCommandSqlLogging` to prevent sensitive schema/data leakage in production (Reported & suggested by @bearyung).
 
 ## Version 0.9.0-pre
 

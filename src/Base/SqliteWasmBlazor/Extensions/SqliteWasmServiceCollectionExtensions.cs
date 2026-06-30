@@ -65,6 +65,7 @@ public static class SqliteWasmServiceCollectionExtensions
     {
         var options = services.GetRequiredService<IOptions<SqliteWasmOptions>>().Value;
         var reporter = services.GetRequiredService<IDbInitializationReporter>();
+        ConfigureCommandLogging(options);
 
         reporter.Report(DbInitState.INITIALIZING);
 
@@ -101,6 +102,7 @@ Please close any other tabs running this application and refresh the page.
         var reporter = services.GetRequiredService<IDbInitializationReporter>();
         var status = services.GetRequiredService<IDbInitializationStatus>();
         var options = services.GetRequiredService<IOptions<SqliteWasmOptions>>().Value;
+        ConfigureCommandLogging(options);
 
         // Skip if a previous boot stage already failed — don't overwrite that diagnosis.
         if (status.State is DbInitState.TAB_LOCKED
@@ -189,6 +191,11 @@ Please close any other tabs running this application and refresh the page.
         {
             reporter.Report(DbInitState.FAILED, new GenericInitFailure(databaseName, ex));
         }
+    }
+
+    private static void ConfigureCommandLogging(SqliteWasmOptions options)
+    {
+        SqliteWasmCommand.EnableCommandSqlLogging = options.EnableCommandSqlLogging;
     }
 
     private static string GetDatabaseName<TContext>(IServiceProvider services, Exception? _)
