@@ -38,16 +38,20 @@ typedef uint64_t sqlite3_uint64;
 // Version Information
 //=============================================================================
 
+// Version must track the SQLite build shipped by @sqlite.org/sqlite-wasm
+// (the worker-side engine that actually executes SQL). Microsoft.Data.Sqlite
+// gates features on sqlite3_libversion_number, so a mismatch would make the
+// managed layer reason about a different engine than the one answering.
 const char* sqlite3_libversion(void) {
-    return "3.50.4";
+    return "3.53.0";
 }
 
 const char* sqlite3_sourceid(void) {
-    return "stub-wasm-worker-bridge-2025";
+    return "stub-wasm-worker-bridge";
 }
 
 int sqlite3_libversion_number(void) {
-    return 3050004;
+    return 3053000;
 }
 
 int sqlite3_threadsafe(void) {
