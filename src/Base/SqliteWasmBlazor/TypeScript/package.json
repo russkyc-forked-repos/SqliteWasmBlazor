@@ -19,14 +19,14 @@
     "@sqlitewasmblazor/crypto-core": "file:../TypeScript-Crypto",
     "@sqlitewasmblazor/worker-common": "file:../TypeScript-Common",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
-    "msgpackr": "2.0.4"
+    "msgpackr": "2.0.5"
   },
   "devDependencies": {
-    "esbuild": "0.28.1",
-    "eslint": "10.7.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.8.1",
     "patch-package": "8.0.1",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.64.0",
+    "typescript-eslint": "8.67.0",
     "vitest": "4.1.10"
   }
 }

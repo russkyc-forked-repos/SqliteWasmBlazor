@@ -28,8 +28,11 @@ Exporting used to materialise the entire database as a `byte[]`, hand it across 
 
 ### Dependencies & Tooling
 
-- .NET / EF Core `10.0.10`, MudBlazor `9.7.0`, MessagePack `3.1.8`, R3 `1.3.1`, Playwright `1.61.0`, Test SDK `18.8.1`, PolySharp `1.16.0`.
-- TypeScript `6.0.3`, ESLint `10.7.0` + typescript-eslint `8.64.0`, msgpackr `2.0.4`, esbuild `0.28.1`, vitest `4.1.10`.
+- .NET / EF Core `10.0.11`, MudBlazor `9.8.0`, MessagePack `3.1.8`, R3 `1.3.1`, Playwright `1.62.0`, Test SDK `18.9.0`, xunit.runner.visualstudio `4.0.0`, PolySharp `1.16.0`, BouncyCastle `2.7.0`, SourceLink `10.0.400`.
+- Build now targets the .NET SDK `10.0.400` band (`global.json`), on runtime `10.0.11`.
+- Roslyn (`Microsoft.CodeAnalysis.*`) moves to `5.6.0` — the newest published Roslyn, and below the `5.9.0` compiler the SDK ships, so generators and analyzers never ask for a Roslyn newer than the one loading them.
+- TypeScript `6.0.3`, ESLint `10.8.1` + typescript-eslint `8.67.0`, msgpackr `2.0.5`, esbuild `0.28.2`, vitest `4.1.10`.
+- TypeScript stays on the 6.0 line: typescript-eslint 8.x peer-caps `typescript <6.1.0`, so TS 7 (the native port) waits on typescript-eslint support.
 - The `@sqlite.org/sqlite-wasm` patch is ported to `3.53.0-build1` and adds `getFileSize` / `exportFileSlice` to the vendor SAHPool VFS, which is what lets the plain plane export in slices.
 - The native stub now reports SQLite `3.53.0`, matching the worker engine that actually answers — `Microsoft.Data.Sqlite` gates features on `sqlite3_libversion_number`.
 - `SQLitePCLRaw.lib.e_sqlite3` moves to the SQLite-versioned `3.53.3` package. Its `.a` is excluded and replaced by the stub, so only the provider's P/Invoke surface matters.

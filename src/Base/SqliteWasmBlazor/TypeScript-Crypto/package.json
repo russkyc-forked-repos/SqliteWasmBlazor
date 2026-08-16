@@ -19,10 +19,10 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "esbuild": "0.28.1",
-    "eslint": "10.7.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.8.1",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.64.0",
+    "typescript-eslint": "8.67.0",
     "vitest": "4.1.10"
   },
   "dependencies": {
