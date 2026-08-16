@@ -4,14 +4,27 @@ All notable changes to SqliteWasmBlazor are documented in this file.
 
 ## Version 0.9.3-pre
 
-### Staged Downloads — Export Bytes Never Enter Memory
+### A Note on the Development Delay
+> **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard when Anthropic made their services more or less unusable for my workflow. That situation has since been resolved — development is back on **Claude (Opus 5 / Fable 5)** and fully on track again!
 
-Database downloads now stage through OPFS instead of travelling as messages. The worker writes the export into a staging file via a synchronous access handle — the same primitive the import path already uses for rekey-on-write — and the bridge hands the browser a disk-backed `File`. Blobs built from `ArrayBuffer`s are held in process memory by WebKit, which is what OOM-killed iPhone Safari on large exports; a `File` backed by an OPFS entry is disk-backed in every engine, so peak memory stays flat regardless of database size.
+### Memory-Flat Exports — OPFS Staging Replaces `byte[]` Downloads
 
-- **Replaces** the previous `streamChunk` postMessage pipeline (worker → main thread → Blob parts) and its backpressure credit gate for every export path: single `.db`, multi-DB `.dbs` envelope, and the encrypted-disk `.eds` envelope.
+Exporting used to materialise the entire database as a `byte[]`, hand it across the JS boundary, and wrap it in a Blob. That is fine for a few megabytes and fatal on mobile, where Safari kills the page rather than serve a large one. Exports now stage through OPFS instead: the worker writes the bytes into a staging file via a synchronous access handle — the same primitive the import path already uses for rekey-on-write — and the browser saves from that disk-backed `File`. Blobs built from `ArrayBuffer`s are held in process memory by WebKit; a `File` backed by an OPFS entry is disk-backed in every engine, so peak memory stays flat regardless of database size.
+
+- Covers every export shape: single `.db`, the multi-DB `.dbs` envelope, and the encrypted-disk `.eds` envelope in `SqliteWasmBlazor.Crypto`.
 - **New on the plain plane:** `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(databaseName, filename)` — a memory-flat `.db` download without the Crypto package. The worker closes the database first for a consistent snapshot, so the next context re-opens it.
+- **Critical fix (export data loss):** uncheckpointed WAL data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
 - **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
-- Staging files are swept on worker init rather than after the click: an anchor download drains the `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
+- Staging files are swept on worker start rather than after the click: an anchor download drains its `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
+
+### Formal Verification (Tamarin)
+
+100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover.
+
+### Other Fixes
+
+- **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
+- **Feature (#18):** Made SQL command logging strictly opt-in via `SqliteWasmOptions.EnableCommandSqlLogging` to prevent sensitive schema/data leakage in production (Reported & suggested by @bearyung).
 
 ### Dependencies & Tooling
 
@@ -21,18 +34,6 @@ Database downloads now stage through OPFS instead of travelling as messages. The
 - The native stub now reports SQLite `3.53.0`, matching the worker engine that actually answers — `Microsoft.Data.Sqlite` gates features on `sqlite3_libversion_number`.
 - `SQLitePCLRaw.lib.e_sqlite3` moves to the SQLite-versioned `3.53.3` package. Its `.a` is excluded and replaced by the stub, so only the provider's P/Invoke surface matters.
 - `build_stub.sh` falls back to the .NET wasm-tools workload's Emscripten pack when no standalone emsdk is present — the same toolchain the Blazor native relink uses.
-
-## Version 0.9.2-pre
-
-### A Note on Development Delay & Tooling Change
-> **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard recently when Anthropic made their services more or less unusable for my workflow. To get things moving again, I've switched my development pipeline to use **Google Antigravity (agy)**. The transition is complete, the codebase has undergone a full independent audit, and development is fully back on track!
-
-### New Features & Fixes
-- **Streaming Export/Import:** Replaced the memory-heavy byte array exports with an optimized streaming architecture for `SqliteWasmBlazor.Crypto`. This prevents Out-Of-Memory (OOM) errors in browsers and mobile devices when handling large encrypted databases.
-- **Critical Fix (Streaming Data Loss):** Fixed a critical flaw in the streaming implementation where uncheckpointed WAL file data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
-- **Formal Verification (Tamarin):** Successfully achieved 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover. 
-- **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
-- **Feature (#18):** Made SQL command logging strictly opt-in via `SqliteWasmOptions.EnableCommandSqlLogging` to prevent sensitive schema/data leakage in production (Reported & suggested by @bearyung).
 
 ## Version 0.9.0-pre
 
