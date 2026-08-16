@@ -39,6 +39,11 @@ internal sealed class SqlQueryResult
     /// Schema version byte (0x01 = v1) of a present manifest.
     /// </summary>
     public int? ManifestSchemaVersion { get; set; }
+    /// <summary>
+    /// Set by the JSON-only response of <c>exportDbToStaging</c> — the
+    /// OPFS staging file name to hand to <c>downloadStagedExport</c>.
+    /// </summary>
+    public string? StagingFile { get; set; }
 }
 
 /// <summary>
@@ -717,6 +722,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
                     ManifestState = response.ManifestState,
                     ManifestBody = response.ManifestBody,
                     ManifestSchemaVersion = response.ManifestSchemaVersion,
+                    StagingFile = response.StagingFile,
                 };
 
                 tcs.TrySetResult(result);
@@ -1083,15 +1089,27 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// <summary>
     /// Streaming single-DB export. Worker reads the SAH file in slot-batches,
     /// dispatches by <c>hasGlobalKey()</c> (Plain → verbatim; Encrypted+
-    /// Unlocked → decrypt to plain pages), emits chunks via
-    /// <c>streamChunk</c> postMessage. Bridge composes a single Blob (no
+    /// Unlocked → decrypt to plain pages), writes into an OPFS staging file.
+    /// Bridge lifts the staging entry as a disk-backed <c>File</c> (no
     /// envelope wrapper — raw <c>.db</c> bytes a SQLite tool can open) and
     /// triggers anchor-click download. Caller refuses Encrypted+Locked.
     /// </summary>
     [JSImport("exportDatabaseToDownload", "sqliteWasmWorker")]
-    internal static partial Task<bool> ExportDatabaseToDownloadAsync(
+    internal static partial Task<bool> ExportDatabaseToDownloadJsAsync(
         string filename,
         string databaseName);
+
+    /// <summary>
+    /// Anchor-click download of a finished OPFS staging file produced by
+    /// the worker's <c>exportDbToStaging</c> request. The staging entry
+    /// backs the download as a disk-backed <c>File</c>, so the bytes never
+    /// enter managed or main-thread JS memory; the worker's init-time
+    /// sweep collects the entry next session.
+    /// </summary>
+    [JSImport("downloadStagedExport", "sqliteWasmWorker")]
+    internal static partial Task<bool> DownloadStagedExportAsync(
+        string stagingFile,
+        string filename);
 
     /// <summary>
     /// Streaming multi-DB plain export — emits a <c>.dbs</c> envelope
@@ -1159,6 +1177,10 @@ internal sealed class WorkerResponse
     /// Schema version, see <see cref="SqlQueryResult.ManifestSchemaVersion"/>.
     /// </summary>
     public int? ManifestSchemaVersion { get; set; }
+    /// <summary>
+    /// Set by <c>exportDbToStaging</c>, see <see cref="SqlQueryResult.StagingFile"/>.
+    /// </summary>
+    public string? StagingFile { get; set; }
 }
 
 /// <summary>

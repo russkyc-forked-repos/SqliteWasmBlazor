@@ -308,6 +308,7 @@ internal class TestFactory
         Add("Import/Export", new RawDatabaseImportWithBackupTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseBackupRestoreOnFailureTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseExportReOpenTest(factory, databaseService));
+        Add("Import/Export", new RawDatabaseExportToDownloadTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseImportIntoNewTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseImportIncompatibleSchemaTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseAutoReOpenAfterImportTest(factory, databaseService));

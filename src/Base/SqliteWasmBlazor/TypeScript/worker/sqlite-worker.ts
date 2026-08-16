@@ -16,6 +16,7 @@ import {
     MODULE_NAME, bigIntUnpackr,
     setSqlite3, setPoolUtil, setBaseHref,
     bulkInsertRows, type BulkInsertHeader,
+    openExportStaging, sweepExportStaging,
 } from '@sqlitewasmblazor/worker-common';
 
 // Re-export mutable state references for local use
@@ -159,6 +160,15 @@ async function initializeSQLite() {
         // Grow pool if previously created with smaller capacity (initialCapacity only applies on first creation)
         await poolUtil.reserveMinimumCapacity(25);
 
+        // Drop export-staging leftovers from previous sessions. Staging
+        // files can't be deleted at download time (the anchor download
+        // drains the File lazily), so this sweep is their collection point.
+        try {
+            await sweepExportStaging();
+        } catch (err) {
+            logger.warn(MODULE_NAME, 'export-staging sweep failed:', err);
+        }
+
         logger.info(MODULE_NAME, 'OPFS SAHPool VFS installed successfully');
         logger.debug(MODULE_NAME, 'Available VFS:', sqlite3.capi.sqlite3_vfs_find(null));
 
@@ -301,6 +311,9 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             }
             return await exportDatabase(database!, mode);
         }
+
+        case 'exportDbToStaging':
+            return await exportDatabaseToStaging(database!);
 
         case 'importRows':
             if (!binaryPayload) {
@@ -874,6 +887,52 @@ async function exportDatabase(
     const raw: Uint8Array = poolUtil.exportFile(dbPath);
     logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw.length}B`);
     return { rawBinary: true, data: raw };
+}
+
+// One staging write per this many bytes — small enough that the worker's
+// transient JS-heap footprint stays negligible on memory-constrained
+// mobile browsers, large enough that SAH read/write round-trips don't
+// dominate export time.
+const EXPORT_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Plane-1 verbatim export into an OPFS staging file — the download-sized
+ * sibling of <see cref="exportDatabase"/>. Copies the raw OPFS bytes in
+ * EXPORT_CHUNK_BYTES slices via the pool's exportFileSlice (patch-provided,
+ * see patches/@sqlite.org+sqlite-wasm+*.patch), so neither the worker nor
+ * the main thread ever holds the whole file. Returns the staging file name;
+ * the bridge lifts it as a disk-backed File for the anchor download and the
+ * init-time sweep collects it next session.
+ */
+async function exportDatabaseToStaging(dbName: string) {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    const dbPath = `/databases/${dbName}`;
+    if (!poolUtil.getFileNames().includes(dbPath)) {
+        throw new Error(`exportDbToStaging: no existing DB at ${dbPath}`);
+    }
+    await closeDatabase(dbName);
+
+    const fileSize: number = poolUtil.getFileSize(dbPath);
+    if (fileSize === 0) {
+        throw new Error(`exportDbToStaging: ${dbName} is empty`);
+    }
+
+    const staging = await openExportStaging();
+    try {
+        for (let offset = 0; offset < fileSize; offset += EXPORT_CHUNK_BYTES) {
+            const length = Math.min(EXPORT_CHUNK_BYTES, fileSize - offset);
+            const chunk: Uint8Array = poolUtil.exportFileSlice(dbPath, offset, length);
+            staging.write(chunk);
+        }
+        staging.finish();
+    } catch (err) {
+        await staging.abort();
+        throw err;
+    }
+    logger.info(MODULE_NAME, `✓ Exported ${dbName} to staging (${fileSize}B)`);
+    return { stagingFile: staging.name };
 }
 
 /**

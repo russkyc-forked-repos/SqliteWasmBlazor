@@ -30,22 +30,57 @@ let worker: Worker | null = null;
 
 /**
  * JS-side stream handler registry — separate from the C# request-id space.
- * Streaming worker calls (currently only the encrypted-disk export) post a
- * sequence of `streamChunk` messages followed by `streamDone`, all keyed by
- * `streamId`. Until streamDone arrives the handler stays installed,
- * accumulating per-DB output as standalone Blobs so each one can be
- * dropped from JS heap and disk-backed by Safari independently.
+ * Streaming worker calls answer with exactly one `streamDone` (or
+ * `streamError`) keyed by `streamId`. Export operations never send bytes
+ * through postMessage: the worker writes its output into an OPFS staging
+ * file and streamDone carries the staging file name (plus a per-file
+ * offset table for the disk export), which the bridge lifts as a
+ * disk-backed File for delivery.
  *
  * `streamId` is allocated from a negative-int counter so it never collides
  * with the C#-side `_nextRequestId` (which only increments positively).
  */
+interface StagedFileEntry {
+    name: string;
+    offset: number;
+    size: number;
+}
 interface StreamHandler {
-    onChunk(name: string, data: Uint8Array, isFirst: boolean, isLast: boolean): void;
-    onDone(result?: number): void;
+    onDone(result?: number, stagingFile?: string, files?: StagedFileEntry[]): void;
     onError(message: string): void;
 }
 const streamHandlers = new Map<number, StreamHandler>();
 let nextStreamId = -1;
+
+// Staging directory shared with the worker's export-staging module. The
+// bridge only ever reads finished staging files (and deletes them on the
+// test-only bytes path); sweep-on-worker-init owns regular cleanup.
+const EXPORT_STAGING_DIR = 'export-staging';
+
+/** Lift a finished staging file as a disk-backed File object. */
+async function stagedExportFile(name: string): Promise<File> {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(EXPORT_STAGING_DIR);
+    const fileHandle = await dir.getFileHandle(name);
+    return fileHandle.getFile();
+}
+
+/**
+ * Best-effort staging deletion — only safe once the file's bytes are fully
+ * materialised elsewhere (the test-only bytes path). Download paths must
+ * NOT call this: the anchor download drains the File lazily and deleting
+ * the OPFS entry underneath it would corrupt the download. Their staging
+ * files are collected by the worker's init sweep next session.
+ */
+async function deleteStagedExportFile(name: string): Promise<void> {
+    try {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(EXPORT_STAGING_DIR);
+        await dir.removeEntry(name);
+    } catch {
+        // Sweep on next worker init collects it.
+    }
+}
 
 /**
  * Create the Web Worker and wire up message handling.
@@ -85,9 +120,9 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
         }
 
         // Streaming responses — keyed by `streamId`, dispatched JS-side to
-        // a handler in `streamHandlers`. Worker emits a sequence of
-        // streamChunk → ... → streamDone (or streamError) all under the
-        // same streamId. C# never sees these messages directly.
+        // a handler in `streamHandlers`. Worker answers each streaming
+        // request with one streamDone (or streamError) under the same
+        // streamId. C# never sees these messages directly.
         if (event.data.streamId !== undefined) {
             const handler = streamHandlers.get(event.data.streamId);
             if (!handler) {
@@ -96,30 +131,14 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
                     event.data.streamId);
                 return;
             }
-            if (event.data.streamChunk === true) {
-                const isFirst = event.data.isFirst === undefined ? true : !!event.data.isFirst;
-                const isLast = event.data.isLast === undefined ? true : !!event.data.isLast;
-                handler.onChunk(
-                    event.data.name as string,
-                    event.data.data as Uint8Array,
-                    isFirst,
-                    isLast,
-                );
-                // Backpressure credit: tell the worker this chunk has been
-                // consumed (wrapped into a Blob part) so its export loop can
-                // release the next one. Workers predating the credit gate
-                // ignore unknown messages; new workers degrade gracefully if
-                // WE predate them — see worker/stream-credit.ts.
-                if (typeof event.data.seq === 'number') {
-                    worker!.postMessage({
-                        streamAck: true,
-                        streamId: event.data.streamId,
-                        seq: event.data.seq,
-                    });
-                }
-            } else if (event.data.streamDone === true) {
+            if (event.data.streamDone === true) {
                 handler.onDone(
-                    typeof event.data.result === 'number' ? event.data.result : undefined);
+                    typeof event.data.result === 'number' ? event.data.result : undefined,
+                    typeof event.data.stagingFile === 'string' ? event.data.stagingFile : undefined,
+                    Array.isArray(event.data.files)
+                        ? event.data.files as StagedFileEntry[]
+                        : undefined,
+                );
             } else if (event.data.streamError === true) {
                 handler.onError(
                     typeof event.data.error === 'string' ? event.data.error : 'unknown stream error');
@@ -219,31 +238,36 @@ export const logger = {
 };
 
 // ---------------------------------------------------------------------------
-// Chunked encrypted-disk export — worker → main thread → Blob download.
+// Chunked encrypted-disk export — worker → OPFS staging → File download.
 //
-// Worker emits per-DB ciphertext as a sequence of `streamChunk` messages
-// keyed by negative streamId. Bridge aggregates per-DB chunks into
-// per-file Blobs (browser disk-backs them on Safari), then composes the
-// final v3 envelope as a virtual-concat Blob of:
+// The worker rekeys every DB and writes the ciphertext contiguously into
+// an OPFS staging file, then reports the staging name plus a per-file
+// { name, offset, size } table via streamDone. The bridge lifts the
+// staging file as a disk-backed File and composes the final v3 envelope
+// as a virtual-concat Blob of:
 //
 //   <MessagePack header bytes (array(8) + 7 small fields)>
-//   <per-file array headers + name + bin headers + file Blob parts>
+//   <per-file array headers + name + bin headers + File.slice() parts>
 //
-// C# never sees a managed byte[] of the envelope. The download fires
-// from the bridge via anchor click; C# awaits a boolean result.
+// The ciphertext never occupies main-thread memory — File.slice() parts
+// stay disk-backed, which is what keeps iPhone Safari alive on large
+// exports (Blobs constructed from ArrayBuffers are memory-backed in
+// WebKit). C# never sees a managed byte[] of the envelope. The download
+// fires from the bridge via anchor click; C# awaits a boolean result.
 // ---------------------------------------------------------------------------
 
 /**
  * JSImport entry point — called by C# `ExportDiskToDownloadAsync`. Drives
- * the worker stream, composes the envelope Blob, triggers the download.
- * Returns `true` on completion.
+ * the worker staging export, composes the envelope Blob, triggers the
+ * download. Returns `true` on completion. The staging file backing the
+ * download is collected by the worker's init sweep next session.
  */
 export function exportDiskToDownload(
     filename: string,
     metadataJson: string,
     kWrapView: IMemoryView,
 ): Promise<boolean> {
-    return _assembleEnvelopeStreamed(metadataJson, kWrapView).then((blob) => {
+    return _assembleEnvelopeStaged(metadataJson, kWrapView).then(({ blob }) => {
         triggerEnvelopeDownload(filename, blob);
         return true;
     });
@@ -272,9 +296,12 @@ export function exportDiskToBytesSession(
         return Promise.reject(new Error(
             `exportDiskToBytesSession: sessionId ${sessionId} already in use`));
     }
-    return _assembleEnvelopeStreamed(metadataJson, kWrapView)
-        .then((blob) => blob.arrayBuffer())
-        .then((buf) => {
+    return _assembleEnvelopeStaged(metadataJson, kWrapView)
+        .then(async ({ blob, stagingFile }) => {
+            const buf = await blob.arrayBuffer();
+            // Bytes fully materialised — the staging file is no longer
+            // referenced and can be deleted immediately.
+            await deleteStagedExportFile(stagingFile);
             const bytes = new Uint8Array(buf);
             exportByteStash.set(sessionId, bytes);
             return bytes.length;
@@ -304,14 +331,16 @@ export function discardExportBytes(sessionId: number): void {
 }
 
 /**
- * Shared assembly path: drive the worker streaming export, accumulate each
- * rekeyed DB as a standalone Blob on the main thread, compose the
- * MessagePack envelope Blob via the positional encoder.
+ * Shared assembly path: drive the worker staging export, lift the staging
+ * file as a disk-backed File, compose the MessagePack envelope Blob from
+ * header bytes plus per-DB File.slice() segments via the positional
+ * encoder. The returned staging file name lets the test-only bytes path
+ * delete the staging entry once it has materialised the bytes.
  */
-function _assembleEnvelopeStreamed(
+function _assembleEnvelopeStaged(
     metadataJson: string,
     kWrapView: IMemoryView,
-): Promise<Blob> {
+): Promise<{ blob: Blob; stagingFile: string }> {
     if (!worker) {
         return Promise.reject(new Error('Worker not initialized'));
     }
@@ -327,58 +356,34 @@ function _assembleEnvelopeStreamed(
 
     const streamId = nextStreamId--;
     const kWrap = kWrapView.slice();
-    const fileParts: { name: string; size: number; blob: Blob }[] = [];
-    // Worker streams each DB as N slot-batch chunks. Aggregate by name
-    // until isLast, then compose a per-DB Blob from the chunk list. Map
-    // preserves insertion order so file order in the envelope matches
-    // worker's listDatabases() order.
-    const pendingFiles = new Map<string, { chunks: Blob[]; totalSize: number }>();
 
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk(name, data, isFirst, isLast) {
-                let pending = pendingFiles.get(name);
-                if (isFirst) {
-                    if (pending !== undefined) {
-                        reject(new Error(
-                            `exportDiskToDownload: chunk(isFirst=true) for ${name} ` +
-                            `but ${pending.chunks.length} chunks already accumulated`));
-                        return;
-                    }
-                    pending = { chunks: [], totalSize: 0 };
-                    pendingFiles.set(name, pending);
-                }
-                if (pending === undefined) {
+            onDone(_result, stagingFile, files) {
+                streamHandlers.delete(streamId);
+                if (stagingFile === undefined || files === undefined) {
                     reject(new Error(
-                        `exportDiskToDownload: chunk for ${name} without prior isFirst`));
+                        'exportDiskToStaging: streamDone missing stagingFile/files'));
                     return;
                 }
-                // Wrap each rekeyed chunk as its own Blob. Dropping the
-                // Uint8Array reference (returning from this callback) lets
-                // Safari hold the bytes in a disk-backed Blob instead of
-                // pinning them in JS heap — that's the central memory win.
-                // Cast: postMessage payload is Uint8Array<ArrayBufferLike> in TS 5.x,
-                // but BlobPart requires the more specific ArrayBuffer. The runtime
-                // buffer is always ArrayBuffer (worker constructs the chunk via
-                // exportFileSlice → new Uint8Array(length)).
-                pending.chunks.push(new Blob([data as Uint8Array<ArrayBuffer>]));
-                pending.totalSize += data.length;
-                if (isLast) {
-                    fileParts.push({
-                        name,
-                        size: pending.totalSize,
-                        blob: new Blob(pending.chunks),
+                stagedExportFile(stagingFile)
+                    .then((file) => {
+                        // File.slice() segments stay backed by the OPFS
+                        // entry — composing them into the envelope Blob
+                        // adds no main-thread memory.
+                        const fileParts = files.map((f) => ({
+                            name: f.name,
+                            size: f.size,
+                            blob: file.slice(f.offset, f.offset + f.size),
+                        }));
+                        resolve({
+                            blob: composeEnvelopeBlob(meta, fileParts),
+                            stagingFile,
+                        });
+                    })
+                    .catch((e: unknown) => {
+                        reject(e instanceof Error ? e : new Error(String(e)));
                     });
-                    pendingFiles.delete(name);
-                }
-            },
-            onDone() {
-                streamHandlers.delete(streamId);
-                try {
-                    resolve(composeEnvelopeBlob(meta, fileParts));
-                } catch (e) {
-                    reject(e instanceof Error ? e : new Error(String(e)));
-                }
             },
             onError(message) {
                 streamHandlers.delete(streamId);
@@ -393,7 +398,7 @@ function _assembleEnvelopeStreamed(
         worker!.postMessage(
             {
                 streamId,
-                data: { type: 'exportDiskStream' },
+                data: { type: 'exportDiskToStaging' },
                 binaryPayload: kWrap.buffer,
             },
             [kWrap.buffer],
@@ -416,8 +421,9 @@ function _assembleEnvelopeStreamed(
  *   [6] CredentialIdHint (str, Base64)
  *   [7] Files (array of [name(str), bytes(bin)])
  *
- * Returns a virtual-concatenation Blob — the per-DB segments stay
- * referenced as standalone Blob parts so the browser can disk-back them.
+ * Returns a virtual-concatenation Blob — the per-DB segments are
+ * File.slice() parts backed by the OPFS staging entry, so the payload
+ * bytes never occupy main-thread memory.
  */
 function composeEnvelopeBlob(
     meta: {
@@ -541,10 +547,11 @@ export function importDiskStreamCommitFromSession(
 }
 
 /**
- * JSImport entry — multi-DB plain export. Drives the worker's <c>.dbs</c>
- * envelope assembly (Plain: verbatim per file; Encrypted+Unlocked: decrypt
- * per file), accumulates the streamed envelope bytes into one Blob,
- * triggers anchor-click download. C# never sees the bytes.
+ * JSImport entry — multi-DB plain export. The worker assembles the
+ * complete <c>.dbs</c> envelope (Plain: verbatim per file;
+ * Encrypted+Unlocked: decrypt per file) in an OPFS staging file; the
+ * bridge downloads the disk-backed File via anchor click. C# never sees
+ * the bytes and the envelope never occupies main-thread memory.
  */
 export function exportDatabasesToDownload(
     filename: string,
@@ -558,20 +565,22 @@ export function exportDatabasesToDownload(
         return Promise.reject(new Error('exportDatabasesToDownload: dbNames must be non-empty array'));
     }
     const streamId = nextStreamId--;
-    const chunks: Blob[] = [];
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk(_name, data) {
-                chunks.push(new Blob([data as Uint8Array<ArrayBuffer>]));
-            },
-            onDone() {
+            onDone(_result, stagingFile) {
                 streamHandlers.delete(streamId);
-                try {
-                    triggerEnvelopeDownload(filename, new Blob(chunks));
-                    resolve(true);
-                } catch (e) {
-                    reject(e instanceof Error ? e : new Error(String(e)));
+                if (stagingFile === undefined) {
+                    reject(new Error('exportDatabasesToStaging: streamDone missing stagingFile'));
+                    return;
                 }
+                stagedExportFile(stagingFile)
+                    .then((file) => {
+                        triggerEnvelopeDownload(filename, file);
+                        resolve(true);
+                    })
+                    .catch((e: unknown) => {
+                        reject(e instanceof Error ? e : new Error(String(e)));
+                    });
             },
             onError(message) {
                 streamHandlers.delete(streamId);
@@ -580,7 +589,7 @@ export function exportDatabasesToDownload(
         });
         worker!.postMessage({
             streamId,
-            data: { type: 'exportDatabasesToSession', databases: dbNames },
+            data: { type: 'exportDatabasesToStaging', databases: dbNames },
         });
     });
 }
@@ -602,10 +611,6 @@ export function importDatabasesFromSession(
     const streamId = nextStreamId--;
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk() {
-                streamHandlers.delete(streamId);
-                reject(new Error('Unexpected streamChunk during importDatabasesFromSession'));
-            },
             onDone(result) {
                 streamHandlers.delete(streamId);
                 resolve(typeof result === 'number' ? result : 0);
@@ -624,11 +629,11 @@ export function importDatabasesFromSession(
 }
 
 /**
- * JSImport entry — single-DB plain export. Drives the worker's per-DB
- * chunked export (Plain disk: verbatim; Encrypted+Unlocked: decrypt to
- * plain pages), accumulates chunks into a single Blob (no envelope
- * wrapper — raw .db bytes a SQLite tool can open), triggers anchor-click
- * download. C# never sees the bytes.
+ * JSImport entry — single-DB plain export. The worker writes the per-DB
+ * export (Plain disk: verbatim; Encrypted+Unlocked: decrypt to plain
+ * pages) into an OPFS staging file — no envelope wrapper, raw .db bytes a
+ * SQLite tool can open — and the bridge downloads the disk-backed File
+ * via anchor click. C# never sees the bytes.
  */
 export function exportDatabaseToDownload(
     filename: string,
@@ -638,20 +643,22 @@ export function exportDatabaseToDownload(
         return Promise.reject(new Error('Worker not initialized'));
     }
     const streamId = nextStreamId--;
-    const chunks: Blob[] = [];
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk(_name, data) {
-                chunks.push(new Blob([data as Uint8Array<ArrayBuffer>]));
-            },
-            onDone() {
+            onDone(_result, stagingFile) {
                 streamHandlers.delete(streamId);
-                try {
-                    triggerEnvelopeDownload(filename, new Blob(chunks));
-                    resolve(true);
-                } catch (e) {
-                    reject(e instanceof Error ? e : new Error(String(e)));
+                if (stagingFile === undefined) {
+                    reject(new Error('exportDatabaseToStaging: streamDone missing stagingFile'));
+                    return;
                 }
+                stagedExportFile(stagingFile)
+                    .then((file) => {
+                        triggerEnvelopeDownload(filename, file);
+                        resolve(true);
+                    })
+                    .catch((e: unknown) => {
+                        reject(e instanceof Error ? e : new Error(String(e)));
+                    });
             },
             onError(message) {
                 streamHandlers.delete(streamId);
@@ -660,7 +667,7 @@ export function exportDatabaseToDownload(
         });
         worker!.postMessage({
             streamId,
-            data: { type: 'exportDatabaseToSession', database: dbName },
+            data: { type: 'exportDatabaseToStaging', database: dbName },
         });
     });
 }
@@ -683,10 +690,6 @@ export function importDatabaseFromSession(
     const streamId = nextStreamId--;
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk() {
-                streamHandlers.delete(streamId);
-                reject(new Error(`Unexpected streamChunk during importDatabaseFromSession`));
-            },
             onDone(result) {
                 streamHandlers.delete(streamId);
                 resolve(typeof result === 'number' ? result : 0);
@@ -718,10 +721,6 @@ function _sendImportDiskStreamSession(
     const streamId = nextStreamId--;
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
-            onChunk() {
-                streamHandlers.delete(streamId);
-                reject(new Error(`Unexpected streamChunk during ${type}`));
-            },
             onDone(result) {
                 streamHandlers.delete(streamId);
                 if (typeof result !== 'number') {
@@ -745,6 +744,22 @@ function _sendImportDiskStreamSession(
             [kWrap.buffer],
         );
     });
+}
+
+/**
+ * JSImport entry — anchor-click download of a finished staging file by
+ * name. Plane-1-compatible surface (the base library's
+ * ExportDatabaseToDownloadAsync pairs it with the worker's
+ * 'exportDbToStaging' request); registered in both bundles like the
+ * BlobSession primitives.
+ */
+export async function downloadStagedExport(
+    stagingFile: string,
+    filename: string,
+): Promise<boolean> {
+    const file = await stagedExportFile(stagingFile);
+    triggerEnvelopeDownload(filename, file);
+    return true;
 }
 
 function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
@@ -779,6 +794,7 @@ function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
     importDatabasesFromSession,
     exportDatabaseToDownload,
     exportDatabasesToDownload,
+    downloadStagedExport,
 };
 
 (globalThis as any).__sqliteWasmLogger = logger;

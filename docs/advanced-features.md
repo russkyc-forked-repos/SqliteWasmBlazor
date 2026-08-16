@@ -194,6 +194,22 @@ await DatabaseService.ImportDatabaseAsync("TodoDb.db", data);
 
 Both operations close the database in the worker. The connection state tracking ensures EF Core automatically re-opens the database on the next query.
 
+### Downloading Without Loading the File
+
+`ExportDatabaseAsync` materialises the whole file as a `byte[]`, which is fine for
+small databases but is the wrong shape for a download — mobile Safari kills the page
+when a multi-hundred-megabyte export lands in memory. Use the staged download instead:
+
+```csharp
+await DatabaseService.ExportDatabaseToDownloadAsync("TodoDb.db", "todo-backup.db");
+```
+
+The worker copies the database into an OPFS staging file in small slices and the
+browser saves it from that disk-backed file, so neither managed memory nor the
+main thread ever holds the payload. Peak memory is flat regardless of database size.
+Staging files are cleaned up on the next worker start (a download reads its file
+lazily, so it cannot be deleted at click time).
+
 ### Schema Validation
 
 Validate that an imported database matches the expected EF model schema:

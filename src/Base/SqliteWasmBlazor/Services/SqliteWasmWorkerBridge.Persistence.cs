@@ -109,6 +109,50 @@ internal sealed partial class SqliteWasmWorkerBridge
             "Export verbatim",
             cancellationToken);
 
+    /// <inheritdoc />
+    public async Task ExportDatabaseToDownloadAsync(
+        string databaseName,
+        string filename,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            throw new ArgumentException(
+                "databaseName must be non-empty.", nameof(databaseName));
+        }
+        if (string.IsNullOrWhiteSpace(filename))
+        {
+            throw new ArgumentException(
+                "filename must be non-empty.", nameof(filename));
+        }
+
+        await EnsureInitializedAsync(cancellationToken);
+        // On an Encrypted+Locked disk the worker has no globalKey and can't
+        // decrypt slots to plain pages — refuse up front with the same
+        // guard the SQL path uses instead of surfacing a worker slot-size
+        // error.
+        ThrowIfDiskLocked($"ExportDatabaseToDownload('{databaseName}')");
+
+        var request = new { type = "exportDbToStaging", database = databaseName };
+        var result = await SendRequestAsync(request, cancellationToken);
+        if (string.IsNullOrEmpty(result.StagingFile))
+        {
+            throw new InvalidOperationException(
+                "exportDbToStaging returned no staging file name.");
+        }
+
+        // Worker closed the DB for a consistent snapshot — mirror that in
+        // the C#-side open set so the next use re-opens cleanly.
+        _openDatabases.Remove(databaseName);
+
+        var ok = await DownloadStagedExportAsync(result.StagingFile, filename);
+        if (!ok)
+        {
+            throw new InvalidOperationException(
+                "downloadStagedExport reported failure.");
+        }
+    }
+
     // Promoted from private → internal in plane-split Phase 1 so plane 2's
     // EncryptedSqliteWasmWorkerBridge in SqliteWasmBlazor.Crypto can drive
     // binary-payload round-trips through the same _pendingBinaryRequests map.

@@ -79,6 +79,7 @@ public static class TestRegistry
         "ImportRawDatabase_WithBackup",
         "ImportRawDatabase_BackupRestoreOnFailure",
         "ExportRawDatabase_ReOpenAfterExport",
+        "ExportRawDatabase_StagedDownload",
         "ImportRawDatabase_IntoNewDatabase",
         "ImportRawDatabase_IncompatibleSchema",
         "ImportRawDatabase_AutoReOpenAfterImport",

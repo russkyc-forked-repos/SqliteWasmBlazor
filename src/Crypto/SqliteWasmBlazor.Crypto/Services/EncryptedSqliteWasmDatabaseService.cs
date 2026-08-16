@@ -954,7 +954,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "back to plain pages.");
         }
 
-        var ok = await SqliteWasmWorkerBridge.ExportDatabaseToDownloadAsync(
+        var ok = await SqliteWasmWorkerBridge.ExportDatabaseToDownloadJsAsync(
             filename, databaseName);
         if (!ok)
         {

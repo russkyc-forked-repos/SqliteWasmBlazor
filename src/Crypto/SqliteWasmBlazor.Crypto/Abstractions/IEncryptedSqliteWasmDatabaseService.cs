@@ -248,11 +248,11 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// slot to plain pages before emit; Encrypted+Locked throws.
     ///
     /// <para>
-    /// C# never sees the bytes — the worker chunks the source via
-    /// <c>exportFileSlice</c>, emits per-batch <c>streamChunk</c> messages,
-    /// the bridge composes a single Blob, the browser disk-backs the parts
-    /// list, and an anchor click triggers the save. Output is byte-identical
-    /// to what the import side reads on the other end of
+    /// C# never sees the bytes — the worker reads the source in slices via
+    /// <c>exportFileSlice</c> and writes them into an OPFS staging file, the
+    /// bridge lifts the finished entry as a disk-backed <c>File</c>, and an
+    /// anchor click triggers the save. Output is byte-identical to what the
+    /// import side reads on the other end of
     /// <see cref="ImportDatabaseFromStreamAsync"/>.
     /// </para>
     /// </summary>

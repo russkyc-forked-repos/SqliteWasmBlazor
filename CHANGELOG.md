@@ -2,6 +2,26 @@
 
 All notable changes to SqliteWasmBlazor are documented in this file.
 
+## Version 0.9.3-pre
+
+### Staged Downloads — Export Bytes Never Enter Memory
+
+Database downloads now stage through OPFS instead of travelling as messages. The worker writes the export into a staging file via a synchronous access handle — the same primitive the import path already uses for rekey-on-write — and the bridge hands the browser a disk-backed `File`. Blobs built from `ArrayBuffer`s are held in process memory by WebKit, which is what OOM-killed iPhone Safari on large exports; a `File` backed by an OPFS entry is disk-backed in every engine, so peak memory stays flat regardless of database size.
+
+- **Replaces** the previous `streamChunk` postMessage pipeline (worker → main thread → Blob parts) and its backpressure credit gate for every export path: single `.db`, multi-DB `.dbs` envelope, and the encrypted-disk `.eds` envelope.
+- **New on the plain plane:** `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(databaseName, filename)` — a memory-flat `.db` download without the Crypto package. The worker closes the database first for a consistent snapshot, so the next context re-opens it.
+- **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
+- Staging files are swept on worker init rather than after the click: an anchor download drains the `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
+
+### Dependencies & Tooling
+
+- .NET / EF Core `10.0.10`, MudBlazor `9.7.0`, MessagePack `3.1.8`, R3 `1.3.1`, Playwright `1.61.0`, Test SDK `18.8.1`, PolySharp `1.16.0`.
+- TypeScript `6.0.3`, ESLint `10.7.0` + typescript-eslint `8.64.0`, msgpackr `2.0.4`, esbuild `0.28.1`, vitest `4.1.10`.
+- The `@sqlite.org/sqlite-wasm` patch is ported to `3.53.0-build1` and adds `getFileSize` / `exportFileSlice` to the vendor SAHPool VFS, which is what lets the plain plane export in slices.
+- The native stub now reports SQLite `3.53.0`, matching the worker engine that actually answers — `Microsoft.Data.Sqlite` gates features on `sqlite3_libversion_number`.
+- `SQLitePCLRaw.lib.e_sqlite3` moves to the SQLite-versioned `3.53.3` package. Its `.a` is excluded and replaced by the stub, so only the provider's P/Invoke surface matters.
+- `build_stub.sh` falls back to the .NET wasm-tools workload's Emscripten pack when no standalone emsdk is present — the same toolchain the Blazor native relink uses.
+
 ## Version 0.9.2-pre
 
 ### A Note on Development Delay & Tooling Change

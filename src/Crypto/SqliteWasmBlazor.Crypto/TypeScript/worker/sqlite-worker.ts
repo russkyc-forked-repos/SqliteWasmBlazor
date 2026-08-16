@@ -34,7 +34,7 @@ import {
     importDatabaseFromBlob,
     assertImportFileCount,
 } from './vfs-prf/import-streamed';
-import { StreamCreditGate } from './stream-credit';
+import { openExportStaging, sweepExportStaging } from '@sqlitewasmblazor/worker-common';
 import {
     BufferedStreamReader,
     readArrayHeader,
@@ -191,6 +191,15 @@ async function initializeSQLite() {
         // Grow pool if previously created with smaller capacity (initialCapacity only applies on first creation)
         await poolUtil.reserveMinimumCapacity(25);
 
+        // Drop export-staging leftovers from previous sessions. Staging
+        // files can't be deleted at download time (the anchor download
+        // drains the File lazily), so this sweep is their collection point.
+        try {
+            await sweepExportStaging();
+        } catch (err) {
+            logger.warn(MODULE_NAME, 'export-staging sweep failed:', err);
+        }
+
         logger.info(MODULE_NAME, 'OPFS SAHPool VFS installed successfully');
         logger.debug(MODULE_NAME, 'Available VFS:', sqlite3.capi.sqlite3_vfs_find(null));
 
@@ -231,19 +240,10 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
         return;
     }
 
-    // Chunk acks from the bridge — backpressure credit for an in-flight
-    // export stream. Routed before the streaming-request dispatch: acks
-    // carry a streamId but are not requests.
-    if ('streamAck' in event.data && (event.data as any).streamAck === true) {
-        const ack = event.data as unknown as { streamId: number; seq: number };
-        routeStreamAck(ack.streamId, ack.seq);
-        return;
-    }
-
     // Streaming requests — keyed by `streamId` (a negative int issued by
     // the bridge to stay clear of the C#-side positive request-id space).
-    // The streaming dispatcher emits `streamChunk` + `streamDone` /
-    // `streamError` messages all bearing the same streamId; no `id` field.
+    // The streaming dispatcher answers with exactly one `streamDone` /
+    // `streamError` message bearing the same streamId; no `id` field.
     if ('streamId' in event.data && typeof (event.data as any).streamId === 'number') {
         const streamMsg = event.data as {
             streamId: number;
@@ -307,11 +307,13 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
 };
 
 /**
- * Top-level dispatcher for `streamId`-bearing messages. Each handler is
- * responsible for posting back `streamChunk` messages and ultimately one
- * `streamDone` (or `streamError`) — all with the same streamId, none with
- * a top-level `id` field. The bridge keys its StreamHandler registry by
- * streamId; this dispatcher's only job is to drop into the right handler.
+ * Top-level dispatcher for `streamId`-bearing messages. Each handler posts
+ * exactly one `streamDone` (or `streamError`) with the same streamId, none
+ * with a top-level `id` field. Export handlers write their output into an
+ * OPFS staging file and report its name (plus a per-file offset table for
+ * the disk export) in the streamDone message. The bridge keys its
+ * StreamHandler registry by streamId; this dispatcher's only job is to
+ * drop into the right handler.
  */
 async function handleStreamingRequest(
     streamId: number,
@@ -321,11 +323,11 @@ async function handleStreamingRequest(
 ): Promise<void> {
     try {
         switch (data.type) {
-            case 'exportDiskStream':
+            case 'exportDiskToStaging':
                 if (!binaryPayload) {
-                    throw new Error('exportDiskStream requires binaryPayload (raw K_wrap)');
+                    throw new Error('exportDiskToStaging requires binaryPayload (raw K_wrap)');
                 }
-                await exportDiskStreamHandler(streamId, new Uint8Array(binaryPayload));
+                await exportDiskToStagingHandler(streamId, new Uint8Array(binaryPayload));
                 return;
             case 'importDiskStreamPreflight':
                 if (!binaryPayload) {
@@ -355,18 +357,18 @@ async function handleStreamingRequest(
                 await importDatabaseFromSessionHandler(
                     streamId, blob, (data as any).database as string);
                 return;
-            case 'exportDatabaseToSession':
+            case 'exportDatabaseToStaging':
                 if (typeof (data as any).database !== 'string') {
-                    throw new Error('exportDatabaseToSession requires data.database');
+                    throw new Error('exportDatabaseToStaging requires data.database');
                 }
-                await exportDatabaseToSessionHandler(
+                await exportDatabaseToStagingHandler(
                     streamId, (data as any).database as string);
                 return;
-            case 'exportDatabasesToSession':
+            case 'exportDatabasesToStaging':
                 if (!Array.isArray((data as any).databases)) {
-                    throw new Error('exportDatabasesToSession requires data.databases (string[])');
+                    throw new Error('exportDatabasesToStaging requires data.databases (string[])');
                 }
-                await exportDatabasesToSessionHandler(
+                await exportDatabasesToStagingHandler(
                     streamId, (data as any).databases as string[]);
                 return;
             case 'importDatabasesFromSession':
@@ -453,19 +455,32 @@ async function importDiskStreamCommitHandler(
 
 /**
  * Streaming single-DB export handler. Dispatch by hasGlobalKey():
- *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages, emit chunks
- *   Plain disk        → emit verbatim chunks
+ *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages
+ *   Plain disk        → copy verbatim
  *   Encrypted+Locked  → C# refuses before posting; not reachable here
  *
  * Output is always plain SQLite .db bytes — the file a downstream tool
  * (`sqlite3 file.db`) can open directly, or our own
- * <see cref="ImportDatabaseFromStreamAsync"/> can re-import. JS heap peak
- * per op: ~1 MB regardless of DB size.
+ * <see cref="ImportDatabaseFromStreamAsync"/> can re-import. Every chunk is
+ * written straight into an OPFS staging file via a sync access handle, so
+ * JS heap peak per op stays ~1 MB and no bytes accumulate main-thread-side
+ * regardless of DB size; streamDone carries the staging file name.
  */
-async function exportDatabaseToSessionHandler(
+async function exportDatabaseToStagingHandler(
     streamId: number,
     dbName: string,
 ): Promise<void> {
+    const stagingFile = await exportDatabaseToStagingCore(dbName);
+    self.postMessage({ streamId, streamDone: true, stagingFile });
+}
+
+/**
+ * Shared state-aware staging exporter — used by the streaming handler
+ * above and by the plane-1-compatible 'exportDbToStaging' request (the
+ * base library's ExportDatabaseToDownloadAsync runs against this worker
+ * when the Crypto bundle is loaded). Returns the staging file name.
+ */
+async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
@@ -473,7 +488,7 @@ async function exportDatabaseToSessionHandler(
     const dbPath = `/databases/${dbName}`;
     const fileNames = poolUtil.getFileNames();
     if (!fileNames.includes(dbPath)) {
-        throw new Error(`exportDatabaseToSession: no existing DB at ${dbPath}`);
+        throw new Error(`exportDatabaseToStaging: no existing DB at ${dbPath}`);
     }
 
     await closeDatabase(dbName);
@@ -483,7 +498,7 @@ async function exportDatabaseToSessionHandler(
     const fileSize = poolUtil.getFileSize(dbPath);
     if (fileSize === 0 || fileSize % sourceSlotSize !== 0) {
         throw new Error(
-            `exportDatabaseToSession: ${dbName} length ${fileSize} is not a non-zero ` +
+            `exportDatabaseToStaging: ${dbName} length ${fileSize} is not a non-zero ` +
             `multiple of the expected slot size ${sourceSlotSize} ` +
             `(disk state=${encrypted ? 'encrypted' : 'plain'}).`);
     }
@@ -495,14 +510,12 @@ async function exportDatabaseToSessionHandler(
     });
 
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
-    const gate = new StreamCreditGate();
-    streamCreditGates.set(streamId, gate);
+    const staging = await openExportStaging();
     try {
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
             const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
             const sourceOffset = slotBase * sourceSlotSize;
             const sourceBytes = slotCount * sourceSlotSize;
-            const seq = await gate.beforeSend();
 
             let sourceChunk: Uint8Array | null = null;
             let plainChunk: Uint8Array | null = null;
@@ -516,45 +529,34 @@ async function exportDatabaseToSessionHandler(
                     plainChunk = rekeySlots(
                         sourceChunk!, dbPath, globalKey, undefined, slotBase);
                 } else {
-                    // Plain source — sourceChunk IS the plain bytes; just
-                    // forward it as the chunk to transfer.
+                    // Plain source — sourceChunk IS the plain bytes.
                     plainChunk = sourceChunk;
                     sourceChunk = null;
                 }
-                const isFirst = slotBase === 0;
-                const isLast = slotBase + slotCount === totalSlots;
                 debugLog(op, 'singleExport.chunk', {
-                    name: dbName, slotBase, slotCount, isFirst, isLast,
+                    name: dbName, slotBase, slotCount,
                 });
-                self.postMessage(
-                    {
-                        streamId,
-                        streamChunk: true,
-                        name: dbName,
-                        data: plainChunk,
-                        isFirst, isLast,
-                        seq,
-                    },
-                    [plainChunk!.buffer],
-                );
-                // Buffer detached after transfer.
-                plainChunk = null;
+                staging.write(plainChunk!);
             } finally {
                 if (sourceChunk !== null) { clearBytes(sourceChunk); }
                 if (plainChunk !== null) { clearBytes(plainChunk); }
             }
         }
 
+        staging.finish();
         debugLog(op, 'singleExport.done', { name: dbName });
-        self.postMessage({ streamId, streamDone: true });
+        return staging.name;
+    } catch (err) {
+        await staging.abort();
+        throw err;
     } finally {
-        streamCreditGates.delete(streamId);
         if (globalKey !== undefined) { clearBytes(globalKey); }
     }
 }
 
 /**
- * Streaming multi-DB plain export handler — emits a `.dbs` envelope.
+ * Streaming multi-DB plain export handler — writes a `.dbs` envelope into
+ * an OPFS staging file.
  *
  * Wire format (MessagePack):
  *   array(N)
@@ -565,15 +567,14 @@ async function exportDatabaseToSessionHandler(
  *       ...
  *
  * State-aware (same dispatch as the single-DB export):
- *   Plain disk        → emit each file's bytes verbatim
- *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages before emit
+ *   Plain disk        → write each file's bytes verbatim
+ *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages before write
  *   Encrypted+Locked  → C# caller refuses before posting (no key)
  *
- * The bridge accumulates chunks into one Blob and triggers download. No
- * per-file streamChunk grouping — header bytes and per-file body bytes
- * arrive as one continuous stream in arrival order.
+ * The staging file holds the complete envelope; streamDone carries its
+ * name and the bridge downloads the disk-backed File as-is.
  */
-async function exportDatabasesToSessionHandler(
+async function exportDatabasesToStagingHandler(
     streamId: number,
     dbNames: string[],
 ): Promise<void> {
@@ -581,7 +582,7 @@ async function exportDatabasesToSessionHandler(
         throw new Error('SQLite not initialized');
     }
     if (dbNames.length === 0) {
-        throw new Error('exportDatabasesToSession: dbNames must be non-empty');
+        throw new Error('exportDatabasesToStaging: dbNames must be non-empty');
     }
 
     const encrypted = hasGlobalKey();
@@ -590,7 +591,7 @@ async function exportDatabasesToSessionHandler(
     for (const dbName of dbNames) {
         const dbPath = `/databases/${dbName}`;
         if (!fileNames.includes(dbPath)) {
-            throw new Error(`exportDatabasesToSession: no existing DB at ${dbPath}`);
+            throw new Error(`exportDatabasesToStaging: no existing DB at ${dbPath}`);
         }
     }
 
@@ -606,29 +607,28 @@ async function exportDatabasesToSessionHandler(
     });
 
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
-    const gate = new StreamCreditGate();
-    streamCreditGates.set(streamId, gate);
+    const staging = await openExportStaging();
     try {
         // Outer array header. Per file: array(2) + str(name) + bin(plainSize).
-        emitEnvelopeBytes(streamId, packArrayHeader(dbNames.length), await gate.beforeSend());
+        staging.write(packArrayHeader(dbNames.length));
 
         for (const dbName of dbNames) {
             const dbPath = `/databases/${dbName}`;
             const fileSize = poolUtil.getFileSize(dbPath);
             if (fileSize === 0 || fileSize % sourceSlotSize !== 0) {
                 throw new Error(
-                    `exportDatabasesToSession: ${dbName} length ${fileSize} ` +
+                    `exportDatabasesToStaging: ${dbName} length ${fileSize} ` +
                     `is not a non-zero multiple of slot size ${sourceSlotSize} ` +
                     `(disk state=${encrypted ? 'encrypted' : 'plain'}).`);
             }
             const totalSlots = fileSize / sourceSlotSize;
             const plainSize = totalSlots * PLAIN_SLOT_SIZE;
 
-            emitEnvelopeBytes(streamId, packArrayHeader(2), await gate.beforeSend());
+            staging.write(packArrayHeader(2));
             for (const part of packStr(dbName)) {
-                emitEnvelopeBytes(streamId, part, await gate.beforeSend());
+                staging.write(part);
             }
-            emitEnvelopeBytes(streamId, packBinHeader(plainSize), await gate.beforeSend());
+            staging.write(packBinHeader(plainSize));
 
             debugLog(op, 'multiExport.file.start', { name: dbName, slots: totalSlots });
 
@@ -636,7 +636,6 @@ async function exportDatabasesToSessionHandler(
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
                 const sourceOffset = slotBase * sourceSlotSize;
                 const sourceBytes = slotCount * sourceSlotSize;
-                const seq = await gate.beforeSend();
 
                 let sourceChunk: Uint8Array | null = null;
                 let plainChunk: Uint8Array | null = null;
@@ -649,11 +648,7 @@ async function exportDatabasesToSessionHandler(
                         plainChunk = sourceChunk;
                         sourceChunk = null;
                     }
-                    self.postMessage(
-                        { streamId, streamChunk: true, data: plainChunk, seq },
-                        [plainChunk!.buffer],
-                    );
-                    plainChunk = null;
+                    staging.write(plainChunk!);
                 } finally {
                     if (sourceChunk !== null) { clearBytes(sourceChunk); }
                     if (plainChunk !== null) { clearBytes(plainChunk); }
@@ -662,36 +657,15 @@ async function exportDatabasesToSessionHandler(
             debugLog(op, 'multiExport.file.done', { name: dbName });
         }
 
+        staging.finish();
         debugLog(op, 'multiExport.done', {});
-        self.postMessage({ streamId, streamDone: true });
+        self.postMessage({ streamId, streamDone: true, stagingFile: staging.name });
+    } catch (err) {
+        await staging.abort();
+        throw err;
     } finally {
-        streamCreditGates.delete(streamId);
         if (globalKey !== undefined) { clearBytes(globalKey); }
     }
-}
-
-// Per-stream backpressure gates for the export producers. Created by each
-// export handler, removed in its finally. Acks arrive as
-// { streamAck: true, streamId, seq } messages from the bridge.
-const streamCreditGates = new Map<number, StreamCreditGate>();
-
-export function routeStreamAck(streamId: number, seq: number): boolean {
-    const gate = streamCreditGates.get(streamId);
-    if (gate === undefined) { return false; }
-    gate.onAck(seq);
-    return true;
-}
-
-/** Helper: postMessage a small header byte block as a streamChunk (transferable). */
-function emitEnvelopeBytes(streamId: number, bytes: Uint8Array<ArrayBuffer>, seq?: number): void {
-    // Copy into a fresh buffer so the call site can keep using `bytes`
-    // (packStr returns tuple parts the caller iterates over).
-    const copy = new Uint8Array(bytes.length);
-    copy.set(bytes);
-    self.postMessage(
-        { streamId, streamChunk: true, data: copy, seq },
-        [copy.buffer],
-    );
 }
 
 /**
@@ -882,37 +856,39 @@ async function importDatabaseFromSessionHandler(
 }
 
 /**
- * Chunked encrypted-disk export — worker side. Caller (bridge) has wired
- * a streamHandler for <paramref name="streamId"/>; this function loops
- * every DB in the SAH pool and for each one emits a sequence of
- * `streamChunk` messages bearing the rekeyed slot batch under the
- * envelope's per-export K_wrap. JS heap peak per chunk is one slot batch
- * (~1 MB) regardless of total disk size.
+ * Chunked encrypted-disk export — worker side. Loops every DB in the SAH
+ * pool and writes its rekeyed slot batches (under the envelope's
+ * per-export K_wrap) contiguously into an OPFS staging file. JS heap peak
+ * per chunk is one slot batch (~1 MB) regardless of total disk size.
+ *
+ * streamDone carries the staging file name plus a per-file
+ * { name, offset, size } table; the bridge composes the v3 envelope from
+ * its MessagePack header bytes and disk-backed File.slice() segments, so
+ * the ciphertext never occupies main-thread memory.
  *
  * Precondition (enforced by caller): the worker is Encrypted+Unlocked —
  * a globalKey is registered and every DB is slot-format ciphertext under
  * it. We read each DB chunk via exportFileSlice (so the worker reads at
- * most one chunk into JS heap at a time), decrypt+re-encrypt under K_wrap
- * via the chunked rekeySlots path, and transfer the rekeyed chunk to the
- * main thread.
+ * most one chunk into JS heap at a time) and decrypt+re-encrypt under
+ * K_wrap via the chunked rekeySlots path.
  */
-async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Promise<void> {
+async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): Promise<void> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
     if (kWrap.length !== 32) {
-        throw new Error(`exportDiskStream: K_wrap must be 32 bytes, got ${kWrap.length}`);
+        throw new Error(`exportDiskToStaging: K_wrap must be 32 bytes, got ${kWrap.length}`);
     }
     if (!hasGlobalKey()) {
         throw new Error(
-            'exportDiskStream rejected: no globalKey registered. Caller must ' +
+            'exportDiskToStaging rejected: no globalKey registered. Caller must ' +
             'have Unlocked the disk before invoking the streaming export.');
     }
 
     const op = nextOpId();
     const globalKey = snapshotGlobalKey()!;
-    const gate = new StreamCreditGate();
-    streamCreditGates.set(streamId, gate);
+    const staging = await openExportStaging();
+    const files: { name: string; offset: number; size: number }[] = [];
     try {
         const names = poolUtil.listDatabases();
         debugLog(op, 'export.enter', {});
@@ -924,20 +900,18 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
             const fileSize = poolUtil.getFileSize(dbPath);
             if (fileSize === 0 || fileSize % ENCRYPTED_SLOT_SIZE !== 0) {
                 throw new Error(
-                    `exportDiskStream: ${name} length ${fileSize} is not a non-zero ` +
+                    `exportDiskToStaging: ${name} length ${fileSize} is not a non-zero ` +
                     `multiple of the encrypted slot size ${ENCRYPTED_SLOT_SIZE}; ` +
                     `refusing to export a non-encrypted source.`);
             }
             const totalSlots = fileSize / ENCRYPTED_SLOT_SIZE;
+            const fileOffset = staging.position();
             debugLog(op, 'export.db.start', { name, slots: totalSlots });
 
             for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
                 const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
                 const encryptedBytes = slotCount * ENCRYPTED_SLOT_SIZE;
-                const isFirst = slotBase === 0;
-                const isLast = slotBase + slotCount === totalSlots;
-                const seq = await gate.beforeSend();
 
                 let sourceChunk: Uint8Array | null = null;
                 let rekeyedChunk: Uint8Array | null = null;
@@ -947,37 +921,24 @@ async function exportDiskStreamHandler(streamId: number, kWrap: Uint8Array): Pro
                     // format (4124 bytes per slot, AAD-bound to dbPath +
                     // global slot index).
                     rekeyedChunk = rekeySlots(sourceChunk!, dbPath, globalKey, kWrap, slotBase);
-                    debugLog(op, 'export.chunk', { name, slotBase, slotCount, isFirst, isLast });
-                    // Transfer the rekeyed buffer to main — the worker
-                    // drops its reference, main wraps it as a Blob part.
-                    self.postMessage(
-                        {
-                            streamId,
-                            streamChunk: true,
-                            name,
-                            data: rekeyedChunk,
-                            isFirst,
-                            isLast,
-                            seq,
-                        },
-                        [rekeyedChunk!.buffer],
-                    );
-                    // Buffer is detached after transfer — null the local
-                    // reference so the finally-block's clearBytes is a
-                    // no-op on the (now-zero-length) view.
-                    rekeyedChunk = null;
+                    debugLog(op, 'export.chunk', { name, slotBase, slotCount });
+                    staging.write(rekeyedChunk);
                 } finally {
                     if (sourceChunk !== null) { clearBytes(sourceChunk); }
                     if (rekeyedChunk !== null) { clearBytes(rekeyedChunk); }
                 }
             }
+            files.push({ name, offset: fileOffset, size: staging.position() - fileOffset });
             debugLog(op, 'export.db.done', { name });
         }
 
+        staging.finish();
         debugLog(op, 'export.done', {});
-        self.postMessage({ streamId, streamDone: true });
+        self.postMessage({ streamId, streamDone: true, stagingFile: staging.name, files });
+    } catch (err) {
+        await staging.abort();
+        throw err;
     } finally {
-        streamCreditGates.delete(streamId);
         // globalKey snapshot — clear so K doesn't linger past export.
         clearBytes(globalKey);
     }
@@ -992,6 +953,12 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // setGlobalEncryptionKey (see SetEncryptionKeyAsync on the C#
             // side). Open carries no key envelope.
             return await openDatabase(database!);
+
+        case 'exportDbToStaging':
+            // Plane-1-compatible request shape (base library's
+            // ExportDatabaseToDownloadAsync). State-aware: Encrypted+
+            // Unlocked decrypts to plain pages, Plain copies verbatim.
+            return { stagingFile: await exportDatabaseToStagingCore(database!) };
 
         case 'setGlobalEncryptionKey':
             // Install the worker-wide key. Every page I/O across every open

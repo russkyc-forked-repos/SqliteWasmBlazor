@@ -173,6 +173,8 @@ public interface ISqliteWasmDatabaseService
     // Raw .db file import/export
     Task ImportDatabaseAsync(string databaseName, byte[] data, CancellationToken ct = default);
     Task<byte[]> ExportDatabaseAsync(string databaseName, CancellationToken ct = default);
+    Task ExportDatabaseToDownloadAsync(string databaseName, string filename,
+        CancellationToken ct = default);
 
     // V2 bulk import/export (worker-side prepared statement loops)
     Task<int> BulkImportAsync(string databaseName, byte[] payload,
@@ -202,6 +204,14 @@ public interface ISqliteWasmDatabaseService
     {
         // Export raw .db file (closes DB for consistent snapshot, auto-reopens on next query)
         byte[] data = await DatabaseService.ExportDatabaseAsync("MyApp.db");
+    }
+
+    private async Task DownloadAsync()
+    {
+        // Same snapshot, straight to a browser download — the worker stages the
+        // file in OPFS and the browser saves it from disk, so memory stays flat
+        // no matter how large the database is.
+        await DatabaseService.ExportDatabaseToDownloadAsync("MyApp.db", "backup.db");
     }
 
     private async Task ImportAsync(byte[] data)

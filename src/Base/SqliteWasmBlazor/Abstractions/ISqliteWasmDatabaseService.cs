@@ -156,6 +156,30 @@ public interface ISqliteWasmDatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Exports a single database straight to a browser download without the
+    /// bytes ever entering managed memory. The worker copies the on-disk
+    /// file in small slices into an OPFS staging file; the bridge lifts the
+    /// finished staging entry as a disk-backed <c>File</c> and fires an
+    /// anchor-click download. Memory stays flat regardless of DB size —
+    /// use this instead of <see cref="ExportDatabaseAsync"/> whenever the
+    /// goal is a file download (mobile Safari kills the page on large
+    /// in-memory exports).
+    ///
+    /// <para>
+    /// With the Crypto plane loaded the worker is state-aware: Plain disks
+    /// download verbatim pages; Encrypted+Unlocked disks decrypt slot-by-
+    /// slot to plain pages; Encrypted+Locked throws. On the plain plane
+    /// the file downloads verbatim. The worker closes the DB before
+    /// exporting for a consistent snapshot — caller must re-open afterwards.
+    /// </para>
+    /// </summary>
+    /// <param name="databaseName">The database filename (e.g., "mydb.db").</param>
+    /// <param name="filename">Download filename presented to the user.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ExportDatabaseToDownloadAsync(string databaseName, string filename,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Plain (non-encrypted) row import from a V2 MessagePack payload built
     /// via <c>MessagePackFileHeaderV2</c>. Worker streams rows into the
     /// named target table using a single prepared INSERT inside a

@@ -12,3 +12,4 @@ export * from './type-conversion';
 export * from './bulk-ops';
 export * from './ef-core-functions';
 export * from './worker-envelope';
+export * from './export-staging';
