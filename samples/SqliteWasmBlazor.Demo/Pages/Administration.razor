@@ -17,17 +17,25 @@
 
 @if (_isGenerating)
 {
-    <MudOverlay Visible="true" ZIndex="9999" DarkBackground="true" Absolute="false">
+    <MudOverlay Visible="true" ZIndex="9999" DarkBackground="true" LockScroll="true" Absolute="false">
         <MudPaper Class="pa-8" Elevation="8" Style="max-width: 400px;">
             <MudStack Spacing="4" AlignItems="AlignItems.Center">
-                <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
                 <MudText Typo="Typo.h6" Align="Align.Center">Generating Test Data</MudText>
+                <MudProgressLinear Color="Color.Primary"
+                                   Value="@GenerateProgressPercent"
+                                   Size="Size.Large"
+                                   Rounded="true"
+                                   Class="mud-width-full" />
                 <MudText Typo="Typo.body2" Align="Align.Center" Color="Color.Secondary">
-                    Creating @_generatedFakeEntries.ToString("N0") entries...
+                    @_generateProgress.ToString("N0") / @_generatedFakeEntries.ToString("N0") entries
                 </MudText>
-                <MudText Typo="Typo.caption" Align="Align.Center" Color="Color.Secondary">
-                    Please wait, this may take a moment
-                </MudText>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Error"
+                           OnClick="CancelGenerate"
+                           StartIcon="@Icons.Material.Filled.Cancel"
+                           Size="Size.Small">
+                    Cancel
+                </MudButton>
             </MudStack>
         </MudPaper>
     </MudOverlay>
@@ -77,35 +85,14 @@
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
-                    @if (_isGenerating)
-                    {
-                        <MudStack Spacing="1" Style="width: 100%">
-                            <MudText Typo="Typo.caption" Align="Align.Center">
-                                @_generateProgress.ToString("N0") / @_generatedFakeEntries.ToString("N0")
-                            </MudText>
-                            <MudProgressLinear Color="Color.Secondary"
-                                              Value="@(_generatedFakeEntries > 0 ? (double)_generateProgress / _generatedFakeEntries * 100 : 0)"
-                                              Size="Size.Small" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Error"
-                                       OnClick="CancelGenerate"
-                                       StartIcon="@Icons.Material.Filled.Cancel"
-                                       Size="Size.Small"
-                                       FullWidth="true">
-                                Cancel
-                            </MudButton>
-                        </MudStack>
-                    }
-                    else
-                    {
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Secondary"
-                                   OnClick="CreateTestDataAsync"
-                                   StartIcon="@Icons.Material.Filled.PlayArrow"
-                                   FullWidth="true">
-                            Generate
-                        </MudButton>
-                    }
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Secondary"
+                               OnClick="CreateTestDataAsync"
+                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               FullWidth="true"
+                               Disabled="_isGenerating">
+                        Generate
+                    </MudButton>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
                     <MudButton Variant="Variant.Outlined"
@@ -180,6 +167,9 @@
     private int _generatedFakeEntries = 100;
     private int _generateProgress;
     private CancellationTokenSource? _generateCts;
+
+    private double GenerateProgressPercent =>
+        _generatedFakeEntries > 0 ? (double)_generateProgress / _generatedFakeEntries * 100 : 0;
 
     private static readonly string[] TaskPrefixes = ["Task", "Work", "Project", "Meeting", "Call", "Email", "Review", "Plan", "Design", "Test"];
     private static readonly string[] TaskTypes = ["urgent", "important", "routine", "followup", "research", "development", "documentation", "deployment"];
