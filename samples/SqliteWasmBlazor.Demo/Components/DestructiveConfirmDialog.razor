@@ -12,6 +12,10 @@
        confirm the safe path by default. Destructive requires a
        deliberate click.
 
+    3. The actions MudStack turns into a column at SmAndDown, so phone and
+       tablet portrait get full-width buttons with cancel underneath —
+       closest to the thumb — while md and up keeps the row.
+
     Returns true when the user clicks the destructive button; false (or
     Canceled) otherwise.
 *@
@@ -21,18 +25,24 @@
         <MudText Typo="Typo.body1">@Message</MudText>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="OnConfirm"
-                   Variant="Variant.Outlined"
-                   Color="Color.Error"
-                   StartIcon="@Icons.Material.Filled.Warning">
-            @DestructiveLabel
-        </MudButton>
-        <MudButton OnClick="OnCancel"
-                   Variant="Variant.Filled"
-                   Color="Color.Primary"
-                   autofocus>
-            @CancelLabel
-        </MudButton>
+        <MudStack Row="true"
+                  Breakpoint="Breakpoint.SmAndDown"
+                  Justify="Justify.FlexEnd"
+                  Spacing="2"
+                  Class="mud-width-full">
+            <MudButton OnClick="OnConfirm"
+                       Variant="Variant.Outlined"
+                       Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.Warning">
+                @DestructiveLabel
+            </MudButton>
+            <MudButton OnClick="OnCancel"
+                       Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       autofocus>
+                @CancelLabel
+            </MudButton>
+        </MudStack>
     </DialogActions>
 </MudDialog>
 
