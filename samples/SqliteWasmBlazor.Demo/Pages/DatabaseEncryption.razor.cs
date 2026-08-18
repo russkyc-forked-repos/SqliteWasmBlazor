@@ -70,10 +70,10 @@ public partial class DatabaseEncryption
     /// <list type="bullet">
     ///   <item><c>.eds</c> → guided passkey-rebinding disk import
     ///   (<see cref="EncryptionModel.ImportDisk"/>).</item>
-    ///   <item><c>.db</c> or <c>.dbs</c> → plain single-DB write or pool
-    ///   replace, both via <see cref="EncryptionModel.ImportDatabases"/>;
-    ///   the model owns the extension dispatch and streams the file into
-    ///   the JS-side BlobSession one chunk at a time.</item>
+    ///   <item><c>.db</c> → single-DB write into a database the user names
+    ///   (<see cref="EncryptionModel.ImportDatabase"/>).</item>
+    ///   <item><c>.dbs</c> → bundle import that replaces the pool
+    ///   (<see cref="EncryptionModel.ImportDatabases"/>).</item>
     /// </list>
     /// All three paths are stream-shaped — the C# managed heap never
     /// holds the full envelope/file. The confirmation prompt is the
@@ -98,18 +98,50 @@ public partial class DatabaseEncryption
         }
     }
 
+    /// <summary>
+    /// Single-DB import: ask which database the file lands in before
+    /// writing. The field starts at <see cref="EncryptionModel.ProposeDatabaseName"/>
+    /// (the file name minus our export stamp) so the common case — restore
+    /// what was exported — is one confirm away, while an import into a
+    /// different or new database stays one edit away.
+    /// </summary>
     private async Task HandleSingleDbFileAsync(IBrowserFile file)
     {
-        var confirmed = await ConfirmDestructiveAsync(
-            title: Model.Localizer["Btn_ImportFile"],
-            message: Model.Localizer["Confirm_ImportSingleDatabase"],
-            destructiveLabel: Model.Localizer["Btn_ImportFile"]);
-
-        if (confirmed)
+        var title = Model.Localizer["Btn_ImportDatabase"].ToString();
+        var parameters = new DialogParameters<Components.DatabaseNameDialog>
         {
-            await Model.ImportDatabases.ExecuteAsync(file);
+            { x => x.Message, Model.Localizer["Confirm_ImportSingleDatabase"].ToString() },
+            { x => x.Label, Model.Localizer["Lbl_ImportTargetName"].ToString() },
+            { x => x.HelperText, Model.Localizer["Hint_ImportTargetName"].ToString() },
+            { x => x.InitialName, Model.ProposeDatabaseName(file.Name) },
+            { x => x.ExistingSummary, ExistingDatabasesSummary() },
+            { x => x.ConfirmLabel, Model.Localizer["Btn_Import"].ToString() },
+            { x => x.CancelLabel, Model.Localizer["Btn_Cancel"].ToString() },
+        };
+        var dialog = await DialogService.ShowAsync<Components.DatabaseNameDialog>(title, parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: string target } && target.Length > 0)
+        {
+            await Model.ImportDatabase.ExecuteAsync(new SingleDatabaseImport(file, target));
         }
     }
+
+    private string? ExistingDatabasesSummary()
+        => Model.DatabaseNames.Count == 0
+            ? null
+            : Model.Localizer["Lbl_ExistingDatabases", string.Join(", ", Model.DatabaseNames)].ToString();
+
+    /// <summary>
+    /// Confirmation gate for the per-database delete action in the export
+    /// picker. Wired into <c>MudIconButtonAsyncRxOf.ConfirmExecutionAsync</c>;
+    /// the database name is in the message because the list is the only
+    /// place the user sees which entries exist.
+    /// </summary>
+    private Task<bool> ConfirmDeleteDatabaseAsync(string dbName)
+        => ConfirmDestructiveAsync(
+            title: Model.Localizer["Btn_DeleteDatabase"],
+            message: Model.Localizer["Confirm_DeleteDatabase", dbName],
+            destructiveLabel: Model.Localizer["Btn_DeleteDatabase"]);
 
     private async Task HandleDbsFileAsync(IBrowserFile file)
     {

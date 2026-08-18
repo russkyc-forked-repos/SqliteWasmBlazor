@@ -231,12 +231,24 @@
                     @foreach (var name in Model.DatabaseNames)
                     {
                         var dbName = name;
-                        <MudCheckBox T="bool"
-                                     Value="@Model.SelectedDatabases.Contains(dbName)"
-                                     ValueChanged="@(checkedNow => OnDatabaseSelectionChanged(dbName, checkedNow))"
-                                     Label="@dbName"
-                                     Dense="true"
-                                     Size="Size.Small" />
+                        @* Delete sits on the row it acts on: the pool keeps
+                           whatever an import created, so the list is also
+                           where strays get cleaned up. *@
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudCheckBox T="bool"
+                                         Value="@Model.SelectedDatabases.Contains(dbName)"
+                                         ValueChanged="@(checkedNow => OnDatabaseSelectionChanged(dbName, checkedNow))"
+                                         Label="@dbName"
+                                         Dense="true"
+                                         Size="Size.Small" />
+                            <MudIconButtonAsyncRxOf T="string"
+                                                    Command="@Model.DeleteDatabase"
+                                                    Parameter="@dbName"
+                                                    ConfirmExecutionAsync="@(() => ConfirmDeleteDatabaseAsync(dbName))"
+                                                    Icon="@Icons.Material.Filled.Delete"
+                                                    Color="Color.Error"
+                                                    Size="Size.Small" />
+                        </MudStack>
                     }
                 </MudStack>
                 <MudButtonAsyncRx Command="@Model.ExportDatabases"

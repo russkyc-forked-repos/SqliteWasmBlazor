@@ -59,6 +59,14 @@
   <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — a single database, added or replaced by name. .dbs — a bundle of databases, replacing everything currently stored. .eds — a whole encrypted disk plus its passkey binding.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>All file types are streamed in chunks; no size limit.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>This replaces any existing database with the same name.</value></data>
+  <data name="Lbl_ImportTargetName" xml:space="preserve"><value>Import into database</value></data>
+  <data name="Btn_ImportDatabase" xml:space="preserve"><value>Import database</value></data>
+  <data name="Btn_Import" xml:space="preserve"><value>Import</value></data>
+  <data name="Hint_ImportTargetName" xml:space="preserve"><value>An existing name replaces that database; a new name creates one. Prefilled from the file name with the export timestamp removed.</value></data>
+  <data name="Lbl_ExistingDatabases" xml:space="preserve"><value>Already stored: {0}</value></data>
+  <data name="Btn_DeleteDatabase" xml:space="preserve"><value>Delete database</value></data>
+  <data name="Confirm_DeleteDatabase" xml:space="preserve"><value>Delete {0} from this browser? Its contents are gone unless you exported it first.</value></data>
+  <data name="Status_DatabaseDeleted" xml:space="preserve"><value>Deleted {0}.</value></data>
   <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Importing this envelope will replace every database currently in the pool. Continue?</value></data>
   <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Importing this envelope will replace every database currently in the encrypted pool. Encryption stays in place under the current passkey — the imported databases will be re-encrypted on write. Continue?</value></data>
   <data name="Status_OperationCancelled" xml:space="preserve"><value>Operation cancelled.</value></data>

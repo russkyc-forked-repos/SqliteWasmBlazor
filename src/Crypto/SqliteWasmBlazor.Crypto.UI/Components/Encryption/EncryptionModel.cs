@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.Localization;
 using ObservableCollections;
@@ -106,14 +107,24 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ExportDatabasesCmdAsync), nameof(CanExportDatabases), nameof(FormatOperationError))]
     public partial IObservableCommandAsync ExportDatabases { get; }
 
-    // Unified plain import. One file picker; dispatch is by extension:
-    // <c>.db</c> → streaming single-DB write under existing name;
-    // <c>.dbs</c> → streaming envelope replace-pool. Plain writes plain
-    // pages; Encrypted+Unlocked rekey-on-writes under globalKey;
-    // Encrypted+Locked is refused (the .eds guided import is the
+    // Single-DB plain import: streaming write under the caller-chosen pool
+    // name (see SingleDatabaseImport for why the name is not the file's).
+    // Plain writes plain pages; Encrypted+Unlocked rekey-on-writes under
+    // globalKey; Encrypted+Locked is refused (the .eds guided import is the
     // rebind-to-new-credential path).
+    [ObservableCommand(nameof(ImportDatabaseCmdAsync), nameof(CanImportDatabases), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<SingleDatabaseImport> ImportDatabase { get; }
+
+    // Multi-DB bundle import: streaming <c>.dbs</c> envelope that replaces
+    // the whole pool. Same disk-state gating as the single-DB path.
     [ObservableCommand(nameof(ImportDatabasesCmdAsync), nameof(CanImportDatabases), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportDatabases { get; }
+
+    // Pool housekeeping: drop one database from the SAH pool. The pool
+    // outlives the app's own databases — imports and retired features leave
+    // entries behind — so the export picker needs a way to clean up.
+    [ObservableCommand(nameof(DeleteDatabaseCmdAsync), nameof(CanDeleteDatabase), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<string> DeleteDatabase { get; }
 
     private bool CanEnterEncrypted() =>
         IsPlain
@@ -144,6 +155,12 @@ public partial class EncryptionModel : ObservableModel
     // Locked is refused — the .eds guided import is the rebind-to-new-
     // credential path; this affordance assumes the disk's key is installed.
     private bool CanImportDatabases() => IsPlain || IsUnlocked;
+
+    // Pool deletion needs a writable pool: Plain writes plain pages,
+    // Encrypted+Unlocked holds the key the SAHPool needs to keep the
+    // remaining slots consistent. Locked is refused like every other
+    // pool-mutating command.
+    private bool CanDeleteDatabase() => IsPlain || IsUnlocked;
 
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -413,47 +430,124 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Unified plain-import command. Dispatches by file extension:
-    /// <c>.db</c> → single-DB streaming import under the file's name (one
-    /// DB replace-or-create); <c>.dbs</c> → multi-DB envelope import that
-    /// wipes the existing pool and replays every <c>[name, bytes]</c>
-    /// entry through the chunked write path. Both paths use the JS-side
-    /// BlobSession so C# managed heap stays bounded regardless of file
-    /// size. Plain disks write plain pages; Encrypted+Unlocked
-    /// rekey-on-writes under <c>globalKey</c>; Encrypted+Locked is refused
-    /// (the <c>.eds</c> guided import is the rebind-to-new-credential
-    /// path; <see cref="CanImportDatabases"/> gates the button).
+    /// Single-DB plain-import command. Streams the picked <c>.db</c> file
+    /// into <see cref="SingleDatabaseImport.DatabaseName"/>, creating that
+    /// pool entry or replacing it wholesale. The JS-side BlobSession keeps
+    /// the C# managed heap bounded regardless of file size. Plain disks
+    /// write plain pages; Encrypted+Unlocked rekey-on-writes under
+    /// <c>globalKey</c>; Encrypted+Locked is refused (the <c>.eds</c>
+    /// guided import is the rebind-to-new-credential path;
+    /// <see cref="CanImportDatabases"/> gates the button).
+    /// </summary>
+    private async Task ImportDatabaseCmdAsync(
+        SingleDatabaseImport request, CancellationToken cancellationToken)
+    {
+        var file = request.File;
+        if (file is null || file.Size == 0)
+        {
+            throw new InvalidOperationException(
+                "Pick a .db file before importing.");
+        }
+        if (!file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported single-database file '{file.Name}': expected .db.");
+        }
+        var target = NormalizeDatabaseName(request.DatabaseName);
+        await using var stream = file.OpenReadStream(
+            maxAllowedSize: file.Size, cancellationToken);
+        await Session.ImportDatabaseFromStreamAsync(
+            target, stream, file.Size, cancellationToken);
+        await RefreshAsync(cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_SingleDbImported", target],
+            nameof(ImportDatabase));
+    }
+
+    /// <summary>
+    /// Multi-DB plain-import command. Replays every <c>[name, bytes]</c>
+    /// entry of a <c>.dbs</c> envelope through the chunked write path,
+    /// wiping the existing pool first — the pool ends up being exactly what
+    /// the envelope carries. Streaming and disk-state rules match
+    /// <see cref="ImportDatabaseCmdAsync"/>.
     /// </summary>
     private async Task ImportDatabasesCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
     {
         if (file is null || file.Size == 0)
         {
             throw new InvalidOperationException(
-                "Pick a .db or .dbs file before importing.");
+                "Pick a .dbs bundle before importing.");
+        }
+        if (!file.Name.EndsWith(".dbs", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported bundle file '{file.Name}': expected .dbs.");
         }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
-        if (file.Name.EndsWith(".dbs", StringComparison.OrdinalIgnoreCase))
+        await Session.ImportDatabasesFromStreamAsync(stream, file.Size, cancellationToken);
+        await RefreshAsync(cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_DbsImported", file.Name],
+            nameof(ImportDatabases));
+    }
+
+    /// <summary>
+    /// Drop one database from the SAH pool and refresh the picker. The pool
+    /// is app-wide storage, not a session: whatever an import or a retired
+    /// feature created stays until deleted here.
+    /// </summary>
+    private async Task DeleteDatabaseCmdAsync(
+        string databaseName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
         {
-            await Session.ImportDatabasesFromStreamAsync(stream, file.Size, cancellationToken);
-            await RefreshAsync(cancellationToken);
-            StatusModel.AddSuccess(
-                Localizer["Status_DbsImported", file.Name],
-                nameof(ImportDatabases));
-            return;
+            throw new InvalidOperationException(
+                "databaseName must be non-empty.");
         }
-        if (file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+        await DatabaseService.DeleteDatabaseAsync(databaseName, cancellationToken);
+        await RefreshAsync(cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_DatabaseDeleted", databaseName],
+            nameof(DeleteDatabase));
+    }
+
+    /// <summary>
+    /// Pool name proposed for a picked <c>.db</c> file: the file name minus
+    /// the stamp <see cref="ExportDatabasesCmdAsync"/> appends, so an
+    /// export/import round trip lands back on the database it came from
+    /// instead of leaving a <c>TodoDb-20260818-193737.db</c> stray. Any
+    /// other name is returned unchanged — this is the value a host prefills
+    /// its name field with, never a silent rewrite of the user's choice.
+    /// </summary>
+    public string ProposeDatabaseName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
         {
-            await Session.ImportDatabaseFromStreamAsync(
-                file.Name, stream, file.Size, cancellationToken);
-            await RefreshAsync(cancellationToken);
-            StatusModel.AddSuccess(
-                Localizer["Status_SingleDbImported", file.Name],
-                nameof(ImportDatabases));
-            return;
+            throw new ArgumentException("fileName must be non-empty.", nameof(fileName));
         }
-        throw new InvalidOperationException(
-            $"Unsupported import file extension '{file.Name}': expected .db or .dbs.");
+        return ExportStampPattern().Replace(fileName, ".db");
+    }
+
+    // Trailing "-yyyyMMdd-HHmmss.db" — the shape ExportDatabasesCmdAsync
+    // writes. Anchored at the end so a database whose own name contains
+    // digits keeps them.
+    [GeneratedRegex(@"-\d{8}-\d{6}\.db$", RegexOptions.IgnoreCase)]
+    private static partial Regex ExportStampPattern();
+
+    // Pool entries are addressed by file name; a name without the extension
+    // would create a database no connection string points at.
+    private static string NormalizeDatabaseName(string databaseName)
+    {
+        var trimmed = databaseName?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Enter the database name to import into.");
+        }
+        return trimmed.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : $"{trimmed}.db";
     }
 
     private async ValueTask<byte[]> DeriveVfsKeyAsync()

@@ -59,6 +59,14 @@
   <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — eine einzelne Datenbank, die anhand ihres Namens ergänzt oder ersetzt wird. .dbs — ein Bündel von Datenbanken, das den gesamten aktuellen Bestand ersetzt. .eds — eine ganze verschlüsselte Festplatte samt Passkey-Bindung.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>Alle Dateitypen werden in Chunks gestreamt; keine Größenbegrenzung.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Eine vorhandene Datenbank mit dem gleichen Namen wird ersetzt.</value></data>
+  <data name="Lbl_ImportTargetName" xml:space="preserve"><value>Importieren in Datenbank</value></data>
+  <data name="Btn_ImportDatabase" xml:space="preserve"><value>Datenbank importieren</value></data>
+  <data name="Btn_Import" xml:space="preserve"><value>Importieren</value></data>
+  <data name="Hint_ImportTargetName" xml:space="preserve"><value>Ein vorhandener Name ersetzt diese Datenbank, ein neuer Name legt eine an. Vorbelegt aus dem Dateinamen ohne den Export-Zeitstempel.</value></data>
+  <data name="Lbl_ExistingDatabases" xml:space="preserve"><value>Bereits gespeichert: {0}</value></data>
+  <data name="Btn_DeleteDatabase" xml:space="preserve"><value>Datenbank löschen</value></data>
+  <data name="Confirm_DeleteDatabase" xml:space="preserve"><value>{0} aus diesem Browser löschen? Der Inhalt ist verloren, sofern er nicht vorher exportiert wurde.</value></data>
+  <data name="Status_DatabaseDeleted" xml:space="preserve"><value>{0} gelöscht.</value></data>
   <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im Pool ersetzt. Fortfahren?</value></data>
   <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im verschlüsselten Pool ersetzt. Die Verschlüsselung bleibt unter dem aktuellen Passkey bestehen — die importierten Datenbanken werden beim Schreiben neu verschlüsselt. Fortfahren?</value></data>
   <data name="Status_OperationCancelled" xml:space="preserve"><value>Vorgang abgebrochen.</value></data>
