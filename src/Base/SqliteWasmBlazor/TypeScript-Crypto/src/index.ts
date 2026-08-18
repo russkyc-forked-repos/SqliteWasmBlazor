@@ -17,10 +17,12 @@ export async function isPrfSupported(): Promise<boolean> {
 
 export async function register(
     displayName: string | null,
-    optionsJson: string
+    optionsJson: string,
+    excludeCredentialIdsJson: string
 ): Promise<string> {
     const options: PrfOptions = JSON.parse(optionsJson);
-    const result = await registerCredentialWithPrf(displayName, options);
+    const excludeCredentialIds: string[] = JSON.parse(excludeCredentialIdsJson);
+    const result = await registerCredentialWithPrf(displayName, options, excludeCredentialIds);
     return JSON.stringify(result);
 }
 

@@ -20,6 +20,7 @@ namespace SqliteWasmBlazor.Crypto.Json;
 [JsonSerializable(typeof(PrfResult<string>))]
 [JsonSerializable(typeof(PrfResult<byte[]>))]
 [JsonSerializable(typeof(JsPrfOptions))]
+[JsonSerializable(typeof(IReadOnlyList<string>))]
 public partial class PrfJsonContext : JsonSerializerContext;
 
 /// <summary>

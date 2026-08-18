@@ -13,10 +13,11 @@ namespace SqliteWasmBlazor.Crypto.UI.Services;
 ///
 /// <para>
 /// <b>Register-then-derive contract.</b> WebAuthn create + assert are two
-/// ceremonies. <see cref="RegisterAsync"/> runs both back-to-back so it can
-/// satisfy the seam contract of returning the X25519 pubkey alongside the
-/// credential id. The user sees two platform prompts — accepted UX for a
-/// "create my passkey" gesture.
+/// ceremonies — unavoidably so for security keys, since CTAP2 only emits
+/// hmac-secret output from getAssertion, never from makeCredential.
+/// <see cref="RegisterAsync"/> runs both back-to-back so it can satisfy the seam
+/// contract of returning the X25519 pubkey alongside the credential id. The user
+/// sees two prompts, and on a security key that means two PIN entries.
 /// </para>
 ///
 /// <para>
@@ -58,11 +59,14 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
 
     public async ValueTask<PrfRegistrationResult> RegisterAsync(
         string? displayName,
+        IReadOnlyList<string> excludeCredentialIds,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(excludeCredentialIds);
+
         cancellationToken.ThrowIfCancellationRequested();
 
-        var registerResult = await _prf.RegisterAsync(displayName);
+        var registerResult = await _prf.RegisterAsync(displayName, excludeCredentialIds);
         if (registerResult.Cancelled)
         {
             throw new PrfAuthenticatorException(
@@ -81,7 +85,14 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
         var credential = registerResult.Value;
         cancellationToken.ThrowIfCancellationRequested();
 
-        var deriveResult = await _prf.DeriveKeysAsync(credential.RawId);
+        // Discoverable, not targeted. Registration forces residentKey='required', so
+        // the credential just minted is always discoverable — and security keys serve
+        // the discoverable ceremony far more reliably than an allowCredentials-scoped
+        // one, which can leave the prompt hanging until it times out as
+        // NotAllowedError even though the very same credential answers a discoverable
+        // request immediately. The returned credential id is checked below, so
+        // dropping allowCredentials costs no binding accuracy.
+        var deriveResult = await _prf.DeriveKeysDiscoverableAsync();
         if (deriveResult.Cancelled)
         {
             throw new PrfAuthenticatorException(
@@ -89,7 +100,7 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
                 PrfErrorCode.CEREMONY_INCOMPLETE,
                 deriveResult.ErrorDetail);
         }
-        if (!deriveResult.Success || deriveResult.Value is null)
+        if (!deriveResult.Success)
         {
             throw new PrfAuthenticatorException(
                 PrfAuthenticatorOperation.Register,
@@ -97,7 +108,19 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
                 deriveResult.ErrorDetail);
         }
 
-        return new PrfRegistrationResult(credential.RawId, deriveResult.Value);
+        var (assertedCredentialId, publicKey) = deriveResult.Value;
+
+        // The picker can offer other passkeys, so confirm the one that answered is
+        // the one just created. Returning a different credential's key would bind the
+        // disk to a passkey the caller never registered.
+        if (!string.Equals(assertedCredentialId, credential.RawId, StringComparison.Ordinal))
+        {
+            throw new PrfAuthenticatorException(
+                PrfAuthenticatorOperation.Register,
+                PrfErrorCode.CREDENTIAL_MISMATCH);
+        }
+
+        return new PrfRegistrationResult(credential.RawId, publicKey);
     }
 
     public async ValueTask<PrfAuthenticationOutcome> AuthenticateAsync(

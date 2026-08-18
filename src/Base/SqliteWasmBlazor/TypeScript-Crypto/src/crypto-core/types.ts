@@ -27,6 +27,7 @@ export enum PrfErrorCode {
     NotSupported = 'NOT_SUPPORTED',
     PrfNotSupported = 'PRF_NOT_SUPPORTED',
     CredentialNotFound = 'CREDENTIAL_NOT_FOUND',
+    CredentialAlreadyRegistered = 'CREDENTIAL_ALREADY_REGISTERED',
     AuthenticationTagMismatch = 'AUTHENTICATION_TAG_MISMATCH',
     InvalidData = 'INVALID_DATA',
     KeyDerivationFailed = 'KEY_DERIVATION_FAILED',

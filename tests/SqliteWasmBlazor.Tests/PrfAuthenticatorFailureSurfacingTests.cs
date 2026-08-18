@@ -37,7 +37,7 @@ public class PrfAuthenticatorFailureSurfacingTests
         });
 
         var ex = await Assert.ThrowsAsync<PrfAuthenticatorException>(
-            async () => await authenticator.RegisterAsync(displayName: null));
+            async () => await authenticator.RegisterAsync(displayName: null, excludeCredentialIds: []));
 
         Assert.Equal(PrfAuthenticatorOperation.Register, ex.Operation);
         Assert.Equal(PrfErrorCode.CEREMONY_INCOMPLETE, ex.Code);
@@ -51,14 +51,14 @@ public class PrfAuthenticatorFailureSurfacingTests
         var authenticator = CreateAuthenticator(new FakePrfService
         {
             RegisterResult = PrfResult<PrfCredential>.Fail(
-                PrfErrorCode.PRF_NOT_SUPPORTED,
+                PrfErrorCode.CREDENTIAL_ALREADY_REGISTERED,
                 CeremonyDetail),
         });
 
         var ex = await Assert.ThrowsAsync<PrfAuthenticatorException>(
-            async () => await authenticator.RegisterAsync(displayName: null));
+            async () => await authenticator.RegisterAsync(displayName: null, excludeCredentialIds: []));
 
-        Assert.Equal(PrfErrorCode.PRF_NOT_SUPPORTED, ex.Code);
+        Assert.Equal(PrfErrorCode.CREDENTIAL_ALREADY_REGISTERED, ex.Code);
         Assert.Equal(CeremonyDetail, ex.Detail);
     }
 
@@ -102,8 +102,9 @@ public class PrfAuthenticatorFailureSurfacingTests
         public PrfResult<(string CredentialId, string PublicKey)> DeriveDiscoverableResult { get; init; } =
             PrfResult<(string, string)>.Fail(PrfErrorCode.UNKNOWN);
 
-        public ValueTask<PrfResult<PrfCredential>> RegisterAsync(string? displayName = null) =>
-            ValueTask.FromResult(RegisterResult);
+        public ValueTask<PrfResult<PrfCredential>> RegisterAsync(
+            string? displayName,
+            IReadOnlyList<string> excludeCredentialIds) => ValueTask.FromResult(RegisterResult);
 
         public ValueTask<PrfResult<string>> DeriveKeysAsync(string credentialId) =>
             ValueTask.FromResult(DeriveResult);

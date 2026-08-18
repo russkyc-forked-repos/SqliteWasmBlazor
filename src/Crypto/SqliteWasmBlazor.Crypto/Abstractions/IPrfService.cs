@@ -54,11 +54,23 @@ public interface IPrfService
     /// Register a new credential with PRF support.
     /// </summary>
     /// <param name="displayName">Optional display name shown in platform passkey manager. If null, platform generates one.</param>
+    /// <param name="excludeCredentialIds">
+    /// Base64 credential ids the caller already holds. An authenticator that already
+    /// stores one of them refuses the ceremony with
+    /// <see cref="PrfErrorCode.CREDENTIAL_ALREADY_REGISTERED"/> rather than minting a
+    /// duplicate passkey, which for a PRF-bound disk would derive a different key and
+    /// silently fail to unlock. Pass an empty list to allow registration unconditionally.
+    /// </param>
     /// <returns>The created credential or error</returns>
-    ValueTask<PrfResult<PrfCredential>> RegisterAsync(string? displayName = null);
+    ValueTask<PrfResult<PrfCredential>> RegisterAsync(
+        string? displayName,
+        IReadOnlyList<string> excludeCredentialIds);
 
     /// <summary>
     /// Derive keys from a specific credential. Uses the app-wide <see cref="Salt"/>.
+    /// Targets one credential via <c>allowCredentials</c>; prefer
+    /// <see cref="DeriveKeysDiscoverableAsync"/> when any credential will do, since
+    /// security keys handle the discoverable ceremony more reliably.
     /// Keys are cached in unmanaged memory according to the configured cache strategy.
     /// </summary>
     /// <param name="credentialId">The credential ID (Base64)</param>

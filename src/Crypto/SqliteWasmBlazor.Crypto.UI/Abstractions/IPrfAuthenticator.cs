@@ -27,8 +27,15 @@ public interface IPrfAuthenticator
     /// PRF output. <paramref name="displayName"/> is shown in the platform's
     /// credential UI.
     /// </summary>
+    /// <param name="excludeCredentialIds">
+    /// Credential ids the disk is already bound to. An authenticator holding one of
+    /// them refuses the ceremony instead of minting a duplicate passkey that would
+    /// derive a different PRF key and never unlock the disk. Empty means "no
+    /// restriction" — the normal case for a plaintext disk with no passkey yet.
+    /// </param>
     ValueTask<PrfRegistrationResult> RegisterAsync(
         string? displayName,
+        IReadOnlyList<string> excludeCredentialIds,
         CancellationToken cancellationToken = default);
 
     /// <summary>

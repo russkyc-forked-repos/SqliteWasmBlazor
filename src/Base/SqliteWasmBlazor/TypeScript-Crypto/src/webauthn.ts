@@ -1,7 +1,7 @@
 // WebAuthn registration with PRF extension support
 
 import { PrfErrorCode, type PrfCredential, type PrfOptions, type PrfResult } from './types.js';
-import { bytesToBase64 } from '@sqlitewasmblazor/crypto-core';
+import { base64ToBytes, bytesToBase64, toBuffer } from '@sqlitewasmblazor/crypto-core';
 import { describeCeremonyError } from './ceremonyError.js';
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -32,11 +32,16 @@ export async function checkPrfSupport(): Promise<boolean> {
  *
  * @param displayName Optional human-readable display name. If null, platform generates one.
  * @param options PRF configuration options
+ * @param excludeCredentialIds Base64 credential ids already bound to this disk. An
+ *        authenticator that already holds one of them refuses to mint a second, so the
+ *        user gets "already registered" instead of a duplicate passkey that cannot
+ *        unlock anything.
  * @returns PrfResult containing the credential or error
  */
 export async function registerCredentialWithPrf(
     displayName: string | null,
-    options: PrfOptions
+    options: PrfOptions,
+    excludeCredentialIds: readonly string[]
 ): Promise<PrfResult<PrfCredential>> {
     try {
         // Generate random user ID (required by WebAuthn spec, not meaningful for PRF-only use)
@@ -82,6 +87,10 @@ export async function registerCredentialWithPrf(
                 { alg: -257, type: 'public-key' }  // RS256
             ],
             authenticatorSelection,
+            excludeCredentials: excludeCredentialIds.map(id => ({
+                id: toBuffer(base64ToBytes(id)),
+                type: 'public-key' as const
+            })),
             timeout: options.timeoutMs,
             attestation: 'none',
             extensions: {
@@ -123,15 +132,28 @@ export async function registerCredentialWithPrf(
     } catch (error) {
         const errorDetail = describeCeremonyError(error);
 
-        // Dismissed prompt, timeout, or a rejected/blocked authenticator PIN --
-        // the browser reports all three as NotAllowedError. errorDetail carries
-        // the message that tells them apart.
-        if (error instanceof DOMException && error.name === 'NotAllowedError') {
-            return {
-                success: false,
-                cancelled: true,
-                errorDetail
-            };
+        if (error instanceof DOMException) {
+            // Dismissed prompt, timeout, or a rejected/blocked authenticator PIN --
+            // the browser reports all three as NotAllowedError. errorDetail carries
+            // the message that tells them apart.
+            if (error.name === 'NotAllowedError') {
+                return {
+                    success: false,
+                    cancelled: true,
+                    errorDetail
+                };
+            }
+
+            // excludeCredentials matched: this authenticator already holds a
+            // credential for the disk. Distinct from a generic failure -- the user
+            // should authenticate with the existing passkey, not register again.
+            if (error.name === 'InvalidStateError') {
+                return {
+                    success: false,
+                    errorCode: PrfErrorCode.CredentialAlreadyRegistered,
+                    errorDetail
+                };
+            }
         }
 
         return {

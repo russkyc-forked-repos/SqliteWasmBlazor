@@ -35,7 +35,9 @@
   <data name="Error_Register_KEY_DERIVATION_FAILED" xml:space="preserve"><value>Der neue Passkey hat keine ableitbaren Schlüssel erzeugt.</value></data>
   <data name="Error_Register_AUTHENTICATION_TAG_MISMATCH" xml:space="preserve"><value>Authentifizierungs-Tag-Konflikt während Register-then-Derive. Bitte erneut versuchen.</value></data>
   <data name="Error_Register_CREDENTIAL_NOT_FOUND" xml:space="preserve"><value>Der frisch erstellte Passkey ist verschwunden. Bitte erneut versuchen.</value></data>
+  <data name="Error_Register_CREDENTIAL_ALREADY_REGISTERED" xml:space="preserve"><value>Dieser Authenticator enthält bereits den Passkey für diese Datenbank. Bitte damit anmelden, statt einen neuen zu registrieren.</value></data>
   <data name="Error_Register_CEREMONY_INCOMPLETE" xml:space="preserve"><value>Der Passkey-Dialog wurde ohne Abschluss geschlossen. Er wurde abgebrochen, es kam zu einer Zeitüberschreitung, oder die PIN des Sicherheitsschlüssels wurde abgelehnt.</value></data>
+  <data name="Error_Register_CREDENTIAL_MISMATCH" xml:space="preserve"><value>Es hat ein anderer Passkey geantwortet als der soeben registrierte. Bitte im Dialog den neu erstellten Passkey auswählen.</value></data>
   <data name="Error_Authenticate_CEREMONY_INCOMPLETE" xml:space="preserve"><value>Der Passkey-Dialog wurde ohne Abschluss geschlossen. Er wurde abgebrochen, es kam zu einer Zeitüberschreitung, oder die PIN des Sicherheitsschlüssels wurde abgelehnt.</value></data>
   <data name="Error_Register_INVALID_DATA" xml:space="preserve"><value>Der neue Passkey hat unerwartete Daten zurückgegeben.</value></data>
   <data name="Error_Register_NOT_SUPPORTED" xml:space="preserve"><value>Der gewählte Authenticator unterstützt PRF nicht.</value></data>

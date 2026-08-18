@@ -180,6 +180,43 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
 
     [Fact]
     [Trait("Browser", "Chromium")]
+    public async Task ExcludedCredential_RefusesDuplicateRegistration()
+    {
+        await using var scenario = await fixture.CreateScenarioAsync(output);
+
+        await scenario.NavigateAsync(PrfTestPath);
+
+        // First click absorbs the cold WASM boot; subsequent clicks fall back
+        // to the dev-friendly ButtonEnabledTimeoutMs.
+        await ClickAsync(scenario, "Register passkey", FirstButtonVisibleTimeoutMs);
+        await ExpectStatusContainsAsync(scenario, "Passkey registered");
+
+        var afterFirst = await GetCredentialsAsync(scenario, scenario.PrimaryAuthenticatorId);
+        Assert.True(afterFirst.GetArrayLength() == 1,
+            $"Expected 1 credential after registration, found {afterFirst.GetArrayLength()}.");
+
+        // Re-register naming the existing credential in excludeCredentials. The
+        // authenticator already holds it, so WebAuthn raises InvalidStateError,
+        // which webauthn.ts maps to CREDENTIAL_ALREADY_REGISTERED. Asserting the
+        // literal token also pins the JS -> C# enum wire format: PrfJsonContext
+        // matches C# member names verbatim, so a PascalCase value would throw
+        // JsonException instead of arriving as a structured failure.
+        await ClickAsync(scenario, "Register passkey (exclude current)");
+        await ExpectStatusContainsAsync(scenario, "CREDENTIAL_ALREADY_REGISTERED");
+
+        // The browser's own DOMException text must reach the UI. Discarding it is
+        // what made a rejected security-key PIN indistinguishable from a dismissed
+        // prompt — both arrive as NotAllowedError with only the message differing.
+        await ExpectStatusContainsAsync(scenario, "InvalidStateError");
+
+        // The whole point: no duplicate passkey was minted.
+        var afterSecond = await GetCredentialsAsync(scenario, scenario.PrimaryAuthenticatorId);
+        Assert.True(afterSecond.GetArrayLength() == 1,
+            $"excludeCredentials was ignored — found {afterSecond.GetArrayLength()} credentials, expected 1.");
+    }
+
+    [Fact]
+    [Trait("Browser", "Chromium")]
     public async Task CrossPlatformAuthenticator_RegistersAndRoundTrips()
     {
         await using var scenario = await fixture.CreateScenarioAsync(output);
@@ -194,6 +231,9 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
 
         await scenario.NavigateAsync(PrfTestPath);
 
+        // Register runs create() then an immediate PRF assertion. The assertion
+        // carries the transports getTransports() reported on the attestation, so it
+        // targets the key that just answered instead of walking every transport.
         await ClickAsync(scenario, "Register passkey", FirstButtonVisibleTimeoutMs);
         await ExpectStatusContainsAsync(scenario, "Passkey registered");
 
@@ -202,6 +242,30 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
 
         await ClickAsync(scenario, "Insert + read 25 rows");
         await ExpectStatusContainsAsync(scenario, "Round trip OK — total rows: 25");
+    }
+
+    [Theory]
+    [InlineData("internal")]
+    [InlineData("usb")]
+    [Trait("Browser", "Chromium")]
+    public async Task RegisterThenDerive_Completes(string transport)
+    {
+        await using var scenario = await fixture.CreateScenarioAsync(output);
+
+        if (transport != "internal")
+        {
+            await scenario.RemoveAuthenticatorAsync(scenario.PrimaryAuthenticatorId);
+            await scenario.AddVirtualAuthenticatorAsync(transport);
+        }
+
+        await scenario.NavigateAsync(PrfTestPath);
+
+        // The Crypto.UI panel's register path is create() + assertion + id check
+        // (PrfAuthenticator.RegisterAsync). Every other test here stops after
+        // create() or derives without having just registered, so this is the only
+        // cover for the two-ceremony sequence the panel actually runs.
+        await ClickAsync(scenario, "Register + derive", FirstButtonVisibleTimeoutMs);
+        await ExpectStatusContainsAsync(scenario, "Register + derive OK");
     }
 
     private static async Task ClickAsync(PrfScenario scenario, string buttonName, float? timeoutMs = null)

@@ -35,7 +35,9 @@
   <data name="Error_Register_KEY_DERIVATION_FAILED" xml:space="preserve"><value>The new passkey didn't produce derivable keys.</value></data>
   <data name="Error_Register_AUTHENTICATION_TAG_MISMATCH" xml:space="preserve"><value>Authentication tag mismatch during register-then-derive. Try again.</value></data>
   <data name="Error_Register_CREDENTIAL_NOT_FOUND" xml:space="preserve"><value>The freshly-created credential disappeared. Try again.</value></data>
+  <data name="Error_Register_CREDENTIAL_ALREADY_REGISTERED" xml:space="preserve"><value>This authenticator already holds the passkey for this database. Sign in with it instead of registering a new one.</value></data>
   <data name="Error_Register_CEREMONY_INCOMPLETE" xml:space="preserve"><value>The passkey prompt closed without finishing. It was dismissed, timed out, or the security key PIN was rejected.</value></data>
+  <data name="Error_Register_CREDENTIAL_MISMATCH" xml:space="preserve"><value>A different passkey answered than the one just registered. Pick the passkey you created when the prompt appears.</value></data>
   <data name="Error_Authenticate_CEREMONY_INCOMPLETE" xml:space="preserve"><value>The passkey prompt closed without finishing. It was dismissed, timed out, or the security key PIN was rejected.</value></data>
   <data name="Error_Register_INVALID_DATA" xml:space="preserve"><value>The new passkey returned unexpected data.</value></data>
   <data name="Error_Register_NOT_SUPPORTED" xml:space="preserve"><value>The selected authenticator doesn't support PRF.</value></data>

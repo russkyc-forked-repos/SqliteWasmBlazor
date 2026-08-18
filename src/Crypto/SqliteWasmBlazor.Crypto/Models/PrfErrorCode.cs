@@ -9,7 +9,9 @@ public enum PrfErrorCode
     NOT_SUPPORTED,
     PRF_NOT_SUPPORTED,
     CREDENTIAL_NOT_FOUND,
+    CREDENTIAL_ALREADY_REGISTERED,
     CEREMONY_INCOMPLETE,
+    CREDENTIAL_MISMATCH,
     AUTHENTICATION_TAG_MISMATCH,
     INVALID_DATA,
     KEY_DERIVATION_FAILED,
@@ -39,8 +41,12 @@ public static class PrfErrorMessages
             "The selected passkey does not support PRF extension. Please select a passkey that was created with PRF support, or register a new one.",
         PrfErrorCode.CREDENTIAL_NOT_FOUND =>
             "The credential was not found. It may have been deleted or is not available on this device.",
+        PrfErrorCode.CREDENTIAL_ALREADY_REGISTERED =>
+            "This authenticator already holds the passkey for this database. Sign in with it instead of registering a new one.",
         PrfErrorCode.CEREMONY_INCOMPLETE =>
             "The passkey prompt closed without completing. It was dismissed, timed out, or the authenticator PIN was rejected.",
+        PrfErrorCode.CREDENTIAL_MISMATCH =>
+            "A different passkey answered than the one just registered. Pick the passkey you created when the prompt appears.",
         PrfErrorCode.AUTHENTICATION_TAG_MISMATCH =>
             "Decryption failed: wrong key or corrupted data. This data was encrypted with a different key.",
         PrfErrorCode.INVALID_DATA =>

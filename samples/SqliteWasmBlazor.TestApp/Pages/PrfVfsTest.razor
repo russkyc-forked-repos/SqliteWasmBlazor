@@ -43,6 +43,20 @@
                        StartIcon="@Icons.Material.Filled.AddModerator">
                 Register passkey
             </MudButton>
+            <MudButton OnClick="RegisterAndDeriveAsync"
+                       Disabled="@_busy"
+                       Color="Color.Primary"
+                       Variant="Variant.Outlined"
+                       StartIcon="@Icons.Material.Filled.VpnKey">
+                Register + derive
+            </MudButton>
+            <MudButton OnClick="RegisterExcludingCurrentAsync"
+                       Disabled="@(_busy || _lastCredentialId is null)"
+                       Color="Color.Primary"
+                       Variant="Variant.Outlined"
+                       StartIcon="@Icons.Material.Filled.PersonOff">
+                Register passkey (exclude current)
+            </MudButton>
             @* Authenticate buttons disabled while a session is active.
                Lock (or PRF TTL expiry) drops the cache and re-enables them. *@
             <MudButton OnClick="AuthenticateAndOpenAsync"
@@ -145,6 +159,9 @@
     private string PrimaryCacheKey => "prf-seed:" + PrfOptionsAccessor.Value.Salt;
 
     private bool _keyInstalled;
+    // Credential id minted by the last successful Register, fed to the
+    // excludeCredentials ceremony so the authenticator refuses a duplicate.
+    private string? _lastCredentialId;
     private bool _busy;
     private string? _status;
     private Severity _severity = Severity.Info;
@@ -195,6 +212,99 @@
             .Subscribe(OnKeyExpired);
     }
 
+    // Mirrors PrfAuthenticator.RegisterAsync -- the Crypto.UI panel's register path:
+    // create() followed immediately by a DISCOVERABLE assertion, then an id check
+    // that the credential which answered is the one just minted. The plain Register
+    // button above stops after create(), so this is the only coverage of the
+    // two-ceremony sequence the panel actually runs.
+    private async Task RegisterAndDeriveAsync()
+    {
+        _busy = true;
+        try
+        {
+            var registered = await PrfService.RegisterAsync("PRF-VFS test passkey", []);
+            if (!registered.Success || registered.Value is null)
+            {
+                SetStatus(
+                    $"Register step failed: {registered.ErrorCode}{Detail(registered.ErrorDetail)}",
+                    Severity.Error);
+                return;
+            }
+
+            _lastCredentialId = registered.Value.RawId;
+
+            var derived = await PrfService.DeriveKeysDiscoverableAsync();
+            if (derived.Cancelled)
+            {
+                SetStatus($"Derive did not complete.{Detail(derived.ErrorDetail)}", Severity.Warning);
+                return;
+            }
+            if (!derived.Success)
+            {
+                SetStatus(
+                    $"Derive failed: {derived.ErrorCode} — {derived.Error}{Detail(derived.ErrorDetail)}",
+                    Severity.Error);
+                return;
+            }
+
+            var (assertedCredentialId, _) = derived.Value;
+            if (!string.Equals(assertedCredentialId, registered.Value.RawId, StringComparison.Ordinal))
+            {
+                SetStatus("Derive answered with a different credential than was registered.", Severity.Error);
+                return;
+            }
+
+            SetStatus("Register + derive OK.", Severity.Success);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Drives the excludeCredentials branch: ask for a new passkey while naming
+    // the one this authenticator already holds. WebAuthn answers InvalidStateError,
+    // which surfaces as CREDENTIAL_ALREADY_REGISTERED instead of minting a duplicate
+    // that would derive a different PRF key and never open the existing DB.
+    // The browser's own diagnostic for a failed ceremony. Dropping it is what made
+    // a rejected security-key PIN indistinguishable from a dismissed prompt.
+    private static string Detail(string? errorDetail) =>
+        string.IsNullOrWhiteSpace(errorDetail) ? string.Empty : $" ({errorDetail})";
+
+    private async Task RegisterExcludingCurrentAsync()
+    {
+        if (_lastCredentialId is null)
+        {
+            SetStatus("Register a passkey first.", Severity.Warning);
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await PrfService.RegisterAsync(
+                "PRF-VFS test passkey",
+                [_lastCredentialId]);
+
+            if (result.Success)
+            {
+                SetStatus("Registration was NOT excluded — a duplicate passkey was created.", Severity.Error);
+            }
+            else if (result.Cancelled)
+            {
+                SetStatus($"Registration did not complete.{Detail(result.ErrorDetail)}", Severity.Warning);
+            }
+            else
+            {
+                SetStatus($"Registration failed: {result.ErrorCode} — {result.Error}{Detail(result.ErrorDetail)}", Severity.Error);
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task RegisterAsync()
     {
         _busy = true;
@@ -206,18 +316,19 @@
                 SetStatus("This browser/authenticator doesn't support the WebAuthn PRF extension.", Severity.Error);
                 return;
             }
-            var result = await PrfService.RegisterAsync("PRF-VFS test passkey");
+            var result = await PrfService.RegisterAsync("PRF-VFS test passkey", []);
             if (result.Success)
             {
+                _lastCredentialId = result.Value?.RawId;
                 SetStatus("Passkey registered. Tap 'Authenticate and open' to use it.", Severity.Success);
             }
             else if (result.Cancelled)
             {
-                SetStatus("Registration cancelled.", Severity.Info);
+                SetStatus($"Registration did not complete.{Detail(result.ErrorDetail)}", Severity.Warning);
             }
             else
             {
-                SetStatus($"Registration failed: {result.ErrorCode} — {result.Error}", Severity.Error);
+                SetStatus($"Registration failed: {result.ErrorCode} — {result.Error}{Detail(result.ErrorDetail)}", Severity.Error);
             }
         }
         finally

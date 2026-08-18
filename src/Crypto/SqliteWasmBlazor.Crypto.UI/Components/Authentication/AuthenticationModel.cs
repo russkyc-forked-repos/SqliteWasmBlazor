@@ -111,7 +111,16 @@ public partial class AuthenticationModel : ObservableModel
     private async Task RegisterAsync(CancellationToken cancellationToken)
     {
         var displayName = string.IsNullOrWhiteSpace(RegisterDisplayName) ? null : RegisterDisplayName.Trim();
-        var result = await Authenticator.RegisterAsync(displayName, cancellationToken);
+
+        // An encrypted disk is bound to CredentialId; a second passkey on the same
+        // authenticator would derive a different PRF key and never unlock it. Excluding
+        // the hint turns that dead end into CREDENTIAL_ALREADY_REGISTERED at the
+        // ceremony. A plaintext disk has no hint, so nothing is excluded.
+        var excludeCredentialIds = string.IsNullOrWhiteSpace(CredentialId)
+            ? []
+            : new[] { CredentialId };
+
+        var result = await Authenticator.RegisterAsync(displayName, excludeCredentialIds, cancellationToken);
 
         if (!await ApplySessionAsync(result.CredentialId, result.PublicKeyBase64))
         {

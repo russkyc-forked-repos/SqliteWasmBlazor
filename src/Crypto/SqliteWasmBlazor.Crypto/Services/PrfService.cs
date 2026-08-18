@@ -116,11 +116,19 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
         return await JsInterop.IsPrfSupported();
     }
 
-       public async ValueTask<PrfResult<PrfCredential>> RegisterAsync(string? displayName = null)
+       public async ValueTask<PrfResult<PrfCredential>> RegisterAsync(
+        string? displayName,
+        IReadOnlyList<string> excludeCredentialIds)
     {
+        ArgumentNullException.ThrowIfNull(excludeCredentialIds);
+
         await EnsureInitializedAsync();
 
-        var resultJson = await JsInterop.Register(displayName, GetJsOptions());
+        var excludeJson = JsonSerializer.Serialize(
+            excludeCredentialIds,
+            PrfJsonContext.Default.IReadOnlyListString);
+
+        var resultJson = await JsInterop.Register(displayName, GetJsOptions(), excludeJson);
         var result = JsonSerializer.Deserialize(resultJson, PrfJsonContext.Default.PrfResultPrfCredential);
 
         if (result is null)
@@ -156,7 +164,8 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
         // Get raw PRF output from JS (WebAuthn). Deserialized as PrfResult<byte[]>
         // so the seed never lands in a managed string (P21) — System.Text.Json
         // reads the JSON Base64 string directly into a byte[] value.
-        var resultJson = await JsInterop.EvaluatePrfOutput(credentialId, _options.Salt, GetJsOptions());
+        var resultJson = await JsInterop.EvaluatePrfOutput(
+            credentialId, _options.Salt, GetJsOptions());
         var result = JsonSerializer.Deserialize(resultJson, PrfJsonContext.Default.PrfResultByteArray);
 
         if (result is null)
@@ -394,10 +403,16 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
         public static partial Task<bool> IsPrfSupported();
 
         [JSImport("register", "sqliteWasmBlazorCryptoPrf")]
-        public static partial Task<string> Register(string? displayName, string optionsJson);
+        public static partial Task<string> Register(
+            string? displayName,
+            string optionsJson,
+            string excludeCredentialIdsJson);
 
         [JSImport("evaluatePrfOutput", "sqliteWasmBlazorCryptoPrf")]
-        public static partial Task<string> EvaluatePrfOutput(string credentialIdBase64, string salt, string optionsJson);
+        public static partial Task<string> EvaluatePrfOutput(
+            string credentialIdBase64,
+            string salt,
+            string optionsJson);
 
         [JSImport("evaluatePrfDiscoverableOutput", "sqliteWasmBlazorCryptoPrf")]
         public static partial Task<string> EvaluatePrfDiscoverableOutput(string salt, string optionsJson);

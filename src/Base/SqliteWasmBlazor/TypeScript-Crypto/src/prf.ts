@@ -44,22 +44,24 @@ export async function evaluatePrf(
 
         const credentialId = base64ToArrayBuffer(credentialIdBase64);
 
-        // Build authentication options with PRF extension
-        // Note: Don't specify transports - let browser determine the best transport
+        // No `transports` hint: naming them makes the browser wait on every transport
+        // the credential claims, so a key reporting ["nfc","usb"] parks the prompt on
+        // an NFC reader that may not exist. Let the browser work out how to reach it.
+        const allowCredential: PublicKeyCredentialDescriptor = {
+            id: credentialId,
+            type: 'public-key'
+        };
+
+        // Build authentication options with PRF extension.
+        // userVerification is 'required' because the PRF output IS the key: CTAP2
+        // only releases hmac-secret under user verification, so a UV-less assertion
+        // succeeds while returning no PRF result -- a failure that would otherwise
+        // surface as the misleading "authenticator doesn't support PRF".
         const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
             challenge: crypto.getRandomValues(new Uint8Array(32)),
             rpId: options.rpId ?? window.location.hostname,
-            allowCredentials: [
-                {
-                    id: credentialId,
-                    type: 'public-key'
-                }
-            ],
+            allowCredentials: [allowCredential],
             timeout: options.timeoutMs,
-            // userVerification is 'required' because the PRF output IS the key: CTAP2
-            // only releases hmac-secret under user verification, so a UV-less assertion
-            // succeeds while returning no PRF result -- a failure that would otherwise
-            // surface as the misleading "authenticator doesn't support PRF".
             userVerification: 'required',
             extensions: {
                 prf: {
@@ -92,6 +94,7 @@ export async function evaluatePrf(
         };
 
         const prfResults = extensionResults.prf?.results;
+
 
         if (!prfResults?.first) {
             return {
@@ -203,6 +206,7 @@ export async function evaluatePrfDiscoverable(
         };
 
         const prfResults = extensionResults.prf?.results;
+
 
         if (!prfResults?.first) {
             return {
