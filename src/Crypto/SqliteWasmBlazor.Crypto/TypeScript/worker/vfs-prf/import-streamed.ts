@@ -34,7 +34,6 @@ import {
     readStr,
     readUint,
 } from '../../bridge/msgpack-stream.js';
-import { debugLog } from '../debug-log.js';
 
 const SECTOR_SIZE = 4096;
 const PAGE_NONCE_LEN = 12;
@@ -126,7 +125,6 @@ export async function importDatabaseFromBlob(
     poolUtil: PoolUtilLike,
     globalKey: Uint8Array | undefined,
     rekeyFn: ((chunk: Uint8Array, dbPath: string, slotIndexBase: number, key: Uint8Array) => Uint8Array) | undefined,
-    traceOp?: string,
 ): Promise<void> {
     if (blob.size === 0 || blob.size % PLAIN_SLOT_SIZE !== 0) {
         throw new Error(
@@ -149,14 +147,6 @@ export async function importDatabaseFromBlob(
     const CHUNK_SLOTS = 256;
     const PHYSICAL_SLOT_SIZE = 4124;
     const reader = new BufferedStreamReader(blob.stream().getReader());
-
-    if (traceOp) {
-        debugLog(traceOp, 'singleImport.enter', {
-            name: dbName,
-            slots: totalSlots,
-            encrypted: globalKey !== undefined,
-        });
-    }
 
     try {
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
@@ -190,22 +180,11 @@ export async function importDatabaseFromBlob(
                     if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
                 }
             }
-
-            if (traceOp) {
-                debugLog(traceOp, 'singleImport.chunk', {
-                    name: dbName, slotBase, slotCount,
-                    isFirst: slotBase === 0,
-                    isLast: slotBase + slotCount === totalSlots,
-                });
-            }
         }
 
-        if (traceOp) { debugLog(traceOp, 'singleImport.atomicReplace', { name: dbName }); }
         poolUtil.atomicReplaceFile(tempPath, dbPath);
-        if (traceOp) { debugLog(traceOp, 'singleImport.done', { name: dbName }); }
     } catch (err) {
         try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-        if (traceOp) { debugLog(traceOp, 'singleImport.error', { name: dbName, msg: String(err) }); }
         throw err;
     } finally {
         reader.releaseLock();
@@ -304,14 +283,12 @@ function writeEncryptedSlot(
 export async function importDiskStreamPreflight(
     blob: Blob,
     kWrap: Uint8Array,
-    traceOp?: string,
 ): Promise<DiskImportResultCode> {
     const reader = new BufferedStreamReader(blob.stream().getReader());
     try {
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
         assertImportFileCount(fileCount, 'importDiskStreamed[preflight]');
-        if (traceOp) { debugLog(traceOp, 'preflight.files', { count: fileCount }); }
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
             if (tupleLen !== 2) {
@@ -324,7 +301,6 @@ export async function importDiskStreamPreflight(
                 throw new Error(
                     `importDiskStreamed[preflight]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
             }
-            if (traceOp) { debugLog(traceOp, 'preflight.file', { name, bytes: binLen }); }
             const dbPath = `/databases/${name}`;
             const totalSlots = binLen / PHYSICAL_SLOT_SIZE;
             for (let slotIdx = 0; slotIdx < totalSlots; slotIdx++) {
@@ -374,7 +350,6 @@ export async function importDiskStreamCommit(
     kWrap: Uint8Array,
     globalKey: Uint8Array,
     poolUtil: PoolUtilLike,
-    traceOp?: string,
 ): Promise<void> {
     // 256 physical slots ≈ 1 MB rekey buffer per chunk write to the temp
     // SAH. Matches the constant in encryptDatabaseInPlace.
@@ -390,7 +365,6 @@ export async function importDiskStreamCommit(
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
         assertImportFileCount(fileCount, 'importDiskStreamed[commit]');
-        if (traceOp) { debugLog(traceOp, 'commit.files', { count: fileCount }); }
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
             if (tupleLen !== 2) {
@@ -410,7 +384,6 @@ export async function importDiskStreamCommit(
             }
             tempPaths.push(tempPath);
             const totalSlots = binLen / PHYSICAL_SLOT_SIZE;
-            if (traceOp) { debugLog(traceOp, 'commit.file.start', { name, slots: totalSlots }); }
             let chunkBuf: Uint8Array | null = null;
             for (let slotBase = 0; slotBase < totalSlots; slotBase += COMMIT_CHUNK_SLOTS) {
                 const slotCount = Math.min(COMMIT_CHUNK_SLOTS, totalSlots - slotBase);
@@ -429,23 +402,19 @@ export async function importDiskStreamCommit(
                         }
                     }
                     poolUtil.writeFileSlice(tempPath, slotBase * PHYSICAL_SLOT_SIZE, chunkBuf);
-                    if (traceOp) { debugLog(traceOp, 'commit.chunk', { name, slotBase, slotCount }); }
                 } finally {
                     clearBytes(chunkBuf);
                     chunkBuf = null;
                 }
             }
             pendingPromotions.push({ tempPath, dbPath, name });
-            if (traceOp) { debugLog(traceOp, 'commit.file.staged', { name }); }
         }
         // Every file decrypted, rekeyed and staged — promote them all.
         // Doing this only after the full envelope has been processed means
         // a mid-envelope failure (truncation, AEAD, write error) never
         // leaves the pool with a partial mix of old and new DBs.
         for (const { tempPath, dbPath, name } of pendingPromotions) {
-            if (traceOp) { debugLog(traceOp, 'commit.atomicReplace', { name }); }
             poolUtil.atomicReplaceFile(tempPath, dbPath);
-            if (traceOp) { debugLog(traceOp, 'commit.file.done', { name }); }
         }
     } catch (error) {
         // Unlink any staged temp that wasn't promoted. Promotion runs as

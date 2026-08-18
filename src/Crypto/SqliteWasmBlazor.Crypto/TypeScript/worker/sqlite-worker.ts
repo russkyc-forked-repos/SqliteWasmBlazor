@@ -27,7 +27,6 @@ import {
     writeDiskManifestOp,
     clearDiskManifestOp,
 } from './worker-manifest';
-import { setDebugLogBase, debugLog, nextOpId } from './debug-log';
 import {
     importDiskStreamPreflight,
     importDiskStreamCommit,
@@ -224,11 +223,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
         if (event.data.assetRoot) {
             assetRoot = event.data.assetRoot;
         }
-        // Wire the diagnostic channel. After this fires, every debugLog call
-        // POSTs to <origin><baseHref>debug-log.php; before it fires the
-        // calls are no-ops. The PHP sink is deployed only by
-        // scripts/deep-clean-publish.sh, so a vanilla publish 404s silently.
-        setDebugLogBase(baseHref);
         // Start initialization after receiving base href
         await initializeSQLite();
         return;
@@ -403,14 +397,10 @@ async function importDiskStreamPreflightHandler(
     if (kWrap.length !== 32) {
         throw new Error(`importDiskStreamPreflight: K_wrap must be 32 bytes, got ${kWrap.length}`);
     }
-    const op = nextOpId();
-    debugLog(op, 'preflight.enter', { blobSize: blob.size });
     let result: number;
     try {
-        result = await importDiskStreamPreflight(blob, kWrap, op);
-        debugLog(op, 'preflight.done', { result });
+        result = await importDiskStreamPreflight(blob, kWrap);
     } catch (err) {
-        debugLog(op, 'preflight.error', { msg: String(err) });
         throw err;
     } finally {
         clearBytes(kWrap);
@@ -438,13 +428,9 @@ async function importDiskStreamCommitHandler(
             'C# caller must have run EnterEncryptedAsync between preflight and commit.');
     }
     const globalKey = snapshotGlobalKey()!;
-    const op = nextOpId();
-    debugLog(op, 'commit.enter', { blobSize: blob.size });
     try {
-        await importDiskStreamCommit(blob, kWrap, globalKey, poolUtil!, op);
-        debugLog(op, 'commit.done', {});
+        await importDiskStreamCommit(blob, kWrap, globalKey, poolUtil!);
     } catch (err) {
-        debugLog(op, 'commit.error', { msg: String(err) });
         throw err;
     } finally {
         clearBytes(kWrap);
@@ -504,11 +490,6 @@ async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
     }
     const totalSlots = fileSize / sourceSlotSize;
 
-    const op = nextOpId();
-    debugLog(op, 'singleExport.enter', {
-        name: dbName, slots: totalSlots, encrypted,
-    });
-
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
     const staging = await openExportStaging();
     try {
@@ -533,9 +514,6 @@ async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
                     plainChunk = sourceChunk;
                     sourceChunk = null;
                 }
-                debugLog(op, 'singleExport.chunk', {
-                    name: dbName, slotBase, slotCount,
-                });
                 staging.write(plainChunk!);
             } finally {
                 if (sourceChunk !== null) { clearBytes(sourceChunk); }
@@ -544,7 +522,6 @@ async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
         }
 
         staging.finish();
-        debugLog(op, 'singleExport.done', { name: dbName });
         return staging.name;
     } catch (err) {
         await staging.abort();
@@ -601,11 +578,6 @@ async function exportDatabasesToStagingHandler(
         await closeDatabase(dbName);
     }
 
-    const op = nextOpId();
-    debugLog(op, 'multiExport.enter', {
-        count: dbNames.length, encrypted,
-    });
-
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
     const staging = await openExportStaging();
     try {
@@ -630,8 +602,6 @@ async function exportDatabasesToStagingHandler(
             }
             staging.write(packBinHeader(plainSize));
 
-            debugLog(op, 'multiExport.file.start', { name: dbName, slots: totalSlots });
-
             for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
                 const sourceOffset = slotBase * sourceSlotSize;
@@ -654,11 +624,9 @@ async function exportDatabasesToStagingHandler(
                     if (plainChunk !== null) { clearBytes(plainChunk); }
                 }
             }
-            debugLog(op, 'multiExport.file.done', { name: dbName });
         }
 
         staging.finish();
-        debugLog(op, 'multiExport.done', {});
         self.postMessage({ streamId, streamDone: true, stagingFile: staging.name });
     } catch (err) {
         await staging.abort();
@@ -693,9 +661,7 @@ async function importDatabasesFromSessionHandler(
         throw new Error('SQLite not initialized');
     }
 
-    const op = nextOpId();
     const encrypted = hasGlobalKey();
-    debugLog(op, 'multiImport.enter', { blobSize: blob.size, encrypted });
 
     // Pass 1 — validate the entire envelope before touching the pool.
     {
@@ -730,7 +696,6 @@ async function importDatabasesFromSessionHandler(
             probe.releaseLock();
         }
     }
-    debugLog(op, 'multiImport.validated', {});
 
     // Pass 2 — wipe the pool, then commit. Only reached once the whole
     // envelope has validated; the wipe stays the documented destructive
@@ -744,7 +709,6 @@ async function importDatabasesFromSessionHandler(
     const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
     try {
         const fileCount = await readArrayHeader(reader);
-        debugLog(op, 'multiImport.files', { count: fileCount });
 
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
@@ -765,7 +729,6 @@ async function importDatabasesFromSessionHandler(
                 try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
             }
             const totalSlots = plainSize / PLAIN_SLOT_SIZE;
-            debugLog(op, 'multiImport.file.start', { name, slots: totalSlots });
 
             for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
@@ -801,12 +764,9 @@ async function importDatabasesFromSessionHandler(
                 }
             }
 
-            debugLog(op, 'multiImport.atomicReplace', { name });
             poolUtil.atomicReplaceFile(tempPath, dbPath);
-            debugLog(op, 'multiImport.file.done', { name });
         }
 
-        debugLog(op, 'multiImport.done', {});
         self.postMessage({ streamId, streamDone: true, result: 0 });
     } finally {
         reader.releaseLock();
@@ -831,12 +791,6 @@ async function importDatabaseFromSessionHandler(
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
-    const op = nextOpId();
-    debugLog(op, 'singleImport.routed', {
-        name: dbName,
-        blobSize: blob.size,
-        encrypted: hasGlobalKey(),
-    });
     if (hasGlobalKey()) {
         const globalKey = snapshotGlobalKey()!;
         try {
@@ -844,13 +798,12 @@ async function importDatabaseFromSessionHandler(
                 blob, dbName, poolUtil,
                 globalKey,
                 (chunk, dbPath, slotIndexBase, key) =>
-                    rekeySlots(chunk, dbPath, undefined, key, slotIndexBase),
-                op);
+                    rekeySlots(chunk, dbPath, undefined, key, slotIndexBase));
         } finally {
             clearBytes(globalKey);
         }
     } else {
-        await importDatabaseFromBlob(blob, dbName, poolUtil, undefined, undefined, op);
+        await importDatabaseFromBlob(blob, dbName, poolUtil, undefined, undefined);
     }
     self.postMessage({ streamId, streamDone: true, result: 0 });
 }
@@ -885,14 +838,11 @@ async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): 
             'have Unlocked the disk before invoking the streaming export.');
     }
 
-    const op = nextOpId();
     const globalKey = snapshotGlobalKey()!;
     const staging = await openExportStaging();
     const files: { name: string; offset: number; size: number }[] = [];
     try {
         const names = poolUtil.listDatabases();
-        debugLog(op, 'export.enter', {});
-        debugLog(op, 'export.dbs', { count: names.length });
 
         for (const name of names) {
             await closeDatabase(name);
@@ -906,7 +856,6 @@ async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): 
             }
             const totalSlots = fileSize / ENCRYPTED_SLOT_SIZE;
             const fileOffset = staging.position();
-            debugLog(op, 'export.db.start', { name, slots: totalSlots });
 
             for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
                 const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
@@ -921,7 +870,6 @@ async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): 
                     // format (4124 bytes per slot, AAD-bound to dbPath +
                     // global slot index).
                     rekeyedChunk = rekeySlots(sourceChunk!, dbPath, globalKey, kWrap, slotBase);
-                    debugLog(op, 'export.chunk', { name, slotBase, slotCount });
                     staging.write(rekeyedChunk);
                 } finally {
                     if (sourceChunk !== null) { clearBytes(sourceChunk); }
@@ -929,11 +877,9 @@ async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): 
                 }
             }
             files.push({ name, offset: fileOffset, size: staging.position() - fileOffset });
-            debugLog(op, 'export.db.done', { name });
         }
 
         staging.finish();
-        debugLog(op, 'export.done', {});
         self.postMessage({ streamId, streamDone: true, stagingFile: staging.name, files });
     } catch (err) {
         await staging.abort();
@@ -1844,7 +1790,6 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
 
     const dbPath = `/databases/${dbName}`;
     const tempPath = `${dbPath}.encrypt-tmp`;
-    const op = nextOpId();
 
     // Install-K-first ordering (D.1): a globalKey is already registered
     // before this loop runs — the caller (EnterEncryptedAsync) installed
@@ -1897,8 +1842,6 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
         try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
     }
 
-    debugLog(op, 'encryptInPlace.enter', { name: dbName, slots: totalSlots });
-
     try {
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
             const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
@@ -1912,11 +1855,6 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
                 plainChunk = poolUtil.exportFileSlice(dbPath, plainOffset, plainBytes);
                 encryptedChunk = rekeySlots(plainChunk!, dbPath, undefined, key, slotBase);
                 poolUtil.writeFileSlice(tempPath, encryptedOffset, encryptedChunk!);
-                debugLog(op, 'encryptInPlace.chunk', {
-                    name: dbName, slotBase, slotCount,
-                    isFirst: slotBase === 0,
-                    isLast: slotBase + slotCount === totalSlots,
-                });
             } finally {
                 // plainChunk is sensitive plaintext — wipe.
                 if (plainChunk !== null) { clearBytes(plainChunk); }
@@ -1927,21 +1865,18 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
         // Promote temp → real. The src SAH slot becomes the new live
         // DB slot in one metadata-only rename; the old plain slot is
         // freed back to the pool.
-        debugLog(op, 'encryptInPlace.atomicReplace', { name: dbName });
         poolUtil.atomicReplaceFile(tempPath, dbPath);
 
         logger.info(
             MODULE_NAME,
             `✓ Encrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
-        debugLog(op, 'encryptInPlace.done', { name: dbName });
 
         return { rowsAffected: 0 };
     } catch (err) {
         // Mid-loop or post-rename failure: drop the temp slot if it still
         // has data. The real path is untouched until atomicReplaceFile.
         try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-        debugLog(op, 'encryptInPlace.error', { name: dbName, msg: String(err) });
         throw err;
     }
 }
@@ -1961,7 +1896,6 @@ async function decryptDatabaseInPlace(dbName: string) {
 
     const dbPath = `/databases/${dbName}`;
     const tempPath = `${dbPath}.decrypt-tmp`;
-    const op = nextOpId();
 
     if (!hasGlobalKey()) {
         throw new Error(
@@ -2001,8 +1935,6 @@ async function decryptDatabaseInPlace(dbName: string) {
             try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
         }
 
-        debugLog(op, 'decryptInPlace.enter', { name: dbName, slots: totalSlots });
-
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
             const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
             const encryptedOffset = slotBase * ENCRYPTED_SLOT_SIZE;
@@ -2015,11 +1947,6 @@ async function decryptDatabaseInPlace(dbName: string) {
                 encryptedChunk = poolUtil.exportFileSlice(dbPath, encryptedOffset, encryptedBytes);
                 plainChunk = rekeySlots(encryptedChunk!, dbPath, sourceKey, undefined, slotBase);
                 poolUtil.writeFileSlice(tempPath, plainOffset, plainChunk!);
-                debugLog(op, 'decryptInPlace.chunk', {
-                    name: dbName, slotBase, slotCount,
-                    isFirst: slotBase === 0,
-                    isLast: slotBase + slotCount === totalSlots,
-                });
             } finally {
                 if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
                 // plainChunk is sensitive plaintext — wipe.
@@ -2027,19 +1954,16 @@ async function decryptDatabaseInPlace(dbName: string) {
             }
         }
 
-        debugLog(op, 'decryptInPlace.atomicReplace', { name: dbName });
         poolUtil.atomicReplaceFile(tempPath, dbPath);
 
         logger.info(
             MODULE_NAME,
             `✓ Decrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
-        debugLog(op, 'decryptInPlace.done', { name: dbName });
 
         return { rowsAffected: 0 };
     } catch (err) {
         try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
-        debugLog(op, 'decryptInPlace.error', { name: dbName, msg: String(err) });
         throw err;
     } finally {
         // K_old (snapshot) — wipe so it doesn't linger past the op.
