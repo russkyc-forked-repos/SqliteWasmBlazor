@@ -9,10 +9,6 @@
 
 **[Try the Live Demo](https://b-straub.github.io/SqliteWasmBlazor/)** - Experience persistent SQLite database in your browser! Can be installed as a Progressive Web App (PWA) for offline use.
 
-## Development Update
-
-> **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard recently when Anthropic made their services more or less unusable for my workflow. To get things moving again, I've switched my development pipeline to use **Google Antigravity (agy)**. The transition is complete, and development is fully back on track!
-
 ## Related Projects
 
 SqliteWasmBlazor is part of a family of libraries for building offline-first Blazor applications:
