@@ -2,6 +2,7 @@
 
 import { PrfErrorCode, type PrfOptions, type PrfResult } from './types.js';
 import { base64ToBytes, bytesToBase64, clearBytes, toBuffer } from '@sqlitewasmblazor/crypto-core';
+import { describeCeremonyError } from './ceremonyError.js';
 
 function base64ToArrayBuffer(b64: string): ArrayBuffer {
     return toBuffer(base64ToBytes(b64));
@@ -117,17 +118,23 @@ export async function evaluatePrf(
             value: resultBase64
         };
     } catch (error) {
-        // User cancelled the authentication - not an error
+        const errorDetail = describeCeremonyError(error);
+
+        // Dismissed prompt, timeout, or a rejected/blocked authenticator PIN --
+        // the browser reports all three as NotAllowedError. errorDetail carries
+        // the message that tells them apart.
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
             return {
                 success: false,
-                cancelled: true
+                cancelled: true,
+                errorDetail
             };
         }
 
         return {
             success: false,
-            errorCode: PrfErrorCode.KeyDerivationFailed
+            errorCode: PrfErrorCode.KeyDerivationFailed,
+            errorDetail
         };
     } finally {
         // Zero the PRF output in JavaScript memory
@@ -226,17 +233,23 @@ export async function evaluatePrfDiscoverable(
             }
         };
     } catch (error) {
-        // User cancelled the authentication - not an error
+        const errorDetail = describeCeremonyError(error);
+
+        // Dismissed prompt, timeout, or a rejected/blocked authenticator PIN --
+        // the browser reports all three as NotAllowedError. errorDetail carries
+        // the message that tells them apart.
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
             return {
                 success: false,
-                cancelled: true
+                cancelled: true,
+                errorDetail
             };
         }
 
         return {
             success: false,
-            errorCode: PrfErrorCode.KeyDerivationFailed
+            errorCode: PrfErrorCode.KeyDerivationFailed,
+            errorDetail
         };
     } finally {
         // Zero the PRF output in JavaScript memory

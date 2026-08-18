@@ -30,6 +30,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SqliteWasmBlazor.TestHost\SqliteWasmBlazor.TestHost.csproj" />
+    <!-- Direct reference so PrfAuthenticator's failure-surfacing contract can be unit-tested
+         without a browser: TestApp does not reference Crypto.UI. -->
+    <ProjectReference Include="..\..\src\Crypto\SqliteWasmBlazor.Crypto.UI\SqliteWasmBlazor.Crypto.UI.csproj" />
   </ItemGroup>
 
 </Project>

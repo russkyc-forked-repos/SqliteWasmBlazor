@@ -36,7 +36,8 @@ export async function evaluatePrfOutput(
         return JSON.stringify({
             success: false,
             errorCode: prfResult.errorCode,
-            cancelled: prfResult.cancelled
+            cancelled: prfResult.cancelled,
+            errorDetail: prfResult.errorDetail
         });
     }
 
@@ -57,7 +58,8 @@ export async function evaluatePrfDiscoverableOutput(
         return JSON.stringify({
             success: false,
             errorCode: prfResult.errorCode,
-            cancelled: prfResult.cancelled
+            cancelled: prfResult.cancelled,
+            errorDetail: prfResult.errorDetail
         });
     }
 

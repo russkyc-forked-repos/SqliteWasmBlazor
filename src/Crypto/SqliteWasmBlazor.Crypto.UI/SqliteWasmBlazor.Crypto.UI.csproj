@@ -57,6 +57,7 @@
          directly for focused coverage. -->
     <InternalsVisibleTo Include="SqliteWasmBlazor.CryptoSync.Tests" />
     <InternalsVisibleTo Include="SqliteWasmBlazor.TestApp" />
+    <InternalsVisibleTo Include="SqliteWasmBlazor.Tests" />
   </ItemGroup>
 
   <ItemGroup>

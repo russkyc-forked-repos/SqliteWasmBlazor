@@ -2,6 +2,7 @@
 
 import { PrfErrorCode, type PrfCredential, type PrfOptions, type PrfResult } from './types.js';
 import { bytesToBase64 } from '@sqlitewasmblazor/crypto-core';
+import { describeCeremonyError } from './ceremonyError.js';
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
     return bytesToBase64(new Uint8Array(buf));
@@ -120,17 +121,23 @@ export async function registerCredentialWithPrf(
             }
         };
     } catch (error) {
-        // User cancelled the registration - not an error
+        const errorDetail = describeCeremonyError(error);
+
+        // Dismissed prompt, timeout, or a rejected/blocked authenticator PIN --
+        // the browser reports all three as NotAllowedError. errorDetail carries
+        // the message that tells them apart.
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
             return {
                 success: false,
-                cancelled: true
+                cancelled: true,
+                errorDetail
             };
         }
 
         return {
             success: false,
-            errorCode: PrfErrorCode.RegistrationFailed
+            errorCode: PrfErrorCode.RegistrationFailed,
+            errorDetail
         };
     }
 }

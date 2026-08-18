@@ -19,9 +19,7 @@
   <data name="Caption_UsingHint" xml:space="preserve"><value>Using your most recent passkey — the platform skips the picker.</value></data>
   <data name="Caption_DiscoverablePicker" xml:space="preserve"><value>Pick a passkey from the platform list.</value></data>
   <data name="Status_Registered" xml:space="preserve"><value>Passkey registered. You're signed in.</value></data>
-  <data name="Status_AuthenticationCancelled" xml:space="preserve"><value>Authentication cancelled.</value></data>
   <data name="Status_DiscoverableCancelled" xml:space="preserve"><value>No passkey selected.</value></data>
-  <data name="Status_RegisterCancelled" xml:space="preserve"><value>Registration cancelled.</value></data>
   <data name="Status_WrongPasskeyForDisk" xml:space="preserve"><value>Wrong passkey — this passkey doesn't unlock the encrypted database. Use the original passkey, or reset the database.</value></data>
   <data name="Alert_WrongPasskeyForDisk" xml:space="preserve"><value>This passkey doesn't unlock the current database. You're not signed in — but the passkey's public key is shown below so you can hand it to a peer who will encrypt an export to it.</value></data>
   <data name="Btn_DismissWrongPasskey" xml:space="preserve"><value>Dismiss</value></data>
@@ -37,6 +35,8 @@
   <data name="Error_Register_KEY_DERIVATION_FAILED" xml:space="preserve"><value>The new passkey didn't produce derivable keys.</value></data>
   <data name="Error_Register_AUTHENTICATION_TAG_MISMATCH" xml:space="preserve"><value>Authentication tag mismatch during register-then-derive. Try again.</value></data>
   <data name="Error_Register_CREDENTIAL_NOT_FOUND" xml:space="preserve"><value>The freshly-created credential disappeared. Try again.</value></data>
+  <data name="Error_Register_CEREMONY_INCOMPLETE" xml:space="preserve"><value>The passkey prompt closed without finishing. It was dismissed, timed out, or the security key PIN was rejected.</value></data>
+  <data name="Error_Authenticate_CEREMONY_INCOMPLETE" xml:space="preserve"><value>The passkey prompt closed without finishing. It was dismissed, timed out, or the security key PIN was rejected.</value></data>
   <data name="Error_Register_INVALID_DATA" xml:space="preserve"><value>The new passkey returned unexpected data.</value></data>
   <data name="Error_Register_NOT_SUPPORTED" xml:space="preserve"><value>The selected authenticator doesn't support PRF.</value></data>
   <data name="Error_Register_PRF_NOT_SUPPORTED" xml:space="preserve"><value>This browser or device doesn't support PRF.</value></data>

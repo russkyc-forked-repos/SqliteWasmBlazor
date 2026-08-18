@@ -20,14 +20,25 @@ namespace SqliteWasmBlazor.Crypto.UI.Services;
 /// </para>
 ///
 /// <para>
-/// <b>Failure surfacing.</b> Per the seam: register-time user cancel throws
-/// <see cref="OperationCanceledException"/>; authenticate-time user cancel
-/// returns <c>null</c>; transport / WebAuthn errors throw
-/// <see cref="PrfAuthenticatorException"/> with the structured
-/// <see cref="PrfErrorCode"/> intact so the panel formatters can localize via
-/// per-code resx keys (<c>Error_Register_{code}</c> /
+/// <b>Failure surfacing.</b> Per the seam: an abandoned register ceremony throws
+/// <see cref="PrfAuthenticatorException"/> as
+/// <see cref="PrfErrorCode.CEREMONY_INCOMPLETE"/>; an abandoned authenticate
+/// ceremony returns a non-completed <see cref="PrfAuthenticationOutcome"/>;
+/// transport / WebAuthn errors throw <see cref="PrfAuthenticatorException"/> with
+/// the structured <see cref="PrfErrorCode"/> intact so the panel formatters can
+/// localize via per-code resx keys (<c>Error_Register_{code}</c> /
 /// <c>Error_Authenticate_{code}</c>) rather than embedding a hardcoded
-/// English string from <see cref="PrfErrorMessages.GetMessage"/>.
+/// English string from <see cref="PrfErrorMessages.GetMessage"/>. Every throw
+/// carries the browser's own diagnostic in
+/// <see cref="PrfAuthenticatorException.Detail"/>.
+/// </para>
+///
+/// <para>
+/// <b>Never OperationCanceledException.</b> RxBlazorV2 discards those as
+/// switch-cancellation before the command error formatter runs, so routing a
+/// dismissed prompt or a rejected authenticator PIN through one leaves the user
+/// with no feedback whatsoever. Only <paramref name="cancellationToken"/>-driven
+/// teardown may raise it, which is exactly the case that should stay silent.
 /// </para>
 /// </summary>
 internal sealed class PrfAuthenticator : IPrfAuthenticator
@@ -54,15 +65,17 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
         var registerResult = await _prf.RegisterAsync(displayName);
         if (registerResult.Cancelled)
         {
-            throw new OperationCanceledException(
-                "User cancelled passkey registration.",
-                cancellationToken);
+            throw new PrfAuthenticatorException(
+                PrfAuthenticatorOperation.Register,
+                PrfErrorCode.CEREMONY_INCOMPLETE,
+                registerResult.ErrorDetail);
         }
         if (!registerResult.Success || registerResult.Value is null)
         {
             throw new PrfAuthenticatorException(
                 PrfAuthenticatorOperation.Register,
-                registerResult.ErrorCode ?? PrfErrorCode.REGISTRATION_FAILED);
+                registerResult.ErrorCode ?? PrfErrorCode.REGISTRATION_FAILED,
+                registerResult.ErrorDetail);
         }
 
         var credential = registerResult.Value;
@@ -71,21 +84,23 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
         var deriveResult = await _prf.DeriveKeysAsync(credential.RawId);
         if (deriveResult.Cancelled)
         {
-            throw new OperationCanceledException(
-                "User cancelled the post-registration key derivation ceremony.",
-                cancellationToken);
+            throw new PrfAuthenticatorException(
+                PrfAuthenticatorOperation.Register,
+                PrfErrorCode.CEREMONY_INCOMPLETE,
+                deriveResult.ErrorDetail);
         }
         if (!deriveResult.Success || deriveResult.Value is null)
         {
             throw new PrfAuthenticatorException(
                 PrfAuthenticatorOperation.Register,
-                deriveResult.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED);
+                deriveResult.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED,
+                deriveResult.ErrorDetail);
         }
 
         return new PrfRegistrationResult(credential.RawId, deriveResult.Value);
     }
 
-    public async ValueTask<PrfAuthenticationResult?> AuthenticateAsync(
+    public async ValueTask<PrfAuthenticationOutcome> AuthenticateAsync(
         string? credentialIdHint,
         CancellationToken cancellationToken = default)
     {
@@ -96,15 +111,18 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
             var byHint = await _prf.DeriveKeysAsync(credentialIdHint);
             if (byHint.Cancelled)
             {
-                return null;
+                return PrfAuthenticationOutcome.Incomplete(byHint.ErrorDetail);
             }
             if (!byHint.Success || byHint.Value is null)
             {
                 throw new PrfAuthenticatorException(
                     PrfAuthenticatorOperation.Authenticate,
-                    byHint.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED);
+                    byHint.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED,
+                    byHint.ErrorDetail);
             }
-            return new PrfAuthenticationResult(credentialIdHint, byHint.Value);
+            return new PrfAuthenticationOutcome(
+                new PrfAuthenticationResult(credentialIdHint, byHint.Value),
+                Detail: null);
         }
 
         // Caller asked for discoverable explicitly — go straight to the
@@ -118,18 +136,21 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
         var byDiscoverable = await _prf.DeriveKeysDiscoverableAsync();
         if (byDiscoverable.Cancelled)
         {
-            return null;
+            return PrfAuthenticationOutcome.Incomplete(byDiscoverable.ErrorDetail);
         }
         if (!byDiscoverable.Success)
         {
             throw new PrfAuthenticatorException(
                 PrfAuthenticatorOperation.Authenticate,
-                byDiscoverable.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED);
+                byDiscoverable.ErrorCode ?? PrfErrorCode.KEY_DERIVATION_FAILED,
+                byDiscoverable.ErrorDetail);
         }
         // PrfResult<T>.Value for an unconstrained T resolves to T itself (not
         // Nullable<T>) when T is a value type — the value-tuple components
         // here are populated under the IPrfService.Success contract.
         var (credentialId, publicKey) = byDiscoverable.Value;
-        return new PrfAuthenticationResult(credentialId, publicKey);
+        return new PrfAuthenticationOutcome(
+            new PrfAuthenticationResult(credentialId, publicKey),
+            Detail: null);
     }
 }

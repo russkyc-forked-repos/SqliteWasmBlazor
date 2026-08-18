@@ -36,9 +36,9 @@ public interface IPrfAuthenticator
     /// the derived public key. Pass a non-null <paramref name="credentialIdHint"/>
     /// to target a specific credential; pass <c>null</c> to use the
     /// platform's discoverable-credential picker.
-    /// Returns <c>null</c> if the user dismissed the prompt.
+    /// A non-completed outcome means the prompt closed without an assertion.
     /// </summary>
-    ValueTask<PrfAuthenticationResult?> AuthenticateAsync(
+    ValueTask<PrfAuthenticationOutcome> AuthenticateAsync(
         string? credentialIdHint,
         CancellationToken cancellationToken = default);
 }
@@ -61,3 +61,27 @@ public sealed record PrfRegistrationResult(
 public sealed record PrfAuthenticationResult(
     string CredentialId,
     string PublicKeyBase64);
+
+/// <summary>
+/// Outcome of <see cref="IPrfAuthenticator.AuthenticateAsync"/>. A null
+/// <paramref name="Result"/> means the ceremony closed without producing an
+/// assertion — the panel drives its cancel-to-register fallback off that, so it
+/// is a return value rather than an exception.
+/// </summary>
+/// <param name="Result">The assertion, or <c>null</c> if the ceremony did not complete.</param>
+/// <param name="Detail">
+/// Browser-supplied diagnostic for a non-completed ceremony ("Name: message"), or
+/// <c>null</c> when the browser gave none. A dismissed prompt, a timeout, and a
+/// rejected authenticator PIN are all reported as <c>NotAllowedError</c>, so this
+/// text is what tells the user which one happened.
+/// </param>
+public sealed record PrfAuthenticationOutcome(
+    PrfAuthenticationResult? Result,
+    string? Detail)
+{
+    /// <summary>Whether the ceremony produced an assertion.</summary>
+    public bool Completed => Result is not null;
+
+    /// <summary>Outcome for a ceremony that closed without an assertion.</summary>
+    public static PrfAuthenticationOutcome Incomplete(string? detail) => new(null, detail);
+}

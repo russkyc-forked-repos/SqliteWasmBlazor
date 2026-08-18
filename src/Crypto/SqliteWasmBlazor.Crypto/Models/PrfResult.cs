@@ -27,6 +27,15 @@ public sealed record PrfResult<T>
     public bool Cancelled { get; init; }
 
     /// <summary>
+    /// Browser-supplied diagnostic for a failed WebAuthn ceremony ("Name: message"),
+    /// or <c>null</c> when the failure did not originate from one. Present on
+    /// <see cref="Cancelled"/> results too: a dismissed prompt and a blocked
+    /// authenticator PIN both arrive as <c>NotAllowedError</c>, so this text is the
+    /// only thing that distinguishes them.
+    /// </summary>
+    public string? ErrorDetail { get; init; }
+
+    /// <summary>
     /// Gets the user-friendly error message for the error code.
     /// </summary>
     public string? Error => ErrorCode.HasValue
@@ -45,10 +54,11 @@ public sealed record PrfResult<T>
     /// <summary>
     /// Creates a failed result with an error code.
     /// </summary>
-    public static PrfResult<T> Fail(PrfErrorCode errorCode) => new()
+    public static PrfResult<T> Fail(PrfErrorCode errorCode, string? errorDetail = null) => new()
     {
         Success = false,
-        ErrorCode = errorCode
+        ErrorCode = errorCode,
+        ErrorDetail = errorDetail
     };
 
     /// <summary>

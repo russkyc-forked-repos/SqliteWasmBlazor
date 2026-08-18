@@ -30,10 +30,15 @@ public enum PrfAuthenticatorOperation
 /// </para>
 ///
 /// <para>
-/// User-cancellation is intentionally NOT routed through this exception:
-/// the seam contract surfaces it as <see cref="OperationCanceledException"/>
-/// (RegisterAsync) or a <c>null</c> return (AuthenticateAsync), per
-/// <see cref="IPrfAuthenticator"/>.
+/// An abandoned register ceremony IS routed through this exception, as
+/// <see cref="PrfErrorCode.CEREMONY_INCOMPLETE"/>. It must not be an
+/// <see cref="OperationCanceledException"/>: RxBlazorV2 treats those as
+/// switch-cancellation and discards them before the command's error formatter
+/// runs, so the user is left with no feedback at all after the browser has
+/// already reported a dismissed prompt or a rejected PIN. Abandoned
+/// authenticate ceremonies still return a non-completed
+/// <see cref="PrfAuthenticationOutcome"/> rather than throwing, because the
+/// panel drives its cancel-to-register fallback off that.
 /// </para>
 /// </summary>
 public sealed class PrfAuthenticatorException : Exception
@@ -41,12 +46,22 @@ public sealed class PrfAuthenticatorException : Exception
     public PrfErrorCode Code { get; }
     public PrfAuthenticatorOperation Operation { get; }
 
+    /// <summary>
+    /// Browser-supplied diagnostic for the failed ceremony ("Name: message"), or
+    /// <c>null</c> when the failure did not come from one. Appended to the localized
+    /// message so the user sees the same reason the browser just showed them.
+    /// </summary>
+    public string? Detail { get; }
+
     public PrfAuthenticatorException(
         PrfAuthenticatorOperation operation,
-        PrfErrorCode code)
-        : base($"PrfAuthenticator.{operation} failed: {code} — {PrfErrorMessages.GetMessage(code)}")
+        PrfErrorCode code,
+        string? detail = null)
+        : base($"PrfAuthenticator.{operation} failed: {code} — {PrfErrorMessages.GetMessage(code)}"
+               + (detail is null ? string.Empty : $" [{detail}]"))
     {
         Operation = operation;
         Code = code;
+        Detail = detail;
     }
 }

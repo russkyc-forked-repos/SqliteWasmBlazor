@@ -48,6 +48,13 @@ export interface PrfResult<T> {
     value?: T;
     errorCode?: PrfErrorCode;
     cancelled?: boolean;
+    /**
+     * Browser-supplied diagnostic for a failed ceremony ("Name: message"), surfaced
+     * to the user verbatim. `cancelled` carries one too: a dismissed prompt and a
+     * blocked PIN are indistinguishable by error name, so the message text is the
+     * only thing that separates them.
+     */
+    errorDetail?: string;
 }
 
 /**

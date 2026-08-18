@@ -74,14 +74,14 @@ public partial class AuthenticationModel : ObservableModel
             return;
         }
 
-        var result = await Authenticator.AuthenticateAsync(CredentialId, cancellationToken);
-        if (result is null)
+        var outcome = await Authenticator.AuthenticateAsync(CredentialId, cancellationToken);
+        if (outcome.Result is null)
         {
             await DeriveKeysDiscoverableAsync(cancellationToken);
             return;
         }
 
-        await ApplySessionAsync(result.CredentialId, result.PublicKeyBase64);
+        await ApplySessionAsync(outcome.Result.CredentialId, outcome.Result.PublicKeyBase64);
     }
 
     // Discoverable credential picker. Cancel sets DiscoverableCancelled so
@@ -90,15 +90,17 @@ public partial class AuthenticationModel : ObservableModel
     {
         DiscoverableCancelled = false;
 
-        var result = await Authenticator.AuthenticateAsync(null, cancellationToken);
-        if (result is null)
+        var outcome = await Authenticator.AuthenticateAsync(null, cancellationToken);
+        if (outcome.Result is null)
         {
             DiscoverableCancelled = true;
-            StatusModel.AddWarning(Localizer["Status_DiscoverableCancelled"], nameof(DeriveKeysDiscoverable));
+            StatusModel.AddWarning(
+                WithDetail(Localizer["Status_DiscoverableCancelled"], outcome.Detail),
+                nameof(DeriveKeysDiscoverable));
             return;
         }
 
-        await ApplySessionAsync(result.CredentialId, result.PublicKeyBase64);
+        await ApplySessionAsync(outcome.Result.CredentialId, outcome.Result.PublicKeyBase64);
     }
 
     // Register a new passkey + immediate-derive (Stage 3.a-1 contract).
@@ -206,19 +208,27 @@ public partial class AuthenticationModel : ObservableModel
         StateProvider.UpdateAuthenticationState(CredentialId, PublicKey);
     }
 
+    // No OperationCanceledException arm: RxBlazorV2 discards those as
+    // switch-cancellation before the formatter runs, so an arm for one would be
+    // dead code. PrfAuthenticator therefore reports an abandoned ceremony as
+    // PrfErrorCode.CEREMONY_INCOMPLETE instead.
     private string FormatAuthenticateError(Exception ex) => ex switch
     {
-        PrfAuthenticatorException { Operation: PrfAuthenticatorOperation.Authenticate, Code: var code } =>
-            Localizer[$"Error_Authenticate_{code}"],
-        OperationCanceledException => Localizer["Status_AuthenticationCancelled"],
+        PrfAuthenticatorException { Operation: PrfAuthenticatorOperation.Authenticate, Code: var code, Detail: var detail } =>
+            WithDetail(Localizer[$"Error_Authenticate_{code}"], detail),
         _ => Localizer["Error_Authenticate_Unknown", ex.Message],
     };
 
     private string FormatRegisterError(Exception ex) => ex switch
     {
-        PrfAuthenticatorException { Operation: PrfAuthenticatorOperation.Register, Code: var code } =>
-            Localizer[$"Error_Register_{code}"],
-        OperationCanceledException => Localizer["Status_RegisterCancelled"],
+        PrfAuthenticatorException { Operation: PrfAuthenticatorOperation.Register, Code: var code, Detail: var detail } =>
+            WithDetail(Localizer[$"Error_Register_{code}"], detail),
         _ => Localizer["Error_Register_Unknown", ex.Message],
     };
+
+    // The localized line says what happened; the browser's own diagnostic says
+    // which variant of it — "PIN invalid" vs. a dismissed prompt both arrive as
+    // NotAllowedError, so dropping the detail is what made the two look identical.
+    private static string WithDetail(string message, string? detail) =>
+        string.IsNullOrWhiteSpace(detail) ? message : $"{message} ({detail})";
 }
