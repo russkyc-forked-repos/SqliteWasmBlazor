@@ -31,12 +31,15 @@
     </div>
     <script src="_framework/blazor.webassembly.js" crossorigin="anonymous"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js" crossorigin="anonymous"></script>
-    <!-- Release injects service-worker-update.js here (registers SW + wires
-         update-notification flow). Debug leaves the placeholder commented
-         so the dev iteration loop isn't cached. See
-         ReleaseServiceWorker / DebugServiceWorker targets in the csproj.
+    <!-- Checked in as the Release form (registers the SW + wires the
+         update-notification flow), so the deployable state is the default and a
+         publish never ships without service-worker-update.js registered.
+         DebugServiceWorker swaps this line back to a placeholder comment so the
+         dev iteration loop isn't cached; ReleaseServiceWorker swaps it forward
+         again. Both targets are in the csproj and each reverses the other, so
+         either configuration normalizes the file before the build reads it.
          Registration is non-inline to satisfy the CSP script-src directive. -->
-    <!--SW_PLACEHOLDER-->
+    <script src="service-worker-update.js"></script>
 </body>
 
 </html>
