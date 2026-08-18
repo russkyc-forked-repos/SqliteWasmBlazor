@@ -135,7 +135,7 @@ describe('webpush', () => {
         const infoCek = encoder.encode('Content-Encoding: aes128gcm\0');
         const cekBits = await hkdfForTest(salt, ikmBits, infoCek, 128);
         const contentKey = await crypto.subtle.importKey(
-            'raw', cekBits, { name: 'AES-GCM' }, false, ['decrypt']
+            'raw', cekBits.slice(), { name: 'AES-GCM' }, false, ['decrypt']
         );
 
         // Derive nonce
@@ -145,7 +145,7 @@ describe('webpush', () => {
         // Decrypt
         const decrypted = new Uint8Array(
             await crypto.subtle.decrypt(
-                { name: 'AES-GCM', iv: nonce, tagLength: 128 },
+                { name: 'AES-GCM', iv: nonce.slice(), tagLength: 128 },
                 contentKey,
                 ciphertext
             )
@@ -181,15 +181,15 @@ async function hkdfForTest(
     bits: number
 ): Promise<Uint8Array> {
     const baseKey = await crypto.subtle.importKey(
-        'raw', ikm.buffer.slice(ikm.byteOffset, ikm.byteOffset + ikm.byteLength),
+        'raw', ikm.slice(),
         { name: 'HKDF' }, false, ['deriveBits']
     );
     const derived = await crypto.subtle.deriveBits(
         {
             name: 'HKDF',
             hash: 'SHA-256',
-            salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength),
-            info: info.buffer.slice(info.byteOffset, info.byteOffset + info.byteLength),
+            salt: salt.slice(),
+            info: info.slice(),
         },
         baseKey,
         bits

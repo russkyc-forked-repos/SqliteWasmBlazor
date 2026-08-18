@@ -16,7 +16,8 @@
     "build:release": "mkdir -p ../../../Crypto/SqliteWasmBlazor.Crypto/bundles && esbuild src/index.ts --bundle --format=esm --minify --outfile=../../../Crypto/SqliteWasmBlazor.Crypto/bundles/crypto-bridge.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

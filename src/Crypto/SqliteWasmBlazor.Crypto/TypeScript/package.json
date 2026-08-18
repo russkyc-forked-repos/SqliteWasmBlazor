@@ -13,7 +13,8 @@
     "copy:wasm": "mkdir -p ../bundles && cp node_modules/@sqlite.org/sqlite-wasm/dist/sqlite3.wasm ../bundles/",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@sqlitewasmblazor/crypto-core": "file:../../../Base/SqliteWasmBlazor/TypeScript-Crypto",
@@ -22,6 +23,7 @@
     "msgpackr": "2.0.5"
   },
   "devDependencies": {
+    "@types/node": "22.20.1",
     "esbuild": "0.28.2",
     "eslint": "10.8.1",
     "typescript": "6.0.3",

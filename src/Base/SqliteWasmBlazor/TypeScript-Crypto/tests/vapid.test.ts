@@ -79,7 +79,7 @@ describe('vapid', () => {
         // Import public key for verification
         const publicCryptoKey = await crypto.subtle.importKey(
             'raw',
-            keyPair.publicKey,
+            keyPair.publicKey.slice(),
             { name: 'ECDSA', namedCurve: 'P-256' },
             false,
             ['verify']

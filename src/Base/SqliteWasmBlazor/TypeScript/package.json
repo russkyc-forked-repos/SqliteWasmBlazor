@@ -13,7 +13,8 @@
     "build:bridge:release": "esbuild bridge/worker-bridge.ts --bundle --format=esm --minify --outfile=../bundles/sqlite-wasm-bridge.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@sqlitewasmblazor/crypto-core": "file:../TypeScript-Crypto",
@@ -22,6 +23,7 @@
     "msgpackr": "2.0.5"
   },
   "devDependencies": {
+    "@types/node": "22.20.1",
     "esbuild": "0.28.2",
     "eslint": "10.8.1",
     "patch-package": "8.0.1",
