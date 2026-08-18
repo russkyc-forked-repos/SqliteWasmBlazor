@@ -65,6 +65,27 @@ jobs:
       run: npm install
       working-directory: src/Crypto/SqliteWasmBlazor.Crypto/TypeScript
 
+    # Static analysis before the vitest suites: tsc and eslint are seconds
+    # each and catch what neither the unit tests nor the .NET build can. The
+    # esbuild bundling used by `npm run build` strips types without checking
+    # them, so a type error reaches the browser bundle unnoticed unless tsc
+    # runs here. Components has no eslint config, so it is typecheck-only.
+    - name: Typecheck + lint (TypeScript-Crypto)
+      run: npm run typecheck && npm run lint
+      working-directory: src/Base/SqliteWasmBlazor/TypeScript-Crypto
+
+    - name: Typecheck + lint (SqliteWasmBlazor worker)
+      run: npm run typecheck && npm run lint
+      working-directory: src/Base/SqliteWasmBlazor/TypeScript
+
+    - name: Typecheck + lint (Crypto worker)
+      run: npm run typecheck && npm run lint
+      working-directory: src/Crypto/SqliteWasmBlazor.Crypto/TypeScript
+
+    - name: Typecheck (Components)
+      run: npm run typecheck
+      working-directory: src/Base/SqliteWasmBlazor.Components/TypeScript
+
     # Run the vitest suites before the expensive .NET / Playwright stages.
     # These cover security-critical pure-TS logic that the browser E2E run
     # exercises only indirectly: the untrusted-import MessagePack parser,
