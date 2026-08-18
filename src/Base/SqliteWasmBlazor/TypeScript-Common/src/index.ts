@@ -13,3 +13,4 @@ export * from './bulk-ops';
 export * from './ef-core-functions';
 export * from './worker-envelope';
 export * from './export-staging';
+export * from './staged-download';

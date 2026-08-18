@@ -3,6 +3,8 @@
 // Exposes a single async initializeBridge(baseHref, assetRoot) entry point;
 // C# awaits its returned Promise so worker creation errors surface on the .NET side.
 
+import { downloadStagedExport } from '@sqlitewasmblazor/worker-common';
+
 /**
  * IMemoryView interface from dotnet runtime — view over managed Span/ArraySegment.
  */
@@ -215,42 +217,11 @@ export const logger = {
     }
 };
 
-// Staging directory shared with worker-common's export-staging module. The
-// worker writes an export there via its 'exportDbToStaging' request; C#
-// then calls downloadStagedExport with the reported staging file name.
-const EXPORT_STAGING_DIR = 'export-staging';
-
-/**
- * JSImport entry — anchor-click download of a finished staging file. The
- * File handed to the object URL is backed by the OPFS entry, so the
- * export bytes never occupy main-thread memory (Blobs constructed from
- * ArrayBuffers are memory-backed in WebKit — the failure mode this staged
- * path exists to avoid on mobile Safari). The staging file must not be
- * deleted here: the download drains it lazily; the worker's init-time
- * sweep collects it next session.
- */
-export async function downloadStagedExport(
-    stagingFile: string,
-    filename: string,
-): Promise<boolean> {
-    const root = await navigator.storage.getDirectory();
-    const dir = await root.getDirectoryHandle(EXPORT_STAGING_DIR);
-    const fileHandle = await dir.getFileHandle(stagingFile);
-    const file = await fileHandle.getFile();
-    const url = URL.createObjectURL(file);
-    try {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } finally {
-        URL.revokeObjectURL(url);
-    }
-    return true;
-}
+// Staged export downloads live in worker-common so both bridges share one
+// staging-directory name and one filename → content-type mapping; see
+// staged-download.ts for why the content type decides whether iOS Safari
+// keeps the filename we ask for.
+export { downloadStagedExport };
 
 (globalThis as any).sqliteWasmWorker = {
     initializeBridge,

@@ -4,6 +4,12 @@
 // C# awaits its returned Promise so worker creation errors surface on the .NET side.
 
 import { base64ToBytes } from '@sqlitewasmblazor/crypto-core';
+import {
+    deleteStagedExportFile,
+    downloadStagedExport,
+    stagedExportFile,
+    triggerDownload,
+} from '@sqlitewasmblazor/worker-common';
 
 import {
     packArrayHeader,
@@ -51,36 +57,6 @@ interface StreamHandler {
 }
 const streamHandlers = new Map<number, StreamHandler>();
 let nextStreamId = -1;
-
-// Staging directory shared with the worker's export-staging module. The
-// bridge only ever reads finished staging files (and deletes them on the
-// test-only bytes path); sweep-on-worker-init owns regular cleanup.
-const EXPORT_STAGING_DIR = 'export-staging';
-
-/** Lift a finished staging file as a disk-backed File object. */
-async function stagedExportFile(name: string): Promise<File> {
-    const root = await navigator.storage.getDirectory();
-    const dir = await root.getDirectoryHandle(EXPORT_STAGING_DIR);
-    const fileHandle = await dir.getFileHandle(name);
-    return fileHandle.getFile();
-}
-
-/**
- * Best-effort staging deletion — only safe once the file's bytes are fully
- * materialised elsewhere (the test-only bytes path). Download paths must
- * NOT call this: the anchor download drains the File lazily and deleting
- * the OPFS entry underneath it would corrupt the download. Their staging
- * files are collected by the worker's init sweep next session.
- */
-async function deleteStagedExportFile(name: string): Promise<void> {
-    try {
-        const root = await navigator.storage.getDirectory();
-        const dir = await root.getDirectoryHandle(EXPORT_STAGING_DIR);
-        await dir.removeEntry(name);
-    } catch {
-        // Sweep on next worker init collects it.
-    }
-}
 
 /**
  * Create the Web Worker and wire up message handling.
@@ -268,7 +244,7 @@ export function exportDiskToDownload(
     kWrapView: IMemoryView,
 ): Promise<boolean> {
     return _assembleEnvelopeStaged(metadataJson, kWrapView).then(({ blob }) => {
-        triggerEnvelopeDownload(filename, blob);
+        triggerDownload(filename, blob);
         return true;
     });
 }
@@ -575,7 +551,7 @@ export function exportDatabasesToDownload(
                 }
                 stagedExportFile(stagingFile)
                     .then((file) => {
-                        triggerEnvelopeDownload(filename, file);
+                        triggerDownload(filename, file);
                         resolve(true);
                     })
                     .catch((e: unknown) => {
@@ -653,7 +629,7 @@ export function exportDatabaseToDownload(
                 }
                 stagedExportFile(stagingFile)
                     .then((file) => {
-                        triggerEnvelopeDownload(filename, file);
+                        triggerDownload(filename, file);
                         resolve(true);
                     })
                     .catch((e: unknown) => {
@@ -746,36 +722,11 @@ function _sendImportDiskStreamSession(
     });
 }
 
-/**
- * JSImport entry — anchor-click download of a finished staging file by
- * name. Plane-1-compatible surface (the base library's
- * ExportDatabaseToDownloadAsync pairs it with the worker's
- * 'exportDbToStaging' request); registered in both bundles like the
- * BlobSession primitives.
- */
-export async function downloadStagedExport(
-    stagingFile: string,
-    filename: string,
-): Promise<boolean> {
-    const file = await stagedExportFile(stagingFile);
-    triggerEnvelopeDownload(filename, file);
-    return true;
-}
-
-function triggerEnvelopeDownload(filename: string, envelope: Blob): void {
-    const url = URL.createObjectURL(envelope);
-    try {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } finally {
-        URL.revokeObjectURL(url);
-    }
-}
+// Staged export downloads live in worker-common so both bridges share one
+// staging-directory name and one filename → content-type mapping; see
+// staged-download.ts for why the content type decides whether iOS Safari
+// keeps the filename we ask for.
+export { downloadStagedExport };
 
 (globalThis as any).sqliteWasmWorker = {
     initializeBridge,

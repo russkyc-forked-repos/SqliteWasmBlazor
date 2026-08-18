@@ -14,7 +14,9 @@
 // lazily), so cleanup is deferred: sweepExportStaging() removes all
 // leftovers on worker init, bounding retention to one session.
 
-const EXPORT_STAGING_DIR = 'export-staging';
+// Also read by staged-download.ts, which lifts finished staging files on
+// the main thread.
+export const EXPORT_STAGING_DIR = 'export-staging';
 
 let stagingSerial = 0;
 
