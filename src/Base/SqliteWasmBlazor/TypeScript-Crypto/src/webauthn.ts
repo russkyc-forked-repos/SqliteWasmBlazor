@@ -50,10 +50,15 @@ export async function registerCredentialWithPrf(
             options.authenticatorAttachment === 'cross-platform' ? 'cross-platform' :
             undefined;
 
-        // Build authenticator selection (omit authenticatorAttachment if 'any')
+        // Build authenticator selection (omit authenticatorAttachment if 'any').
+        // residentKey is 'required' because evaluatePrfDiscoverable() drives the login
+        // path with an empty allowCredentials -- a non-discoverable credential is
+        // invisible to that ceremony. 'preferred' happens to behave as required on
+        // platform authenticators but is genuinely optional on security keys, which
+        // would mint a credential the discoverable picker can never surface.
         const authenticatorSelection: AuthenticatorSelectionCriteria = {
-            residentKey: 'preferred',
-            userVerification: 'preferred'
+            residentKey: 'required',
+            userVerification: 'required'
         };
         if (authenticatorAttachment !== undefined) {
             authenticatorSelection.authenticatorAttachment = authenticatorAttachment;

@@ -178,6 +178,32 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
             new() { Timeout = KeyExpiredButtonEnableTimeoutMs });
     }
 
+    [Fact]
+    [Trait("Browser", "Chromium")]
+    public async Task CrossPlatformAuthenticator_RegistersAndRoundTrips()
+    {
+        await using var scenario = await fixture.CreateScenarioAsync(output);
+
+        // Drop the platform authenticator so a USB security key is the only thing
+        // that can answer. This whole scenario was unreachable while registration
+        // pinned authenticatorAttachment to "platform": create() excluded
+        // cross-platform authenticators outright, so a security key could never be
+        // enrolled even though the assertion path would happily have used one.
+        await scenario.RemoveAuthenticatorAsync(scenario.PrimaryAuthenticatorId);
+        await scenario.AddVirtualAuthenticatorAsync(transport: "usb");
+
+        await scenario.NavigateAsync(PrfTestPath);
+
+        await ClickAsync(scenario, "Register passkey", FirstButtonVisibleTimeoutMs);
+        await ExpectStatusContainsAsync(scenario, "Passkey registered");
+
+        await ClickAsync(scenario, "Authenticate and open");
+        await ExpectStatusContainsAsync(scenario, "Authenticated.");
+
+        await ClickAsync(scenario, "Insert + read 25 rows");
+        await ExpectStatusContainsAsync(scenario, "Round trip OK — total rows: 25");
+    }
+
     private static async Task ClickAsync(PrfScenario scenario, string buttonName, float? timeoutMs = null)
     {
         var button = scenario.Page.GetByRole(AriaRole.Button, new() { Name = buttonName, Exact = true });

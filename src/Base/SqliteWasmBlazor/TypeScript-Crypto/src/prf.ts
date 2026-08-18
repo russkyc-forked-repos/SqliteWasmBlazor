@@ -55,7 +55,11 @@ export async function evaluatePrf(
                 }
             ],
             timeout: options.timeoutMs,
-            userVerification: 'preferred',
+            // userVerification is 'required' because the PRF output IS the key: CTAP2
+            // only releases hmac-secret under user verification, so a UV-less assertion
+            // succeeds while returning no PRF result -- a failure that would otherwise
+            // surface as the misleading "authenticator doesn't support PRF".
+            userVerification: 'required',
             extensions: {
                 prf: {
                     eval: {
@@ -159,7 +163,8 @@ export async function evaluatePrfDiscoverable(
         const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
             challenge: crypto.getRandomValues(new Uint8Array(32)),
             rpId: options.rpId ?? window.location.hostname,
-            userVerification: 'preferred',
+            // Same reason as the targeted path: no user verification, no hmac-secret.
+            userVerification: 'required',
             extensions: {
                 prf: {
                     eval: {

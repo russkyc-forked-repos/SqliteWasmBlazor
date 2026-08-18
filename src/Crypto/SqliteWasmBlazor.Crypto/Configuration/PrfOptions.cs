@@ -26,11 +26,15 @@ public sealed class PrfOptions
     public int TimeoutMs { get; set; } = 60000;
 
     /// <summary>
-    /// Type of authenticator to use.
-    /// Platform = built-in biometrics (Touch ID, Windows Hello)
-    /// CrossPlatform = USB/NFC security keys (few support PRF)
+    /// Type of authenticator offered during registration.
+    /// Platform = built-in biometrics only (Touch ID, Windows Hello, Face ID)
+    /// CrossPlatform = USB/NFC security keys only
+    /// Any = browser offers both, so the user can pick a security key from the
+    /// create ceremony. Anything other than <see cref="AuthenticatorAttachment.ANY"/>
+    /// pins <c>authenticatorSelection.authenticatorAttachment</c> and removes the
+    /// other branch from the browser's picker entirely.
     /// </summary>
-    public AuthenticatorAttachment AuthenticatorAttachment { get; set; } = AuthenticatorAttachment.PLATFORM;
+    public AuthenticatorAttachment AuthenticatorAttachment { get; set; } = AuthenticatorAttachment.ANY;
 
     /// <summary>
     /// App-wide PRF salt used for every ceremony under this <see cref="Services.PrfService"/>
@@ -47,8 +51,9 @@ public sealed class PrfOptions
 public enum AuthenticatorAttachment
 {
     /// <summary>
-    /// Platform authenticator (Touch ID, Windows Hello, Face ID).
-    /// This is the recommended default as most hardware keys don't support PRF.
+    /// Platform authenticator only (Touch ID, Windows Hello, Face ID).
+    /// Registration goes straight to the built-in sensor; the browser offers no
+    /// security-key branch, so a user who dismisses that prompt has nowhere else to go.
     /// </summary>
     PLATFORM,
 
@@ -59,8 +64,11 @@ public enum AuthenticatorAttachment
     CROSS_PLATFORM,
 
     /// <summary>
-    /// Allow both platform and cross-platform authenticators.
-    /// The browser will show all available options to the user.
+    /// Allow both platform and cross-platform authenticators. Default.
+    /// <c>authenticatorSelection.authenticatorAttachment</c> is omitted, so the browser
+    /// shows every available destination — built-in sensor, passkey manager, USB/NFC
+    /// security key, phone-as-authenticator. A key without PRF still fails cleanly with
+    /// <c>PrfErrorCode.PRF_NOT_SUPPORTED</c> after the ceremony.
     /// </summary>
     ANY
 }

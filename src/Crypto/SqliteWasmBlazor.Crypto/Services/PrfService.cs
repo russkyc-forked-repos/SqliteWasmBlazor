@@ -96,7 +96,8 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
             AuthenticatorAttachment.PLATFORM => "platform",
             AuthenticatorAttachment.CROSS_PLATFORM => "cross-platform",
             AuthenticatorAttachment.ANY => "any",
-            _ => "platform"
+            _ => throw new InvalidOperationException(
+                $"Unknown AuthenticatorAttachment '{_options.AuthenticatorAttachment}'.")
         };
 
         var jsOptions = new JsPrfOptions(
