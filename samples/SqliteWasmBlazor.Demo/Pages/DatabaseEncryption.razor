@@ -224,6 +224,9 @@
                     <MudIcon Icon="@Icons.Material.Filled.FileDownload" Size="Size.Small" Class="mr-1" />
                     @Model.Localizer["Lbl_SelectDatabasesToExport"]
                 </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1 d-block">
+                    @Model.Localizer["Hint_ExportShapes"]
+                </MudText>
                 <MudStack Spacing="0" Class="mb-2">
                     @foreach (var name in Model.DatabaseNames)
                     {
@@ -257,6 +260,9 @@
                 <MudText Typo="Typo.body2" Class="mb-2">
                     <MudIcon Icon="@Icons.Material.Filled.FileUpload" Size="Size.Small" Class="mr-1" />
                     @Model.Localizer["Btn_ImportFile"]
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1 d-block">
+                    @Model.Localizer["Hint_ImportFileKinds"]
                 </MudText>
                 <MudFileUpload T="IBrowserFile"
                                FilesChanged="@(file => HandleImportPickedAsync(file))"

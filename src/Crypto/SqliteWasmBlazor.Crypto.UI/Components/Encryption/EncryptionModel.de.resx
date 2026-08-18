@@ -50,11 +50,13 @@
   <data name="Status_DbsExported" xml:space="preserve"><value>{0} Datenbanken als {1} exportiert.</value></data>
   <data name="Status_DbsImported" xml:space="preserve"><value>{0} importiert; der Pool wurde durch den Inhalt des Envelopes ersetzt.</value></data>
   <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Zu exportierende Datenbanken</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Eine Auswahl ergibt diese Datenbank als reine .db-Datei, die jedes SQLite-Werkzeug öffnet. Mehrere ergeben ein .dbs-Bündel — die ausgewählten Datenbanken in einer Datei, die beim Import gemeinsam zurückkehren.</value></data>
   <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Verschlüsselte Festplatte sichern</value></data>
   <data name="Btn_ExportDiskForRecipient" xml:space="preserve"><value>Festplatte für Empfänger exportieren</value></data>
   <data name="Btn_ExportDatabases" xml:space="preserve"><value>Ausgewählte Datenbanken exportieren</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Datenbanken importieren</value></data>
-  <data name="Btn_ImportFile" xml:space="preserve"><value>Datenbank-Datei importieren (.eds, .db oder .dbs)</value></data>
+  <data name="Btn_ImportFile" xml:space="preserve"><value>Datenbank-Datei importieren (.db, .dbs oder .eds)</value></data>
+  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — eine einzelne Datenbank, die anhand ihres Namens ergänzt oder ersetzt wird. .dbs — ein Bündel von Datenbanken, das den gesamten aktuellen Bestand ersetzt. .eds — eine ganze verschlüsselte Festplatte samt Passkey-Bindung.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>Alle Dateitypen werden in Chunks gestreamt; keine Größenbegrenzung.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Eine vorhandene Datenbank mit dem gleichen Namen wird ersetzt.</value></data>
   <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im Pool ersetzt. Fortfahren?</value></data>

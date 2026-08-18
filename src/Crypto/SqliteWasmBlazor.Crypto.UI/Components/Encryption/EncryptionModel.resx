@@ -50,11 +50,13 @@
   <data name="Status_DbsExported" xml:space="preserve"><value>Exported {0} databases as {1}.</value></data>
   <data name="Status_DbsImported" xml:space="preserve"><value>Imported {0}; the pool has been replaced with the envelope's contents.</value></data>
   <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Databases to export</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Pick one and you get that database as a plain .db file any SQLite tool opens. Pick several and you get one .dbs bundle — the selected databases in a single file, restored together on import.</value></data>
   <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Backup encrypted disk</value></data>
   <data name="Btn_ExportDiskForRecipient" xml:space="preserve"><value>Export disk for recipient</value></data>
   <data name="Btn_ExportDatabases" xml:space="preserve"><value>Export selected databases</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Import databases</value></data>
-  <data name="Btn_ImportFile" xml:space="preserve"><value>Import disk file (.eds, .db, or .dbs)</value></data>
+  <data name="Btn_ImportFile" xml:space="preserve"><value>Import a database file (.db, .dbs, or .eds)</value></data>
+  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — a single database, added or replaced by name. .dbs — a bundle of databases, replacing everything currently stored. .eds — a whole encrypted disk plus its passkey binding.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>All file types are streamed in chunks; no size limit.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>This replaces any existing database with the same name.</value></data>
   <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Importing this envelope will replace every database currently in the pool. Continue?</value></data>
