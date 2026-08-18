@@ -14,24 +14,30 @@ export const KEY_LENGTH = 32;
 
 /**
  * Error codes matching C# PrfErrorCode enum.
- * String values for JSON compatibility.
+ *
+ * Member values are the JS -> C# wire tokens and MUST stay byte-identical to the
+ * member names of C# `PrfErrorCode` (SqliteWasmBlazor.Crypto/Models/PrfErrorCode.cs).
+ * `PrfJsonContext` deserializes them with `UseStringEnumConverter`, which matches
+ * enum member names verbatim (case-insensitively, but underscores are significant) --
+ * a value that does not match throws JsonException instead of yielding a
+ * structured PrfResult failure.
  */
 export enum PrfErrorCode {
-    Unknown = 'Unknown',
-    NotSupported = 'NotSupported',
-    PrfNotSupported = 'PrfNotSupported',
-    CredentialNotFound = 'CredentialNotFound',
-    AuthenticationTagMismatch = 'AuthenticationTagMismatch',
-    InvalidData = 'InvalidData',
-    KeyDerivationFailed = 'KeyDerivationFailed',
-    EncryptionFailed = 'EncryptionFailed',
-    DecryptionFailed = 'DecryptionFailed',
-    RegistrationFailed = 'RegistrationFailed',
-    InvalidPublicKey = 'InvalidPublicKey',
-    InvalidPrivateKey = 'InvalidPrivateKey',
-    SigningFailed = 'SigningFailed',
-    VerificationFailed = 'VerificationFailed',
-    IncompatibleFormat = 'IncompatibleFormat',
+    Unknown = 'UNKNOWN',
+    NotSupported = 'NOT_SUPPORTED',
+    PrfNotSupported = 'PRF_NOT_SUPPORTED',
+    CredentialNotFound = 'CREDENTIAL_NOT_FOUND',
+    AuthenticationTagMismatch = 'AUTHENTICATION_TAG_MISMATCH',
+    InvalidData = 'INVALID_DATA',
+    KeyDerivationFailed = 'KEY_DERIVATION_FAILED',
+    EncryptionFailed = 'ENCRYPTION_FAILED',
+    DecryptionFailed = 'DECRYPTION_FAILED',
+    RegistrationFailed = 'REGISTRATION_FAILED',
+    InvalidPublicKey = 'INVALID_PUBLIC_KEY',
+    InvalidPrivateKey = 'INVALID_PRIVATE_KEY',
+    SigningFailed = 'SIGNING_FAILED',
+    VerificationFailed = 'VERIFICATION_FAILED',
+    IncompatibleFormat = 'INCOMPATIBLE_FORMAT',
 }
 
 /**
