@@ -72,8 +72,8 @@ public sealed record PrfAuthenticationResult(
 /// <summary>
 /// Outcome of <see cref="IPrfAuthenticator.AuthenticateAsync"/>. A null
 /// <paramref name="Result"/> means the ceremony closed without producing an
-/// assertion — the panel drives its cancel-to-register fallback off that, so it
-/// is a return value rather than an exception.
+/// assertion — the panel reports that as a status warning and leaves itself
+/// standing, so it is a return value rather than an exception.
 /// </summary>
 /// <param name="Result">The assertion, or <c>null</c> if the ceremony did not complete.</param>
 /// <param name="Detail">

@@ -214,18 +214,17 @@ public partial class EncryptionModel : ObservableModel
     private async Task LockCmdAsync(CancellationToken cancellationToken)
     {
         await Session.LockAsync(cancellationToken);
-        Auth.ClearKeys();
+        await Auth.ClearKeysAsync();
         await RefreshAsync(cancellationToken);
         StatusModel.AddWarning(Localizer["Status_Locked"], nameof(Lock));
     }
 
-    private Task SignOutCmdAsync(CancellationToken cancellationToken)
+    private async Task SignOutCmdAsync(CancellationToken cancellationToken)
     {
-        // Auth.SignOut() flips PublicKey → the OnAuthChangedAsync observer
+        // SignOutAsync flips PublicKey → the OnAuthChangedAsync observer
         // drives Refresh; no manual call needed.
-        Auth.SignOut();
+        await Auth.SignOutAsync();
         StatusModel.AddWarning(Localizer["Status_SignedOut"], nameof(SignOut));
-        return Task.CompletedTask;
     }
 
     // Single host-side seam owns the full reset sequence (disk wipe + PRF

@@ -151,11 +151,10 @@ internal sealed class PrfAuthenticator : IPrfAuthenticator
         // Caller asked for discoverable explicitly — go straight to the
         // platform picker. DeriveKeysWithHintAsync would re-read the
         // persisted hint and run a targeted ceremony first, which is
-        // wrong here: the panel only routes through this branch after
-        // the hinted prompt has already been cancelled (or there is no
-        // hint at all). Stacking another hinted ceremony in front of
-        // the discoverable picker is exactly the redundant-prompts
-        // chain the UI is meant to avoid.
+        // wrong here: this branch is the plain-disk sign-in, where there
+        // is no disk binding to target. Stacking a hinted ceremony in
+        // front of the picker is exactly the redundant-prompts chain the
+        // UI is meant to avoid — one click, one ceremony.
         var byDiscoverable = await _prf.DeriveKeysDiscoverableAsync();
         if (byDiscoverable.Cancelled)
         {

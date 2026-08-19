@@ -9,12 +9,23 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Authentication;
 /// Sole writer to <see cref="PrfAuthenticationStateProvider"/> for the auth-
 /// panel flow.
 ///
-/// <para>State branches: hinted-credential targeted auth (falls through to
-/// the discoverable picker on cancel) → discoverable picker → inline register
-/// when the picker is dismissed. TTL expiry (<see cref="IPrfService.KeyExpired"/>
-/// filtered on the seed key) fires <see cref="OnSessionExpiredAsync"/>, which
-/// clears <see cref="PublicKey"/> and disambiguates "TTL on still-bound disk"
-/// from "disk reset" by reading the manifest hint.</para>
+/// <para>The panel has exactly two shapes, and the disk picks which one:
+/// an encrypted VFS is bound to the credential its manifest names, so it
+/// offers <see cref="SignIn"/> alone (targeted at that credential); a plain
+/// VFS offers <see cref="SignIn"/> (discoverable picker) and
+/// <see cref="Register"/> together. One click runs one ceremony — an
+/// abandoned prompt reports a warning and leaves the shape untouched, so
+/// cancelling always lands back where it started.</para>
+///
+/// <para><see cref="RefreshDiskStateAsync"/> is the single manifest read
+/// behind that: it runs on context-ready, on TTL expiry
+/// (<see cref="IPrfService.KeyExpired"/> filtered on the seed key →
+/// <see cref="OnSessionExpiredAsync"/>), and on
+/// <see cref="ClearKeysAsync"/> / <see cref="SignOutAsync"/> — every route
+/// by which the panel becomes visible again. Disk reset therefore drops
+/// <see cref="CredentialId"/> and a mid-session
+/// <c>EnterEncrypted</c>/<c>LeaveEncrypted</c> is picked up too, without
+/// either needing a special case.</para>
 ///
 /// <para><see cref="CredentialId"/> + <see cref="PublicKey"/> each fire
 /// <see cref="PushAuthState"/>, which is the single point that updates
@@ -30,8 +41,7 @@ public partial class AuthenticationModel
             return;
         }
 
-        var diskState = await Session.GetStateAsync();
-        CredentialId = diskState.Hint;
+        await RefreshDiskStateAsync();
 
         if (PrfService.HasCachedKeys() && PrfService.GetCachedPublicKey() is { Length: > 0 } cachedPub)
         {
@@ -53,16 +63,24 @@ public partial class AuthenticationModel
 
     // Two scenarios fire KeyExpired: TTL elapsed on a still-bound disk (keep
     // CredentialId as hint) vs. disk reset (drop CredentialId so the next
-    // panel render opens the discoverable picker). Disambiguate via the
-    // manifest-hint read.
+    // panel render opens the discoverable picker). The manifest read tells
+    // them apart without either being special-cased here.
     private async ValueTask OnSessionExpiredAsync()
     {
         PublicKey = null;
+        await RefreshDiskStateAsync();
+    }
 
+    // Manifest → panel state. CredentialId is the disk's binding, not a
+    // "last used credential" cache, so it is read from the manifest rather
+    // than remembered; DiskEncrypted decides whether register is on offer at
+    // all. Only called while no session is active — an active session owns
+    // CredentialId (it may be a plain disk's in-memory credential, which the
+    // manifest knows nothing about until EnterEncrypted writes it).
+    private async ValueTask RefreshDiskStateAsync()
+    {
         var diskState = await Session.GetStateAsync();
-        if (string.IsNullOrEmpty(diskState.Hint))
-        {
-            CredentialId = null;
-        }
+        DiskEncrypted = diskState.Encrypted;
+        CredentialId = diskState.Hint;
     }
 }

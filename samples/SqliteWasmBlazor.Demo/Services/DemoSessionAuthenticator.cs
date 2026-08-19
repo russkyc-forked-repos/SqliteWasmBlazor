@@ -31,11 +31,10 @@ public sealed class DemoSessionAuthenticator : ISessionAuthenticator
         _navigation = navigation;
     }
 
-    public ValueTask ReAuthenticateAsync(CancellationToken cancellationToken = default)
+    public async ValueTask ReAuthenticateAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _auth.ClearKeys();
-        return ValueTask.CompletedTask;
+        await _auth.ClearKeysAsync();
     }
 
     public ValueTask DismissAsync(CancellationToken cancellationToken = default)

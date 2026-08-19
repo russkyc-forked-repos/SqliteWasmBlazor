@@ -29,16 +29,18 @@ public partial class AuthenticationModel : ObservableModel
     public partial bool? IsPrfSupported { get; set; }
 
     // Disk-bound hint loaded from the manifest. Non-empty → targeted
-    // DeriveKeys; empty → discoverable picker.
+    // ceremony against that credential; empty → discoverable picker.
     [ObservableTrigger(nameof(PushAuthState))]
     public partial string? CredentialId { get; set; }
 
     [ObservableTrigger(nameof(PushAuthState))]
     public partial string? PublicKey { get; set; }
 
-    // User dismissed the discoverable picker — flips the panel into the
-    // "register + try again" branch.
-    public partial bool DiscoverableCancelled { get; set; }
+    // Manifest says the VFS is encrypted. Decides the panel's shape: an
+    // encrypted disk is bound to exactly one credential, so it offers sign-in
+    // only — a second passkey derives a different PRF key and could never
+    // unlock it. A plain disk offers sign-in and register side by side.
+    public partial bool DiskEncrypted { get; set; }
 
     public partial string? RegisterDisplayName { get; set; }
 
@@ -49,54 +51,38 @@ public partial class AuthenticationModel : ObservableModel
 
     public partial string? WrongPasskeyCredentialId { get; set; }
 
-    [ObservableCommand(nameof(DeriveKeysAsync), nameof(CanDeriveKeys), nameof(FormatAuthenticateError))]
-    public partial IObservableCommandAsync DeriveKeys { get; }
-
-    [ObservableCommand(nameof(DeriveKeysDiscoverableAsync), nameof(CanDeriveKeysDiscoverable), nameof(FormatAuthenticateError))]
-    public partial IObservableCommandAsync DeriveKeysDiscoverable { get; }
+    [ObservableCommand(nameof(SignInAsync), nameof(CanSignIn), nameof(FormatAuthenticateError))]
+    public partial IObservableCommandAsync SignIn { get; }
 
     [ObservableCommand(nameof(RegisterAsync), nameof(CanRegister), nameof(FormatRegisterError))]
     public partial IObservableCommandAsync Register { get; }
 
-    private bool CanDeriveKeys() => IsPrfSupported == true && !string.IsNullOrWhiteSpace(CredentialId);
-    private bool CanDeriveKeysDiscoverable() => IsPrfSupported == true;
-    private bool CanRegister() => IsPrfSupported == true;
+    private bool CanSignIn() => IsPrfSupported == true;
 
-    // Direct authenticate against the hinted credential; on cancel falls
-    // through to the discoverable picker in the same click. CredentialId is
-    // intentionally retained — it's the VFS-encryption marker per SoT, not
-    // a "last used credential" cache. WebAuthn errors throw
-    // PrfAuthenticatorException → FormatAuthenticateError.
-    private async Task DeriveKeysAsync(CancellationToken cancellationToken)
+    // An encrypted disk unlocks with the credential its manifest names and
+    // no other, so registering is not an option there.
+    private bool CanRegister() => IsPrfSupported == true && !DiskEncrypted;
+
+    // One ceremony per click. A hint (encrypted disk) targets the bound
+    // credential; no hint (plain disk) opens the platform's discoverable
+    // picker. CredentialId is intentionally retained — it's the VFS-
+    // encryption marker per SoT, not a "last used credential" cache.
+    //
+    // An abandoned prompt reports and returns, leaving the panel exactly as
+    // it was: the user lands back on the choices they started from instead
+    // of on a different screen, and no second ceremony is chained behind the
+    // first. WebAuthn errors throw PrfAuthenticatorException →
+    // FormatAuthenticateError.
+    private async Task SignInAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(CredentialId))
-        {
-            return;
-        }
+        var hint = string.IsNullOrWhiteSpace(CredentialId) ? null : CredentialId;
 
-        var outcome = await Authenticator.AuthenticateAsync(CredentialId, cancellationToken);
+        var outcome = await Authenticator.AuthenticateAsync(hint, cancellationToken);
         if (outcome.Result is null)
         {
-            await DeriveKeysDiscoverableAsync(cancellationToken);
-            return;
-        }
-
-        await ApplySessionAsync(outcome.Result.CredentialId, outcome.Result.PublicKeyBase64);
-    }
-
-    // Discoverable credential picker. Cancel sets DiscoverableCancelled so
-    // the panel renders the inline Register fallback + Try again.
-    private async Task DeriveKeysDiscoverableAsync(CancellationToken cancellationToken)
-    {
-        DiscoverableCancelled = false;
-
-        var outcome = await Authenticator.AuthenticateAsync(null, cancellationToken);
-        if (outcome.Result is null)
-        {
-            DiscoverableCancelled = true;
             StatusModel.AddWarning(
-                WithDetail(Localizer["Status_DiscoverableCancelled"], outcome.Detail),
-                nameof(DeriveKeysDiscoverable));
+                WithDetail(Localizer["Status_SignInCancelled"], outcome.Detail),
+                nameof(SignIn));
             return;
         }
 
@@ -112,10 +98,12 @@ public partial class AuthenticationModel : ObservableModel
     {
         var displayName = string.IsNullOrWhiteSpace(RegisterDisplayName) ? null : RegisterDisplayName.Trim();
 
-        // An encrypted disk is bound to CredentialId; a second passkey on the same
-        // authenticator would derive a different PRF key and never unlock it. Excluding
-        // the hint turns that dead end into CREDENTIAL_ALREADY_REGISTERED at the
-        // ceremony. A plaintext disk has no hint, so nothing is excluded.
+        // Register is offered on a plain disk only, where the manifest carries no
+        // hint and nothing gets excluded. The exclusion is the second lock on that
+        // door: were a bound disk ever to reach here, a second passkey on the same
+        // authenticator would derive a different PRF key and never unlock it, and
+        // excluding the hint turns that dead end into CREDENTIAL_ALREADY_REGISTERED
+        // at the ceremony rather than a passkey that silently cannot open the disk.
         var excludeCredentialIds = string.IsNullOrWhiteSpace(CredentialId)
             ? []
             : new[] { CredentialId };
@@ -128,31 +116,32 @@ public partial class AuthenticationModel : ObservableModel
         }
 
         RegisterDisplayName = null;
-        DiscoverableCancelled = false;
         StatusModel.AddSuccess(Localizer["Status_Registered"], nameof(Register));
     }
 
-    // Drops the JS PRF cache + PublicKey; keeps CredentialId as the hint
-    // for the next direct-auth attempt (BlazorPRF behavior).
-    public void ClearKeys()
+    // Drops the JS PRF cache + PublicKey, then re-reads the manifest: the
+    // panel is about to become visible again and its shape (sign-in only vs.
+    // sign-in + register) is the disk's to decide, not the previous
+    // session's. Lock on an encrypted disk lands here.
+    public async ValueTask ClearKeysAsync()
     {
         PrfService.ClearKeys();
         PublicKey = null;
+        await RefreshDiskStateAsync();
     }
 
-    // Full sign-out — also drops CredentialId so the next render opens the
-    // discoverable picker. On an Encrypted disk OnContextReadyAsync re-
-    // hydrates CredentialId from the manifest hint, so this is a no-op for
-    // the disk binding.
-    public void SignOut()
+    // Full sign-out. CredentialId and DiskEncrypted come straight back from
+    // the manifest, so an encrypted disk keeps its binding (sign-in targets
+    // the bound credential) while a plain disk drops to the discoverable
+    // picker with register alongside it.
+    public async ValueTask SignOutAsync()
     {
         PrfService.ClearKeys();
         PublicKey = null;
-        CredentialId = null;
-        DiscoverableCancelled = false;
         RegisterDisplayName = null;
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
+        await RefreshDiskStateAsync();
     }
 
     // Apply a freshly-derived session. Returns false when refused for a
@@ -164,6 +153,7 @@ public partial class AuthenticationModel : ObservableModel
     private async ValueTask<bool> ApplySessionAsync(string credentialId, string publicKeyBase64)
     {
         var diskState = await Session.GetStateAsync();
+        DiskEncrypted = diskState.Encrypted;
         var diskHint = diskState.Hint;
         if (!string.IsNullOrEmpty(diskHint) &&
             !string.Equals(diskHint, credentialId, StringComparison.Ordinal))
@@ -175,13 +165,12 @@ public partial class AuthenticationModel : ObservableModel
             WrongPasskeyCredentialId = credentialId;
             StatusModel.AddWarning(
                 Localizer["Status_WrongPasskeyForDisk"],
-                nameof(DeriveKeysDiscoverable));
+                nameof(SignIn));
             return false;
         }
 
         CredentialId = credentialId;
         PublicKey = publicKeyBase64;
-        DiscoverableCancelled = false;
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
         return true;
@@ -205,7 +194,9 @@ public partial class AuthenticationModel : ObservableModel
     {
         CredentialId = credentialId;
         PublicKey = publicKeyBase64;
-        DiscoverableCancelled = false;
+        // The envelope only restores onto an encrypted disk, so the manifest
+        // read the next sign-out does would say the same thing.
+        DiskEncrypted = true;
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
     }
