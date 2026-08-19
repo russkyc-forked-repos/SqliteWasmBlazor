@@ -17,7 +17,12 @@
     @* VFS state card — shown in every combination so the user always knows
        where the VFS stands, even before authenticating. *@
     <MudPaper Elevation="2" Class="pa-4 mb-4">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+        @* Wrap="Wrap.Wrap": the state chip carries a full sentence, so on a
+           phone the row cannot hold title and chip side by side — without
+           wrapping the title collapses word by word and the chip still runs
+           past the card. Wrapped, the chip drops to its own line and both
+           keep their natural width. *@
+        <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
             <MudText Typo="Typo.h6">
                 <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="mr-1" />
                 @Model.Localizer["Card_VfsTitle"]
