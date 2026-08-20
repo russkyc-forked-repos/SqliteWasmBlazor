@@ -15,11 +15,11 @@
   <data name="Btn_SignIn" xml:space="preserve"><value>Sign in</value></data>
   <data name="Btn_Register" xml:space="preserve"><value>Register passkey</value></data>
   <data name="Caption_DiscoverablePicker" xml:space="preserve"><value>Pick a passkey from the platform list.</value></data>
-  <data name="Caption_EncryptedDisk" xml:space="preserve"><value>This database is encrypted. It opens with the passkey it was locked with — no other passkey can unlock it.</value></data>
+  <data name="Caption_EncryptedPool" xml:space="preserve"><value>This database is encrypted. It opens with the passkey it was locked with — no other passkey can unlock it.</value></data>
   <data name="Status_Registered" xml:space="preserve"><value>Passkey registered. You're signed in.</value></data>
   <data name="Status_SignInCancelled" xml:space="preserve"><value>No passkey selected.</value></data>
-  <data name="Status_WrongPasskeyForDisk" xml:space="preserve"><value>Wrong passkey — this passkey doesn't unlock the encrypted database. Use the original passkey, or reset the database.</value></data>
-  <data name="Alert_WrongPasskeyForDisk" xml:space="preserve"><value>This passkey doesn't unlock the current database. You're not signed in — but the passkey's public key is shown below so you can hand it to a peer who will encrypt an export to it.</value></data>
+  <data name="Status_WrongPasskeyForPool" xml:space="preserve"><value>Wrong passkey — this passkey doesn't unlock the encrypted database. Use the original passkey, or reset the database.</value></data>
+  <data name="Alert_WrongPasskeyForPool" xml:space="preserve"><value>This passkey doesn't unlock the current database. You're not signed in — but the passkey's public key is shown below so you can hand it to a peer who will encrypt an export to it.</value></data>
   <data name="Btn_DismissWrongPasskey" xml:space="preserve"><value>Dismiss</value></data>
   <data name="Error_Authenticate_REGISTRATION_FAILED" xml:space="preserve"><value>Authentication failed: registration data invalid. Try registering a new passkey.</value></data>
   <data name="Error_Authenticate_KEY_DERIVATION_FAILED" xml:space="preserve"><value>Couldn't derive keys from this passkey. Try registering a new one.</value></data>

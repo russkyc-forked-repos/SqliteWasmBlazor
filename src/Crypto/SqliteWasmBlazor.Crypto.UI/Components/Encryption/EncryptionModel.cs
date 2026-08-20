@@ -62,6 +62,21 @@ public partial class EncryptionModel : ObservableModel
     /// <summary>True when the VFS is encrypted but the worker has no global key.</summary>
     public bool IsLocked => State is { Encrypted: true, Unlocked: false };
 
+    /// <summary>
+    /// Button label for <see cref="Reset"/>. A plain pool only loses its
+    /// databases; an encrypted one loses the passkey binding with them, and
+    /// the button has to say so before it is clicked. A state that could not
+    /// be read yet falls to the encrypted wording — the heavier warning is
+    /// the safe default when the pool's state is unknown.
+    /// </summary>
+    public string ResetLabel => IsPlain ? Localizer["Btn_Reset"] : Localizer["Btn_ResetEncrypted"];
+
+    /// <summary>Hint copy paired with <see cref="ResetLabel"/>.</summary>
+    public string ResetHint => IsPlain ? Localizer["Hint_ResetPlain"] : Localizer["Hint_ResetEncrypted"];
+
+    /// <summary>Confirmation-dialog body paired with <see cref="ResetLabel"/>.</summary>
+    public string ResetConfirmation => IsPlain ? Localizer["Confirm_Reset"] : Localizer["Confirm_ResetEncrypted"];
+
     [ObservableCommand(nameof(RefreshAsync))]
     public partial IObservableCommandAsync Refresh { get; }
 
@@ -260,7 +275,7 @@ public partial class EncryptionModel : ObservableModel
         await Session.ExportDiskToPubkeyAndDownloadAsync(
             fileName, Auth.PublicKey, Auth.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExported", fileName],
+            Localizer["Status_PoolExported", fileName],
             nameof(ExportDiskBackup));
     }
 
@@ -274,7 +289,7 @@ public partial class EncryptionModel : ObservableModel
         await Session.ExportDiskToPubkeyAndDownloadAsync(
             fileName, recipient.PublicKey, recipient.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExportedForRecipient", fileName],
+            Localizer["Status_PoolExportedForRecipient", fileName],
             nameof(ExportDiskForRecipient));
     }
 
@@ -425,7 +440,7 @@ public partial class EncryptionModel : ObservableModel
         Auth.ApplyImportedSession(hint, importedPublicKey);
 
         await RefreshAsync(cancellationToken);
-        StatusModel.AddSuccess(Localizer["Status_DiskImported"], nameof(ImportDisk));
+        StatusModel.AddSuccess(Localizer["Status_PoolImported"], nameof(ImportDisk));
     }
 
     /// <summary>

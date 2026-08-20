@@ -25,7 +25,7 @@
         <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
             <MudText Typo="Typo.h6">
                 <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="mr-1" />
-                @Model.Localizer["Card_VfsTitle"]
+                @Model.Localizer["Card_DatabasesTitle"]
             </MudText>
             @if (Model.IsPlain)
             {
@@ -111,37 +111,18 @@
                                   FullWidth="true">
                     @Model.Localizer["Btn_Lock"]
                 </MudButtonAsyncRx>
-                <MudButtonAsyncRx Command="@Model.Reset"
-                                  ConfirmExecutionAsync="ConfirmResetAsync"
-                                  Variant="Variant.Text"
-                                  Color="Color.Error"
-                                  StartIcon="@Icons.Material.Filled.RestartAlt"
-                                  Size="Size.Small">
-                    @Model.Localizer["Btn_Reset"]
-                </MudButtonAsyncRx>
             </MudStack>
         }
         else if (Model.IsLocked)
         {
             @* Encrypted-but-locked is normally transient — the lifecycle
-               service auto-unlocks the moment the user authenticates below.
-               Reset stays as the recovery escape hatch but de-emphasised
-               (Variant.Text, secondary hint copy) so the auth panel below
-               is the visual focus, not the destructive button. *@
+               service auto-unlocks the moment the user authenticates below,
+               so the auth panel is the visual focus here. A passkey that is
+               gone for good is recovered from the Administration page's full
+               reset, the one wipe surface in the app. *@
             <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
                 @Model.Localizer["Hint_AuthForUnlock"]
             </MudText>
-            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3 mb-1">
-                @Model.Localizer["Hint_ResetWhenStuck"]
-            </MudText>
-            <MudButtonAsyncRx Command="@Model.Reset"
-                              ConfirmExecutionAsync="ConfirmResetAsync"
-                              Variant="Variant.Text"
-                              Color="Color.Error"
-                              StartIcon="@Icons.Material.Filled.RestartAlt"
-                              Size="Size.Small">
-                @Model.Localizer["Btn_Reset"]
-            </MudButtonAsyncRx>
         }
     </MudPaper>
 
@@ -196,7 +177,7 @@
                                   StartIcon="@Icons.Material.Filled.FileDownload"
                                   FullWidth="true"
                                   Class="mb-3">
-                    @Model.Localizer["Btn_ExportDiskBackup"]
+                    @Model.Localizer["Btn_ExportPoolBackup"]
                 </MudButtonAsyncRx>
 
                 <MudTextField T="string"
@@ -222,7 +203,7 @@
                                   StartIcon="@Icons.Material.Filled.Share"
                                   FullWidth="true"
                                   Class="mb-4">
-                    @Model.Localizer["Btn_ExportDiskForRecipient"]
+                    @Model.Localizer["Btn_ExportPoolForRecipient"]
                 </MudButtonAsyncRx>
             }
 

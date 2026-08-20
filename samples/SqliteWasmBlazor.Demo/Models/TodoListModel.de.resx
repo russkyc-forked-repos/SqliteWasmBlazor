@@ -47,5 +47,5 @@
   <data name="Error_Operation" xml:space="preserve"><value>Vorgang fehlgeschlagen: {0}</value></data>
   <data name="Error_Search" xml:space="preserve"><value>Suchfehler: {0}</value></data>
   <data name="Error_Fts5Syntax" xml:space="preserve"><value>FTS5-Syntaxfehler: {0}</value></data>
-  <data name="Error_DiskLocked" xml:space="preserve"><value>Datenbank ist gesperrt. Bitte zur Entsperrung anmelden.</value></data>
+  <data name="Error_PoolLocked" xml:space="preserve"><value>Datenbank ist gesperrt. Bitte zur Entsperrung anmelden.</value></data>
 </root>

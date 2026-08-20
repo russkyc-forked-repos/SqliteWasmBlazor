@@ -15,11 +15,11 @@
   <data name="Btn_SignIn" xml:space="preserve"><value>Anmelden</value></data>
   <data name="Btn_Register" xml:space="preserve"><value>Passkey registrieren</value></data>
   <data name="Caption_DiscoverablePicker" xml:space="preserve"><value>Wähle einen Passkey aus der Liste der Plattform.</value></data>
-  <data name="Caption_EncryptedDisk" xml:space="preserve"><value>Diese Datenbank ist verschlüsselt. Sie öffnet sich mit dem Passkey, mit dem sie gesperrt wurde — kein anderer Passkey entsperrt sie.</value></data>
+  <data name="Caption_EncryptedPool" xml:space="preserve"><value>Diese Datenbank ist verschlüsselt. Sie öffnet sich mit dem Passkey, mit dem sie gesperrt wurde — kein anderer Passkey entsperrt sie.</value></data>
   <data name="Status_Registered" xml:space="preserve"><value>Passkey registriert. Du bist angemeldet.</value></data>
   <data name="Status_SignInCancelled" xml:space="preserve"><value>Kein Passkey ausgewählt.</value></data>
-  <data name="Status_WrongPasskeyForDisk" xml:space="preserve"><value>Falscher Passkey — dieser Passkey entsperrt die verschlüsselte Datenbank nicht. Den ursprünglichen Passkey verwenden oder die Datenbank zurücksetzen.</value></data>
-  <data name="Alert_WrongPasskeyForDisk" xml:space="preserve"><value>Dieser Passkey entsperrt die aktuelle Datenbank nicht. Du bist nicht angemeldet — der öffentliche Schlüssel wird unten angezeigt, damit du ihn an einen Peer weitergeben kannst, der einen Export auf diesen Schlüssel verschlüsselt.</value></data>
+  <data name="Status_WrongPasskeyForPool" xml:space="preserve"><value>Falscher Passkey — dieser Passkey entsperrt die verschlüsselte Datenbank nicht. Den ursprünglichen Passkey verwenden oder die Datenbank zurücksetzen.</value></data>
+  <data name="Alert_WrongPasskeyForPool" xml:space="preserve"><value>Dieser Passkey entsperrt die aktuelle Datenbank nicht. Du bist nicht angemeldet — der öffentliche Schlüssel wird unten angezeigt, damit du ihn an einen Peer weitergeben kannst, der einen Export auf diesen Schlüssel verschlüsselt.</value></data>
   <data name="Btn_DismissWrongPasskey" xml:space="preserve"><value>Schließen</value></data>
   <data name="Error_Authenticate_REGISTRATION_FAILED" xml:space="preserve"><value>Anmeldung fehlgeschlagen: ungültige Registrierungsdaten. Bitte einen neuen Passkey registrieren.</value></data>
   <data name="Error_Authenticate_KEY_DERIVATION_FAILED" xml:space="preserve"><value>Schlüssel konnten nicht aus diesem Passkey abgeleitet werden. Bitte einen neuen registrieren.</value></data>

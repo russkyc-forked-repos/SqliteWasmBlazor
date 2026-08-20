@@ -8,11 +8,13 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Encryption;
 /// via the streaming export primitives (the worker emits a Blob and the
 /// bridge clicks an anchor); the model never holds the bytes.
 ///
-/// <para>Page wraps content in <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c>;
-/// NotAuthorized renders <c>AuthenticationPanel</c>. Authorized branches by
-/// <see cref="EncryptedDiskState"/>: Plain ⇒ Encrypt button; Encrypted+Unlocked ⇒
-/// Lock / Leave / Reset + per-DB export/import; Encrypted+Locked ⇒ short-lived
-/// while the lifecycle auto-unlock completes.</para>
+/// <para>Page branches by <see cref="EncryptedDiskState"/>: Plain ⇒ Encrypt
+/// button; Encrypted+Unlocked ⇒ Lock / Leave + per-DB export/import;
+/// Encrypted+Locked ⇒ short-lived while the lifecycle auto-unlock completes.
+/// <see cref="Reset"/> renders outside those branches — a disk whose passkey
+/// is gone has no other way out, and it is the one command with no
+/// CanExecute gate. <c>AuthenticationPanel</c> renders below whenever the
+/// disk is not Encrypted+Unlocked.</para>
 ///
 /// <para>Reactivity: auto-detected observers on <c>Auth.PublicKey</c> and
 /// <c>DbState.State</c> re-run <see cref="RefreshAsync"/> on sign-in/out,

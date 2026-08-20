@@ -231,7 +231,7 @@ public partial class MultiDatabaseModel : ObservableModel
 
     private string FormatOperationError(Exception ex) => ex switch
     {
-        DiskLockedException => Localizer["Error_DiskLocked"],
+        DiskLockedException => Localizer["Error_PoolLocked"],
         OperationCanceledException => Localizer["Error_Cancelled"],
         _ => Localizer["Error_Operation", ex.Message],
     };

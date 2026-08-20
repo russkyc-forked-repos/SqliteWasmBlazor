@@ -164,7 +164,7 @@ public partial class AuthenticationModel : ObservableModel
             WrongPasskeyPublicKey = publicKeyBase64;
             WrongPasskeyCredentialId = credentialId;
             StatusModel.AddWarning(
-                Localizer["Status_WrongPasskeyForDisk"],
+                Localizer["Status_WrongPasskeyForPool"],
                 nameof(SignIn));
             return false;
         }
