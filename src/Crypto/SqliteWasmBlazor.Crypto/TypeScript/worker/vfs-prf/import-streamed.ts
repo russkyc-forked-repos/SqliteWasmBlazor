@@ -67,7 +67,7 @@ export function assertImportFileCount(count: number, context: string): void {
 }
 
 /**
- * Mirrors the C# `DiskImportResult` enum so callers can branch on the
+ * Mirrors the C# `PoolImportResult` enum so callers can branch on the
  * Promise resolution without crossing string boundaries.
  */
 export const DiskImportResult = Object.freeze({

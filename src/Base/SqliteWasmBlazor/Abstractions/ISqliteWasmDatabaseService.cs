@@ -16,7 +16,7 @@ namespace SqliteWasmBlazor;
 /// <see cref="WRONG_KEY"/> after the worker has rolled back (unlinked) the
 /// partial file.
 /// </summary>
-public enum DiskImportResult
+public enum PoolImportResult
 {
     /// <summary>
     /// Bytes written. For opaque imports with a registered key, slot 0 also
@@ -67,7 +67,7 @@ public enum DiskImportResult
 ///
 /// <para>
 /// All single-DB operations refuse to write or read while the encrypted
-/// disk is locked — they throw <see cref="DiskLockedException"/> via the
+/// disk is locked — they throw <see cref="PoolLockedException"/> via the
 /// bridge gate. Wrap DB-touching code in
 /// <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> to avoid that path.
 /// </para>
@@ -120,18 +120,18 @@ public interface ISqliteWasmDatabaseService
     /// <para>
     /// Auto-detects ciphertext vs plaintext via the SQLite-format-3 magic
     /// bytes. Plain imports allow overwriting an existing DB and always
-    /// return <see cref="DiskImportResult.OK"/> on success. Opaque
+    /// return <see cref="PoolImportResult.OK"/> on success. Opaque
     /// (encrypted) imports are subject to the refuse-on-existing +
     /// verify-on-write policy and may return
-    /// <see cref="DiskImportResult.EXISTING_DB_REFUSED"/> or
-    /// <see cref="DiskImportResult.WRONG_KEY"/>.
+    /// <see cref="PoolImportResult.EXISTING_DB_REFUSED"/> or
+    /// <see cref="PoolImportResult.WRONG_KEY"/>.
     /// </para>
     /// </summary>
     /// <param name="databaseName">The database filename (e.g., "mydb.db")</param>
     /// <param name="data">Raw SQLite database bytes (plaintext .db file or
     /// PRF-VFS slot-format ciphertext)</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    Task<DiskImportResult> ImportDatabaseAsync(string databaseName, byte[] data,
+    Task<PoolImportResult> ImportDatabaseAsync(string databaseName, byte[] data,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -20,7 +20,7 @@ namespace SqliteWasmBlazor.Demo.Models;
 /// <see cref="LoadDataAsync"/> / the per-command writes; each one checks
 /// <c>DbState.State == READY</c> before opening a context, so a refresh
 /// while the encrypted disk is locked no longer blows up with the
-/// bridge's <c>DiskLockedException</c> gate. The auto-detected internal
+/// bridge's <c>PoolLockedException</c> gate. The auto-detected internal
 /// observer <see cref="OnDbStateChangedAsync"/> reloads on every state
 /// transition (boot probe, lifecycle Unlock, Lock, Reset) — so when the
 /// user signs in and the lifecycle auto-unlocks the disk, the page
@@ -231,7 +231,7 @@ public partial class MultiDatabaseModel : ObservableModel
 
     private string FormatOperationError(Exception ex) => ex switch
     {
-        DiskLockedException => Localizer["Error_PoolLocked"],
+        PoolLockedException => Localizer["Error_PoolLocked"],
         OperationCanceledException => Localizer["Error_Cancelled"],
         _ => Localizer["Error_Operation", ex.Message],
     };

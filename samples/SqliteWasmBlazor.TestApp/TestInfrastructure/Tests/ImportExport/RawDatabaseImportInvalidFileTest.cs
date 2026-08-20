@@ -28,7 +28,7 @@ internal class RawDatabaseImportInvalidFileTest(IDbContextFactory<TodoDbContext>
 
         await DatabaseService.DeleteDatabaseAsync("TestDb.db");
         var result = await DatabaseService.ImportDatabaseAsync("TestDb.db", randomData);
-        if (result != DiskImportResult.OK)
+        if (result != PoolImportResult.OK)
         {
             throw new InvalidOperationException(
                 $"Expected ImportDatabaseAsync to write opaque bytes (OK), got {result}");

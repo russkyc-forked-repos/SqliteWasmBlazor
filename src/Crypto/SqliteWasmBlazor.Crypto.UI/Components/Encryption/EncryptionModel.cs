@@ -418,13 +418,13 @@ public partial class EncryptionModel : ObservableModel
                 maxAllowedSize: file.Size, cancellationToken);
             var result = await Session.ImportPoolGuidedFromStreamAsync(
                 importStream, file.Size, vfsKey, hint, cancellationToken);
-            if (result == DiskImportResult.WRONG_KEY)
+            if (result == PoolImportResult.WRONG_KEY)
             {
                 throw new InvalidOperationException(
                     "Imported envelope's wrap key did not verify under the recipient's PRF-derived priv key " +
                     "(envelope was sealed for a different pubkey than the one the chosen passkey derives).");
             }
-            if (result != DiskImportResult.OK)
+            if (result != PoolImportResult.OK)
             {
                 throw new InvalidOperationException($"ImportDisk failed: {result}");
             }

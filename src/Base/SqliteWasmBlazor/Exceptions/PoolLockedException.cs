@@ -5,8 +5,10 @@ namespace SqliteWasmBlazor;
 
 /// <summary>
 /// Diagnostic exception thrown by <see cref="SqliteWasmWorkerBridge"/> when
-/// a database operation reaches the bridge while the encrypted VFS disk is
-/// in the <see cref="EncryptedPoolState.Encrypted"/>+locked state.
+/// a database operation reaches the bridge while the encrypted pool is in the
+/// <c>EncryptedPoolState.Encrypted</c>+locked state. Named without a cref on
+/// purpose: that type lives in the Crypto plane, which this plane cannot
+/// reference.
 ///
 /// <para>
 /// <b>This exception means consumer code reached EF outside an
@@ -30,9 +32,9 @@ namespace SqliteWasmBlazor;
 /// the boot-state UX separately.
 /// </para>
 /// </summary>
-public sealed class DiskLockedException : InvalidOperationException
+public sealed class PoolLockedException : InvalidOperationException
 {
-    public DiskLockedException(string operation)
+    public PoolLockedException(string operation)
         : base($"Encrypted VFS disk is locked — '{operation}' reached the bridge without an unlock. " +
                $"Consumer code likely touched DbContext outside <AuthorizeView Policy=\"DatabaseOpen\">. " +
                $"Move DB-touching work into a path gated by DbStateModel.State == READY (e.g. a model-side " +

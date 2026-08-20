@@ -149,7 +149,7 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
             await _session.LockAsync();
 
             // ---- Guided import: rebind to vfsKeyB / recipientCredentialId --
-            DiskImportResult result;
+            PoolImportResult result;
             try
             {
                 using var stream = new MemoryStream(envelope, writable: false);
@@ -160,7 +160,7 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
             {
                 return $"FAIL[Import]: {ex.GetType().Name}: {ex.Message}";
             }
-            if (result != DiskImportResult.OK)
+            if (result != PoolImportResult.OK)
             {
                 return $"FAIL[Import]: guided import returned {result}";
             }

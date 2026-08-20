@@ -117,7 +117,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         {
             case ManifestState.PRESENT:
                 _expectedCredentialId = credentialId;
-                _bridge.SetDiskLocked(!_isUnlocked);
+                _bridge.SetPoolLocked(!_isUnlocked);
                 return new EncryptedPoolState(true, _isUnlocked, credentialId);
 
             case ManifestState.ABSENT:
@@ -136,11 +136,11 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     && _isUnlocked)
                 {
                     await WriteManifestAsync(expectedForHeal, cancellationToken);
-                    _bridge.SetDiskLocked(false);
+                    _bridge.SetPoolLocked(false);
                     return new EncryptedPoolState(true, true, expectedForHeal);
                 }
                 _isUnlocked = false;
-                _bridge.SetDiskLocked(true);
+                _bridge.SetPoolLocked(true);
                 return new EncryptedPoolState(true, false, null);
 
             case ManifestState.MALFORMED:
@@ -150,7 +150,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 // route to a specific passkey because the manifest can't
                 // be trusted. Caller's only recovery is ResetPoolAsync.
                 _isUnlocked = false;
-                _bridge.SetDiskLocked(true);
+                _bridge.SetPoolLocked(true);
                 return new EncryptedPoolState(true, false, null);
 
             default:
@@ -177,12 +177,12 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             {
                 await WriteManifestAsync(expected, cancellationToken);
             }
-            _bridge.SetDiskLocked(false);
+            _bridge.SetPoolLocked(false);
             return new EncryptedPoolState(true, true, expected);
         }
 
         _isUnlocked = false;
-        _bridge.SetDiskLocked(false);
+        _bridge.SetPoolLocked(false);
         return EncryptedPoolState.Plain;
     }
 
@@ -288,7 +288,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         // bridge gate so DB ops route through the encrypted hot path.
         await _encryptedBridge.SetEncryptionKeyAsync(key, cancellationToken);
         _isUnlocked = true;
-        _bridge.SetDiskLocked(false);
+        _bridge.SetPoolLocked(false);
     }
 
     private async Task VerifyUnlockedManifestAsync(
@@ -308,7 +308,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             default:
                 await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
                 _isUnlocked = false;
-                _bridge.SetDiskLocked(state != ManifestState.ABSENT);
+                _bridge.SetPoolLocked(state != ManifestState.ABSENT);
                 ReportDbState(
                     state == ManifestState.ABSENT ? DbInitState.READY : DbInitState.ENCRYPTED_LOCKED,
                     state == ManifestState.ABSENT
@@ -323,7 +323,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     {
         // State-aware lock. Three possible starting points:
         //   - Encrypted+Unlocked: real lock transition. Engage gate FIRST so
-        //     in-flight or post-clear DB ops fail with DiskLockedException
+        //     in-flight or post-clear DB ops fail with PoolLockedException
         //     instead of reading ciphertext as plain. Then drop globalKey
         //     and report ENCRYPTED_LOCKED so the AuthorizeView gate flips.
         //   - Plain (no manifest): callers (typically test fixtures) use Lock
@@ -337,7 +337,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 
         if (encrypted)
         {
-            _bridge.SetDiskLocked(true);
+            _bridge.SetPoolLocked(true);
         }
 
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
@@ -448,7 +448,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
         _isUnlocked = false;
         _expectedCredentialId = null;
-        _bridge.SetDiskLocked(false);
+        _bridge.SetPoolLocked(false);
     }
 
     public async Task LeaveEncryptedAsync(CancellationToken cancellationToken = default)
@@ -477,7 +477,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
         _isUnlocked = false;
         _expectedCredentialId = null;
-        _bridge.SetDiskLocked(false);
+        _bridge.SetPoolLocked(false);
         ReportDbState(DbInitState.READY);
     }
 
@@ -527,7 +527,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 
         _isUnlocked = false;
         _expectedCredentialId = null;
-        _bridge.SetDiskLocked(false);
+        _bridge.SetPoolLocked(false);
     }
 
     // ---------------------------------------------------------------------
@@ -561,7 +561,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var ok = await WithPubkeyExportEnvelopeAsync(
             recipientX25519PublicKeyBase64,
             recipientCredentialId,
-            (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportDiskToDownloadAsync(
+            (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportPoolToDownloadAsync(
                 filename, metadataJson, wrapKey),
             cancellationToken);
         if (!ok)
@@ -598,7 +598,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             var size = await WithPubkeyExportEnvelopeAsync(
                 recipientX25519PublicKeyBase64,
                 recipientCredentialId,
-                (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportDiskToBytesSessionAsync(
+                (metadataJson, wrapKey) => SqliteWasmWorkerBridge.ExportPoolToBytesSessionAsync(
                     metadataJson, wrapKey, sessionId),
                 cancellationToken);
 
@@ -751,14 +751,14 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// heap peak is one chunk (~1 MB); the JS Blob parts list is the
     /// browser's responsibility (Safari disk-backs above ~50 MB).
     ///
-    /// Same security contract as <see cref="ImportDiskGuidedAsync"/>:
+    /// Same security contract as <see cref="ImportPoolGuidedFromStreamAsync"/>:
     /// state must be Plain or Encrypted+Locked; envelope's CredentialIdHint
     /// must match <paramref name="credentialId"/>; vfsKey must come from
     /// the WebAuthn ceremony pinned to that credential. Throws otherwise.
     /// Token-equivalent: session id is C#-issued, JS holds it only between
     /// Open and Discard.
     /// </summary>
-    public async Task<DiskImportResult> ImportPoolGuidedFromStreamAsync(
+    public async Task<PoolImportResult> ImportPoolGuidedFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
         ReadOnlyMemory<byte> vfsKey,
@@ -881,11 +881,11 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             // Full coverage is the wipe-after-validate invariant: the
             // WipePoolAsync below destroys the existing disk, so nothing
             // the commit pass decrypts may be unverified at that point.
-            var preflight = await SqliteWasmWorkerBridge.ImportDiskStreamPreflightFromSessionAsync(
+            var preflight = await SqliteWasmWorkerBridge.ImportPoolStreamPreflightFromSessionAsync(
                 sessionId, new ArraySegment<byte>(wrapKey));
-            if (preflight != (int)DiskImportResult.OK)
+            if (preflight != (int)PoolImportResult.OK)
             {
-                return (DiskImportResult)preflight;
+                return (PoolImportResult)preflight;
             }
 
             // Wipe pool + EnterEncrypted under the import's credential.
@@ -896,15 +896,15 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             // session's parts (still live), re-streams via blob.stream(),
             // decrypts under K_wrap and re-encrypts under the freshly-
             // installed globalKey.
-            var commitResult = await SqliteWasmWorkerBridge.ImportDiskStreamCommitFromSessionAsync(
+            var commitResult = await SqliteWasmWorkerBridge.ImportPoolStreamCommitFromSessionAsync(
                 sessionId, new ArraySegment<byte>(wrapKey));
-            if (commitResult != (int)DiskImportResult.OK)
+            if (commitResult != (int)PoolImportResult.OK)
             {
-                return (DiskImportResult)commitResult;
+                return (PoolImportResult)commitResult;
             }
 
             ReportDbState(DbInitState.READY);
-            return DiskImportResult.OK;
+            return PoolImportResult.OK;
         }
         finally
         {
@@ -1083,7 +1083,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             }
 
             var result = await SqliteWasmWorkerBridge.ImportDatabasesFromSessionAsync(sessionId);
-            if (result != (int)DiskImportResult.OK)
+            if (result != (int)PoolImportResult.OK)
             {
                 throw new InvalidOperationException(
                     $"ImportDatabasesFromStreamAsync: worker returned result={result}.");
@@ -1167,7 +1167,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 
             var result = await SqliteWasmWorkerBridge.ImportDatabaseFromSessionAsync(
                 sessionId, databaseName);
-            if (result != (int)DiskImportResult.OK)
+            if (result != (int)PoolImportResult.OK)
             {
                 throw new InvalidOperationException(
                     $"ImportDatabaseFromStreamAsync: worker returned result={result}.");

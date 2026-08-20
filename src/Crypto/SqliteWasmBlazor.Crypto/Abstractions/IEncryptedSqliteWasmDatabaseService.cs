@@ -234,7 +234,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// must come from the WebAuthn ceremony pinned to that credential.
     /// </para>
     /// </summary>
-    Task<DiskImportResult> ImportPoolGuidedFromStreamAsync(
+    Task<PoolImportResult> ImportPoolGuidedFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
         ReadOnlyMemory<byte> vfsKey,

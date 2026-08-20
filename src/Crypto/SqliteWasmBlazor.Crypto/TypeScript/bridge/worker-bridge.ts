@@ -233,7 +233,7 @@ export const logger = {
 // ---------------------------------------------------------------------------
 
 /**
- * JSImport entry point — called by C# `ExportDiskToDownloadAsync`. Drives
+ * JSImport entry point — called by C# `ExportPoolToDownloadAsync`. Drives
  * the worker staging export, composes the envelope Blob, triggers the
  * download. Returns `true` on completion. The staging file backing the
  * download is collected by the worker's init sweep next session.
@@ -258,7 +258,7 @@ export function exportDiskToDownload(
 // into the guided import. `Task<byte[]>` is not a supported JS-interop return
 // shape, so the protocol is: stash bytes → return length → C# reads chunks
 // into a MemoryView → discard. See the C# JSImports
-// `SqliteWasmWorkerBridge.{ExportDiskToBytesSessionAsync,ReadExportBytes,DiscardExportBytes}`.
+// `SqliteWasmWorkerBridge.{ExportPoolToBytesSessionAsync,ReadExportBytes,DiscardExportBytes}`.
 // ---------------------------------------------------------------------------
 
 const exportByteStash = new Map<number, Uint8Array>();

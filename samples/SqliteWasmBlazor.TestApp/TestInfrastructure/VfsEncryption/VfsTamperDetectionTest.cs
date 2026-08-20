@@ -66,7 +66,7 @@ internal sealed class VfsTamperDetectionTest(
         // which is exactly the path EF takes when reopening the DB below.
         await DatabaseService.DeleteDatabaseAsync(EncryptedDatabaseName);
         var importOutcome = await DatabaseService.ImportDatabaseAsync(EncryptedDatabaseName, ciphertext);
-        if (importOutcome != DiskImportResult.OK)
+        if (importOutcome != PoolImportResult.OK)
         {
             return $"Expected import outcome OK (no key registered → no verify), got {importOutcome}";
         }
