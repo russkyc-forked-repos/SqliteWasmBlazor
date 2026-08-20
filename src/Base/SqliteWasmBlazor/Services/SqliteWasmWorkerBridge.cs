@@ -1022,7 +1022,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// guided import (whose download side is unreachable from test code).
     /// <c>Task&lt;byte[]&gt;</c> isn't a supported JS-interop return shape
     /// (SYSLIB1072), hence the length + chunked-MemoryView-read protocol.
-    /// See <c>EncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyBytesAsync</c>.
+    /// See <c>EncryptedSqliteWasmDatabaseService.ExportPoolToPubkeyBytesAsync</c>.
     /// </para>
     /// </summary>
     [JSImport("exportDiskToBytesSession", "sqliteWasmWorker")]

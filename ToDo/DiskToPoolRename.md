@@ -1,7 +1,7 @@
 # Disk → Pool rename
 
-Status: **resx keys done** (commit that carries this file). C# symbols, `[JSImport]`
-strings and TypeScript identifiers are open.
+Status: **resx keys done**, **group A done**. Groups B, C, D — plus the
+`[JSImport]` strings — are open.
 
 ## Why
 
@@ -42,9 +42,18 @@ updated in the same pass. 38 replacements across 15 files.
 The keys now anticipate the C# names below, so until group C lands the key
 `Btn_ExportPoolBackup` still drives a command called `ExportDiskBackup`.
 
-## Open — group A: Crypto plane public API
+## Done — group A: Crypto plane public API
 
-Largest blast radius; do first.
+Applied via `mcp__rider__rename_refactoring`, one symbol at a time, renaming the
+four public members from their **interface** declaration so implementations
+followed. Solution builds clean.
+
+The engine updated declarations, call sites and `<see cref>` links. It did not
+touch `<c>Name</c>` doc tags, `//` comments, or names embedded in exception
+message literals — 24 of those were swept by hand afterwards, across 10 files.
+`DiskLockedException.cs` also carried a `<see cref="EncryptedDiskState.Encrypted"/>`
+that the engine could not resolve (base plane cannot see the Crypto plane), so it
+would have silently rotted; the sweep caught it.
 
 | Symbol | New name | Declared at | refs / files |
 | --- | --- | --- | --- |
@@ -56,6 +65,11 @@ Largest blast radius; do first.
 | `ReadDiskManifestAsync` | `ReadPoolManifestAsync` | `EncryptedSqliteWasmWorkerBridge.cs` | 2 |
 | `WriteDiskManifestAsync` | `WritePoolManifestAsync` | `EncryptedSqliteWasmWorkerBridge.cs:199` | 2 |
 | `ClearDiskManifestAsync` | `ClearPoolManifestAsync` | `EncryptedSqliteWasmWorkerBridge.cs:224` | 3 |
+
+Reported `touched` runs lower than a grep count because the engine reports only
+what it rewrote, and its `files` list under-reports: the `ResetDiskAsync` result
+omitted `EncryptedSqliteWasmDatabaseService.cs` even though it correctly renamed
+the implementing method there. Verify with grep, not with the tool's own count.
 
 ## Open — group B: base plane
 

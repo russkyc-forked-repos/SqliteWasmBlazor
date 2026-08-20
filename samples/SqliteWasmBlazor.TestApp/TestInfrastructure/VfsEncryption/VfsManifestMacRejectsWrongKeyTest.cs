@@ -174,7 +174,7 @@ internal sealed class VfsManifestMacRejectsWrongKeyTest
 
     private async Task CleanupAsync()
     {
-        try { await _session.ResetDiskAsync(); } catch { /* ignore */ }
+        try { await _session.ResetPoolAsync(); } catch { /* ignore */ }
         try
         {
             var names = await _databaseService.ListDatabasesAsync();

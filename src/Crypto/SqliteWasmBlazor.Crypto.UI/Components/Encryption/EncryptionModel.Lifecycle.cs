@@ -8,7 +8,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Encryption;
 /// via the streaming export primitives (the worker emits a Blob and the
 /// bridge clicks an anchor); the model never holds the bytes.
 ///
-/// <para>Page branches by <see cref="EncryptedDiskState"/>: Plain ⇒ Encrypt
+/// <para>Page branches by <see cref="EncryptedPoolState"/>: Plain ⇒ Encrypt
 /// button; Encrypted+Unlocked ⇒ Lock / Leave + per-DB export/import;
 /// Encrypted+Locked ⇒ short-lived while the lifecycle auto-unlock completes.
 /// <see cref="Reset"/> renders outside those branches — a disk whose passkey

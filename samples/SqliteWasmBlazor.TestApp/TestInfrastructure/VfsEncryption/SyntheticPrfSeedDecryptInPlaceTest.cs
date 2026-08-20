@@ -162,7 +162,7 @@ internal sealed class SyntheticPrfSeedDecryptInPlaceTest
 
     private async Task CleanupAsync(string dbName)
     {
-        try { await _session.ResetDiskAsync(); } catch { }
+        try { await _session.ResetPoolAsync(); } catch { }
         try { await _databaseService.DeleteDatabaseAsync(dbName); } catch { }
     }
 }

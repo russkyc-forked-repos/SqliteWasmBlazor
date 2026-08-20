@@ -93,7 +93,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     /// <c>openDatabases</c> map, this bridge pre-pass keeps the C# mirror in
     /// sync. NOT public — production callers go through
     /// <see cref="IEncryptedSqliteWasmDatabaseService.LockAsync"/> /
-    /// <c>LeaveEncryptedAsync</c> / <c>ResetDiskAsync</c>.
+    /// <c>LeaveEncryptedAsync</c> / <c>ResetPoolAsync</c>.
     /// </summary>
     internal async Task ClearEncryptionKeyAsync(CancellationToken cancellationToken = default)
     {
@@ -178,7 +178,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     /// callers (auth-flow fast-fail) leave it false and rely on the body bytes
     /// alone.</param>
     internal async Task<(string state, byte[]? body, int? schemaVersion)>
-        ReadDiskManifestAsync(bool verifyMac, CancellationToken cancellationToken = default)
+        ReadPoolManifestAsync(bool verifyMac, CancellationToken cancellationToken = default)
     {
         var request = new { type = "readDiskManifest", verifyMac };
         var result = await _bridge.SendRequestAsync(request, cancellationToken);
@@ -196,7 +196,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     /// + pad + HMAC) and writes it to bytes 524..1023 of each DB's header
     /// sector. Caller must ensure the disk is Encrypted+Unlocked.
     /// </summary>
-    internal async Task WriteDiskManifestAsync(
+    internal async Task WritePoolManifestAsync(
         ReadOnlyMemory<byte> body,
         CancellationToken cancellationToken = default)
     {
@@ -219,9 +219,9 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
 
     /// <summary>
     /// Zero bytes 524..1023 of every DB's header sector. Idempotent — called
-    /// by <c>LeaveEncryptedAsync</c> / <c>ResetDiskAsync</c>.
+    /// by <c>LeaveEncryptedAsync</c> / <c>ResetPoolAsync</c>.
     /// </summary>
-    internal async Task ClearDiskManifestAsync(CancellationToken cancellationToken = default)
+    internal async Task ClearPoolManifestAsync(CancellationToken cancellationToken = default)
     {
         var request = new { type = "clearDiskManifest" };
         await _bridge.SendRequestAsync(request, cancellationToken);

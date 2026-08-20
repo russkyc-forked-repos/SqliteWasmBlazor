@@ -153,7 +153,7 @@ internal sealed class SyntheticPrfSeedRoundTripTest
     {
         // ClearEncryptionKey implicitly closes every open DB before
         // dropping globalKey; one call covers both close-and-clear.
-        try { await _session.ResetDiskAsync(); } catch { }
+        try { await _session.ResetPoolAsync(); } catch { }
         try { await _databaseService.DeleteDatabaseAsync(dbName); } catch { }
     }
 }

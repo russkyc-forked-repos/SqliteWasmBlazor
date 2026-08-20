@@ -30,7 +30,7 @@ namespace SqliteWasmBlazor;
 ///
 /// <para>
 /// Singleton — registered by <c>AddSqliteWasmBlazorCrypto()</c> (lives
-/// alongside <c>IPrfService</c> because <see cref="ResetDiskAsync"/>
+/// alongside <c>IPrfService</c> because <see cref="ResetPoolAsync"/>
 /// implicitly clears the PRF cache to keep the auth UI in lockstep with
 /// the disk's Plain transition). Tracks <see cref="_isUnlocked"/> in
 /// memory to avoid an extra worker round-trip in
@@ -99,14 +99,14 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     // IDatabaseLockProbe — plane-1-facing minimal probe so
     // InitializeSqliteWasmDatabaseAsync<TContext> can detect ENCRYPTED_LOCKED
     // boot state without referencing plane-2 types. Maps the rich
-    // EncryptedDiskState down to the three fields plane 1 cares about.
+    // EncryptedPoolState down to the three fields plane 1 cares about.
     async Task<DatabaseLockState> IDatabaseLockProbe.GetStateAsync(CancellationToken cancellationToken)
     {
         var state = await GetStateAsync(cancellationToken);
         return new DatabaseLockState(state.Encrypted, state.Unlocked, state.Hint);
     }
 
-    public async Task<EncryptedDiskState> GetStateAsync(CancellationToken cancellationToken = default)
+    public async Task<EncryptedPoolState> GetStateAsync(CancellationToken cancellationToken = default)
     {
         // Manifest is the source of truth for the Encrypted/Plain axis.
         // Disk-as-unit invariant guarantees one shared manifest across
@@ -118,7 +118,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             case ManifestState.PRESENT:
                 _expectedCredentialId = credentialId;
                 _bridge.SetDiskLocked(!_isUnlocked);
-                return new EncryptedDiskState(true, _isUnlocked, credentialId);
+                return new EncryptedPoolState(true, _isUnlocked, credentialId);
 
             case ManifestState.ABSENT:
                 return await ProbeAbsentManifestAsync(cancellationToken);
@@ -137,21 +137,21 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 {
                     await WriteManifestAsync(expectedForHeal, cancellationToken);
                     _bridge.SetDiskLocked(false);
-                    return new EncryptedDiskState(true, true, expectedForHeal);
+                    return new EncryptedPoolState(true, true, expectedForHeal);
                 }
                 _isUnlocked = false;
                 _bridge.SetDiskLocked(true);
-                return new EncryptedDiskState(true, false, null);
+                return new EncryptedPoolState(true, false, null);
 
             case ManifestState.MALFORMED:
             case ManifestState.TAMPERED:
                 // Surface corruption as Encrypted+Locked with no hint —
                 // UI sees the auth panel + reset escape hatch but can't
                 // route to a specific passkey because the manifest can't
-                // be trusted. Caller's only recovery is ResetDiskAsync.
+                // be trusted. Caller's only recovery is ResetPoolAsync.
                 _isUnlocked = false;
                 _bridge.SetDiskLocked(true);
-                return new EncryptedDiskState(true, false, null);
+                return new EncryptedPoolState(true, false, null);
 
             default:
                 throw new InvalidOperationException(
@@ -168,7 +168,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     ///      flush the manifest into it.
     ///   2. Genuine Plain — no manifest, no expected credentialId.
     /// </summary>
-    private async Task<EncryptedDiskState> ProbeAbsentManifestAsync(CancellationToken cancellationToken)
+    private async Task<EncryptedPoolState> ProbeAbsentManifestAsync(CancellationToken cancellationToken)
     {
         if (_expectedCredentialId is { Length: > 0 } expected && _isUnlocked)
         {
@@ -178,12 +178,12 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 await WriteManifestAsync(expected, cancellationToken);
             }
             _bridge.SetDiskLocked(false);
-            return new EncryptedDiskState(true, true, expected);
+            return new EncryptedPoolState(true, true, expected);
         }
 
         _isUnlocked = false;
         _bridge.SetDiskLocked(false);
-        return EncryptedDiskState.Plain;
+        return EncryptedPoolState.Plain;
     }
 
     /// <summary>
@@ -195,7 +195,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     private async Task<(ManifestState State, string? CredentialId)> ReadManifestAsync(
         bool verifyMac, CancellationToken cancellationToken)
     {
-        var (raw, body, _) = await _encryptedBridge.ReadDiskManifestAsync(verifyMac, cancellationToken);
+        var (raw, body, _) = await _encryptedBridge.ReadPoolManifestAsync(verifyMac, cancellationToken);
         var state = raw switch
         {
             "absent" => ManifestState.ABSENT,
@@ -247,7 +247,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             PublicKeyFingerprint = string.Empty,
         };
         var bytes = MessagePackSerializer.Serialize(body);
-        return _encryptedBridge.WriteDiskManifestAsync(bytes, cancellationToken);
+        return _encryptedBridge.WritePoolManifestAsync(bytes, cancellationToken);
     }
 
     public async Task UnlockAsync(
@@ -372,7 +372,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         if (current.Encrypted)
         {
             throw new InvalidOperationException(
-                "EnterEncryptedAsync requires EncryptedDiskState.Plain — VFS is already encrypted.");
+                "EnterEncryptedAsync requires EncryptedPoolState.Plain — VFS is already encrypted.");
         }
 
         var databases = await _bridge.ListDatabasesAsync(cancellationToken);
@@ -442,7 +442,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 
         // Clear any manifest bytes that landed before the failure (the
         // primitive is a no-op when nothing was written).
-        await _encryptedBridge.ClearDiskManifestAsync(cancellationToken);
+        await _encryptedBridge.ClearPoolManifestAsync(cancellationToken);
 
         // Finally drop the key + reset in-memory state.
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
@@ -473,7 +473,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         // GetStateAsync returns Plain and the next boot proceeds without
         // an unlock prompt. Caller's responsibility to revoke the passkey
         // credential at the WebAuthn layer separately.
-        await _encryptedBridge.ClearDiskManifestAsync(cancellationToken);
+        await _encryptedBridge.ClearPoolManifestAsync(cancellationToken);
         await _encryptedBridge.ClearEncryptionKeyAsync(cancellationToken);
         _isUnlocked = false;
         _expectedCredentialId = null;
@@ -481,13 +481,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         ReportDbState(DbInitState.READY);
     }
 
-    public async Task ResetDiskAsync(CancellationToken cancellationToken = default)
+    public async Task ResetPoolAsync(CancellationToken cancellationToken = default)
     {
         // Scorched-earth boundary: wipe the pool + drop the PRF cache.
         // PrfService.ClearKeys cascades through KeyExpired →
         // AuthenticationModel.OnSessionExpired → PublicKey=null →
         // PrfAuthenticationStateProvider → AuthorizeView re-evaluates.
-        // Calling it here means a single Session.ResetDiskAsync() leaves
+        // Calling it here means a single Session.ResetPoolAsync() leaves
         // the whole encryption stack consistent — the auth flow doesn't
         // need to also be told "reset happened" by the orchestrating page.
         await WipePoolAsync(cancellationToken);
@@ -547,7 +547,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// envelope; worker chunks the per-DB rekey, bridge composes the Blob,
     /// anchor click fires the save.
     /// </summary>
-    public async Task ExportDiskToPubkeyAndDownloadAsync(
+    public async Task ExportPoolToPubkeyAndDownloadAsync(
         string filename,
         string recipientX25519PublicKeyBase64,
         string recipientCredentialId,
@@ -567,13 +567,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         if (!ok)
         {
             throw new InvalidOperationException(
-                "ExportDiskToPubkeyAndDownloadAsync: bridge reported failure.");
+                "ExportPoolToPubkeyAndDownloadAsync: bridge reported failure.");
         }
     }
 
     /// <summary>
     /// Test/diagnostic seam — assembles the SAME v3 pubkey envelope as
-    /// <see cref="ExportDiskToPubkeyAndDownloadAsync"/>, but returns the
+    /// <see cref="ExportPoolToPubkeyAndDownloadAsync"/>, but returns the
     /// composed envelope to managed C# as a <c>byte[]</c> instead of
     /// triggering the anchor-click download.
     /// <para>
@@ -583,11 +583,11 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// to exist is that the production export's download side is unreachable
     /// from in-page test code, so a round-trip test cannot otherwise obtain
     /// a real <c>.eds</c> envelope to feed back into
-    /// <see cref="ImportDiskGuidedFromStreamAsync"/>. Caller invariant and
+    /// <see cref="ImportPoolGuidedFromStreamAsync"/>. Caller invariant and
     /// recipient-identity validation are identical to the download variant.
     /// </para>
     /// </summary>
-    internal async Task<byte[]> ExportDiskToPubkeyBytesAsync(
+    internal async Task<byte[]> ExportPoolToPubkeyBytesAsync(
         string recipientX25519PublicKeyBase64,
         string recipientCredentialId,
         CancellationToken cancellationToken = default)
@@ -611,7 +611,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 if (read <= 0)
                 {
                     throw new InvalidOperationException(
-                        $"ExportDiskToPubkeyBytesAsync: ReadExportBytes returned {read} at " +
+                        $"ExportPoolToPubkeyBytesAsync: ReadExportBytes returned {read} at " +
                         $"offset {offset} of {size}.");
                 }
                 offset += read;
@@ -758,7 +758,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// Token-equivalent: session id is C#-issued, JS holds it only between
     /// Open and Discard.
     /// </summary>
-    public async Task<DiskImportResult> ImportDiskGuidedFromStreamAsync(
+    public async Task<DiskImportResult> ImportPoolGuidedFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
         ReadOnlyMemory<byte> vfsKey,
@@ -786,7 +786,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         if (current.Encrypted && current.Unlocked)
         {
             throw new InvalidOperationException(
-                "ImportDiskGuidedFromStreamAsync rejected: disk is Encrypted+Unlocked. " +
+                "ImportPoolGuidedFromStreamAsync rejected: disk is Encrypted+Unlocked. " +
                 "Lock or Reset first; guided import rebinds the disk to the import's " +
                 "credential and is only allowed from Plain or Locked.");
         }
@@ -815,7 +815,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     if (read <= 0)
                     {
                         throw new InvalidOperationException(
-                            $"ImportDiskGuidedFromStreamAsync: stream ended at {totalRead} " +
+                            $"ImportPoolGuidedFromStreamAsync: stream ended at {totalRead} " +
                             $"of {envelopeSize} bytes; envelope is truncated.");
                     }
                     if (headerCopy.Length < 4096)
@@ -842,17 +842,17 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             if (header.Version != 3)
             {
                 throw new InvalidOperationException(
-                    $"ImportDiskGuidedFromStreamAsync: unsupported envelope Version={header.Version} (expected 3).");
+                    $"ImportPoolGuidedFromStreamAsync: unsupported envelope Version={header.Version} (expected 3).");
             }
             if (string.IsNullOrEmpty(header.CredentialIdHint))
             {
                 throw new InvalidOperationException(
-                    "ImportDiskGuidedFromStreamAsync: envelope is missing CredentialIdHint.");
+                    "ImportPoolGuidedFromStreamAsync: envelope is missing CredentialIdHint.");
             }
             if (!string.Equals(header.CredentialIdHint, credentialId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    "ImportDiskGuidedFromStreamAsync: envelope's CredentialIdHint does not " +
+                    "ImportPoolGuidedFromStreamAsync: envelope's CredentialIdHint does not " +
                     "match the supplied credentialId.");
             }
 
@@ -864,7 +864,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             if (!unwrapResult.Success || unwrapResult.Value is null)
             {
                 throw new InvalidOperationException(
-                    $"ImportDiskGuidedFromStreamAsync: ECIES unwrap of K_wrap failed " +
+                    $"ImportPoolGuidedFromStreamAsync: ECIES unwrap of K_wrap failed " +
                     $"({unwrapResult.ErrorCode}). The envelope may be sealed for a different " +
                     $"recipient pubkey than the one this passkey derives.");
             }
@@ -872,7 +872,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             if (wrapKey.Length != 32)
             {
                 throw new InvalidOperationException(
-                    $"ImportDiskGuidedFromStreamAsync: unwrapped K_wrap must be 32 bytes; " +
+                    $"ImportPoolGuidedFromStreamAsync: unwrapped K_wrap must be 32 bytes; " +
                     $"got {wrapKey.Length}.");
             }
 

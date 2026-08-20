@@ -77,7 +77,7 @@ public static class ServiceCollectionExtensions
 
         // Encrypted-disk lifecycle. Lives here (not in AddSqliteWasm) because
         // it depends on IPrfService for the implicit ClearKeys cascade in
-        // ResetDiskAsync — once the disk is wiped, the PRF session for the
+        // ResetPoolAsync — once the disk is wiped, the PRF session for the
         // just-erased identity is moot. Plain-only consumers that don't call
         // this extension never see the encrypted-disk surface.
         services.AddSingleton<EncryptedSqliteWasmDatabaseService>();

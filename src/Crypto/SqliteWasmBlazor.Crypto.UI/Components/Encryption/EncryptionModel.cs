@@ -31,7 +31,7 @@ public partial class EncryptionModel : ObservableModel
         StatusModel statusModel,
         IStringLocalizer<EncryptionModel> localizer);
 
-    public partial EncryptedDiskState? State { get; set; }
+    public partial EncryptedPoolState? State { get; set; }
     public partial string PastedRecipientKey { get; set; } = string.Empty;
     public partial string? PastedRecipientError { get; set; }
 
@@ -272,7 +272,7 @@ public partial class EncryptionModel : ObservableModel
         }
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-backup-{stamp}.eds";
-        await Session.ExportDiskToPubkeyAndDownloadAsync(
+        await Session.ExportPoolToPubkeyAndDownloadAsync(
             fileName, Auth.PublicKey, Auth.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_PoolExported", fileName],
@@ -286,7 +286,7 @@ public partial class EncryptionModel : ObservableModel
                 "Pasted recipient identity is missing or invalid.");
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-recipient-{stamp}.eds";
-        await Session.ExportDiskToPubkeyAndDownloadAsync(
+        await Session.ExportPoolToPubkeyAndDownloadAsync(
             fileName, recipient.PublicKey, recipient.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_PoolExportedForRecipient", fileName],
@@ -345,7 +345,7 @@ public partial class EncryptionModel : ObservableModel
     ///
     /// Flow: peek envelope header (first ~4 KB only) → read CredentialIdHint
     /// → drive WebAuthn pinned to that passkey → derive VFS key from the
-    /// freshly-cached PRF seed → call Session.ImportDiskGuidedFromStreamAsync.
+    /// freshly-cached PRF seed → call Session.ImportPoolGuidedFromStreamAsync.
     /// The PRF cache stays populated through the service call so the
     /// envelope's ECIES K_wrap can be unwrapped under the same seed.
     /// </summary>
@@ -416,7 +416,7 @@ public partial class EncryptionModel : ObservableModel
             // chunk at a time, then drives preflight + commit.
             await using var importStream = file.OpenReadStream(
                 maxAllowedSize: file.Size, cancellationToken);
-            var result = await Session.ImportDiskGuidedFromStreamAsync(
+            var result = await Session.ImportPoolGuidedFromStreamAsync(
                 importStream, file.Size, vfsKey, hint, cancellationToken);
             if (result == DiskImportResult.WRONG_KEY)
             {

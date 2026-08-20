@@ -25,12 +25,12 @@ namespace SqliteWasmBlazor;
 /// state (Mismatch / Tampered / Malformed) — UI surfaces a "ResetDisk
 /// required" affordance instead of routing to a specific credential.
 /// </param>
-public sealed record EncryptedDiskState(bool Encrypted, bool Unlocked, string? Hint)
+public sealed record EncryptedPoolState(bool Encrypted, bool Unlocked, string? Hint)
 {
     /// <summary>
     /// Pristine disk — no registered passkey, no global key.
     /// </summary>
-    public static EncryptedDiskState Plain { get; } = new(false, false, null);
+    public static EncryptedPoolState Plain { get; } = new(false, false, null);
 }
 
 /// <summary>
@@ -83,7 +83,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <see cref="LockAsync"/>. One bridge round-trip per call (manifest
     /// region of every DB is read and compared); cheap.
     /// </summary>
-    Task<EncryptedDiskState> GetStateAsync(CancellationToken cancellationToken = default);
+    Task<EncryptedPoolState> GetStateAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Unlock the disk with the supplied 32-byte ChaCha20-Poly1305 key.
@@ -117,7 +117,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     ///
     /// <para>
     /// Caller invariant: <see cref="GetStateAsync"/> must currently
-    /// return <see cref="EncryptedDiskState.Plain"/>. Throws
+    /// return <see cref="EncryptedPoolState.Plain"/>. Throws
     /// <see cref="InvalidOperationException"/> otherwise. The auth flow's
     /// Register ceremony returns the credential id to pass here.
     /// </para>
@@ -137,7 +137,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <b>Encrypted → Plain transition.</b> Decrypts every database in the
     /// SAH pool in place under the active <c>globalKey</c>, clears the
     /// passkey hint, and drops the global key. The disk ends in
-    /// <see cref="EncryptedDiskState.Plain"/>. After this, native SQLite
+    /// <see cref="EncryptedPoolState.Plain"/>. After this, native SQLite
     /// interop is available via <see cref="ISqliteWasmDatabaseService"/>'s
     /// per-DB or batch-ZIP export.
     ///
@@ -186,7 +186,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// non-empty Base64 credentialId.
     /// </para>
     /// </summary>
-    Task ExportDiskToPubkeyAndDownloadAsync(
+    Task ExportPoolToPubkeyAndDownloadAsync(
         string filename,
         string recipientX25519PublicKeyBase64,
         string recipientCredentialId,
@@ -227,14 +227,14 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// import's credential.
     /// </para>
     /// <para>
-    /// Caller invariant: state must be <see cref="EncryptedDiskState.Plain"/>
+    /// Caller invariant: state must be <see cref="EncryptedPoolState.Plain"/>
     /// or Encrypted+Locked. Encrypted+Unlocked is rejected — caller must
     /// <see cref="LockAsync"/> first. The envelope's <c>CredentialIdHint</c>
     /// must match <paramref name="credentialId"/>; <paramref name="vfsKey"/>
     /// must come from the WebAuthn ceremony pinned to that credential.
     /// </para>
     /// </summary>
-    Task<DiskImportResult> ImportDiskGuidedFromStreamAsync(
+    Task<DiskImportResult> ImportPoolGuidedFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
         ReadOnlyMemory<byte> vfsKey,
@@ -327,7 +327,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <c>globalKey</c>, deletes every DB file from the pool, and clears
     /// the PRF cache so the auth UI flips to NotAuthorized in lockstep.
     /// The next state probe sees an empty pool (manifest absent) and
-    /// reports <see cref="EncryptedDiskState.Plain"/>.
+    /// reports <see cref="EncryptedPoolState.Plain"/>.
     ///
     /// <para>
     /// Wiping the files is part of the contract — without it, the next
@@ -344,5 +344,5 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <see cref="LeaveEncryptedAsync"/> — those don't destroy data.
     /// </para>
     /// </summary>
-    Task ResetDiskAsync(CancellationToken cancellationToken = default);
+    Task ResetPoolAsync(CancellationToken cancellationToken = default);
 }

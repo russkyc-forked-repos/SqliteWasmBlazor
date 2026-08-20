@@ -6,7 +6,7 @@ namespace SqliteWasmBlazor;
 /// <summary>
 /// Diagnostic exception thrown by <see cref="SqliteWasmWorkerBridge"/> when
 /// a database operation reaches the bridge while the encrypted VFS disk is
-/// in the <see cref="EncryptedDiskState.Encrypted"/>+locked state.
+/// in the <see cref="EncryptedPoolState.Encrypted"/>+locked state.
 ///
 /// <para>
 /// <b>This exception means consumer code reached EF outside an

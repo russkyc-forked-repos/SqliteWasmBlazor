@@ -201,7 +201,7 @@ internal sealed class DbsEnvelopeRoundTripTest
 
     private async Task CleanupAsync()
     {
-        try { await _session.ResetDiskAsync(); } catch { }
+        try { await _session.ResetPoolAsync(); } catch { }
         try
         {
             var names = await _databaseService.ListDatabasesAsync();

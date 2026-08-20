@@ -24,6 +24,6 @@ internal interface IDatabaseLockProbe
 /// Plane-1 view of the encrypted-VFS state — just the three fields the
 /// plane-1 init flow needs to decide whether to report
 /// <see cref="DbInitState.ENCRYPTED_LOCKED"/>. Plane 2 owns the richer
-/// <c>EncryptedDiskState</c> with its lifecycle implications.
+/// <c>EncryptedPoolState</c> with its lifecycle implications.
 /// </summary>
 internal sealed record DatabaseLockState(bool Encrypted, bool Unlocked, string? Hint);

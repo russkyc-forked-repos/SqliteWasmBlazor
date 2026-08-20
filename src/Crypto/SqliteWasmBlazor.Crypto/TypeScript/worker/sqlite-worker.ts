@@ -1046,7 +1046,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
 
         case 'clearDiskManifest':
             // Zero bytes 524..1023 of every DB's header sector. Used by
-            // LeaveEncryptedAsync / ResetDiskAsync when the disk transitions
+            // LeaveEncryptedAsync / ResetPoolAsync when the disk transitions
             // out of Encrypted state. No globalKey requirement (we're erasing,
             // not authenticating).
             return await clearDiskManifestOp();
