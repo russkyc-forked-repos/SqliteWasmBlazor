@@ -58,7 +58,7 @@ public enum PoolImportResult
 ///
 /// <para>
 /// <b>What this is NOT.</b> The encryption lifecycle (Enter/Leave/Lock/
-/// Unlock/Reset, ExportDisk envelope, ImportDisk envelope) lives on
+/// Unlock/Reset, ExportDisk envelope, ImportPool envelope) lives on
 /// <see cref="IEncryptedSqliteWasmDatabaseService"/>. The CryptoSync
 /// delta-bulk surface (DeltaExport/DeltaImport/DeltaRotate) lives on
 /// <c>ICryptoSyncDeltaService</c> in the CryptoSync package. Both are

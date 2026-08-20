@@ -338,7 +338,7 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
 
         // Manual ClearKeys is semantically a session end — same effect as
         // TTL expiry — so emit the same KeyExpired signal that
-        // AuthenticationModel.OnSessionExpired and EncryptedDiskLifecycle
+        // AuthenticationModel.OnSessionExpired and EncryptedPoolLifecycle
         // already subscribe to. SecureKeyCache.Clear is a bulk wipe and
         // intentionally silent (it doesn't know which keys matter to which
         // subscriber); PrfService synthesizes the per-seed expiry event

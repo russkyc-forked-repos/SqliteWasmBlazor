@@ -45,7 +45,7 @@ public partial class DatabaseEncryption
     /// file's extension and routes:
     /// <list type="bullet">
     ///   <item><c>.eds</c> → guided passkey-rebinding disk import
-    ///   (<see cref="EncryptionModel.ImportDisk"/>).</item>
+    ///   (<see cref="EncryptionModel.ImportPool"/>).</item>
     ///   <item><c>.db</c> → single-DB write into a database the user names
     ///   (<see cref="EncryptionModel.ImportDatabase"/>).</item>
     ///   <item><c>.dbs</c> → bundle import that replaces the pool
@@ -148,7 +148,7 @@ public partial class DatabaseEncryption
 
         if (confirmed)
         {
-            await Model.ImportDisk.ExecuteAsync(file);
+            await Model.ImportPool.ExecuteAsync(file);
         }
     }
 }

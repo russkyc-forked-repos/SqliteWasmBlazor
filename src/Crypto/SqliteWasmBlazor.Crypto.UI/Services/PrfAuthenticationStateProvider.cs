@@ -92,7 +92,7 @@ internal sealed class PrfAuthenticationStateProvider : AuthenticationStateProvid
 
         // DB-state claim — drives the DatabaseOpen policy. Plain DBs report
         // READY out of boot; encrypted DBs report ENCRYPTED_LOCKED until
-        // EncryptedDiskLifecycle's auto-unlock observes the auth identity and
+        // EncryptedPoolLifecycle's auto-unlock observes the auth identity and
         // unlocks the worker.
         switch (_dbState)
         {

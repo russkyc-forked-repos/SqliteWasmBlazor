@@ -171,7 +171,7 @@
                 @* Encrypted+Unlocked: envelope export (backup or rekey
                    share) lives only on this branch — needs an installed
                    globalKey. *@
-                <MudButtonAsyncRx Command="@Model.ExportDiskBackup"
+                <MudButtonAsyncRx Command="@Model.ExportPoolBackup"
                                   Variant="Variant.Outlined"
                                   Color="Color.Primary"
                                   StartIcon="@Icons.Material.Filled.FileDownload"
@@ -197,7 +197,7 @@
                 {
                     <MudAlert Severity="Severity.Warning" Class="mb-2">@pastedErr</MudAlert>
                 }
-                <MudButtonAsyncRx Command="@Model.ExportDiskForRecipient"
+                <MudButtonAsyncRx Command="@Model.ExportPoolForRecipient"
                                   Variant="Variant.Outlined"
                                   Color="Color.Secondary"
                                   StartIcon="@Icons.Material.Filled.Share"
@@ -262,7 +262,7 @@
                 @* Unified import picker. .db → single-DB streaming write;
                    .dbs → multi-DB envelope replace-pool; .eds → guided
                    passkey-rebinding disk import (Plain only — Unlocked
-                   rejects .eds via CanImportDisk to avoid orphaning open
+                   rejects .eds via CanImportPool to avoid orphaning open
                    EF contexts mid-session). Extension dispatch lives in
                    HandleImportPickedAsync. *@
                 <MudText Typo="Typo.body2" Class="mb-2">

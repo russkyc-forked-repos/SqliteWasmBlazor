@@ -41,13 +41,13 @@ namespace SqliteWasmBlazor.Crypto.UI.Services;
 ///
 /// <para>
 /// Lifetime is Singleton via <c>[ObservableModelScope(ModelScope.Singleton)]</c>.
-/// Hosts eagerly resolve via <c>UseEncryptedDiskLifecycle()</c> after
+/// Hosts eagerly resolve via <c>UseEncryptedPoolLifecycle()</c> after
 /// <c>builder.Build()</c> so the first auth event arrives with the
 /// observer already wired.
 /// </para>
 /// </summary>
 [ObservableModelScope(ModelScope.Singleton)]
-internal partial class EncryptedDiskLifecycle : ObservableModel
+internal partial class EncryptedPoolLifecycle : ObservableModel
 {
     /// <summary>
     /// Reserved <c>domainId</c> passed to
@@ -63,7 +63,7 @@ internal partial class EncryptedDiskLifecycle : ObservableModel
     /// </summary>
     public const string VfsHkdfContext = "sqlite-vfs:globalKey:v1";
 
-    public partial EncryptedDiskLifecycle(
+    public partial EncryptedPoolLifecycle(
         AuthenticationModel auth,
         IEncryptedSqliteWasmDatabaseService session,
         IPrfService prfService,

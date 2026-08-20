@@ -44,7 +44,7 @@ public sealed record EncryptedPoolState(bool Encrypted, bool Unlocked, string? H
 /// <b>Audience.</b> Apps wanting passkey-encrypted persistence wrap their
 /// content in <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> and call
 /// the lifecycle methods (Enter/Leave/Lock/Unlock/Reset) plus
-/// Export/ImportDisk for backup/restore/share. Plain SQLite-on-OPFS apps
+/// Export/ImportPool for backup/restore/share. Plain SQLite-on-OPFS apps
 /// don't need this interface at all — they use
 /// <see cref="ISqliteWasmDatabaseService"/> only.
 /// </para>
@@ -208,7 +208,7 @@ public interface IEncryptedSqliteWasmDatabaseService
 
     /// <summary>
     /// Streaming guided import — collapses the recipient ritual
-    /// (Reset → EnterEncrypted → ImportDisk) into one atomic call. The
+    /// (Reset → EnterEncrypted → ImportPool) into one atomic call. The
     /// envelope arrives as a <see cref="Stream"/> (typically
     /// <c>IBrowserFile.OpenReadStream(file.Size)</c>) and is shipped to a
     /// JS-side BlobSession one ArrayPool chunk at a time. C# managed heap
