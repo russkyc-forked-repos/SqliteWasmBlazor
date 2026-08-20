@@ -11,7 +11,20 @@
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" crossorigin="anonymous" />
     <link href="_content/SqliteWasmBlazor.FloatingWindow/floating-window.css" rel="stylesheet" />
     <link rel="stylesheet" href="css/app.css" crossorigin="anonymous" />
-    <link rel="icon" type="image/png" href="favicon.png" />
+    <!-- favicon.svg is the mark drawn for 16-32px; the PNG is its fallback
+         for browsers that take only raster favicons. Both come from the SVG
+         sources checked in beside them. -->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon.png" />
+    <!-- Installed-web-app metadata. Every href is relative so it resolves
+         against <base href>, which ReleaseSubfolder rewrites for subfolder
+         deployments. display:standalone is what makes this an installed web
+         app rather than a bookmark, and so also what makes a finished export
+         arrive on an OS intermediate screen instead of in a downloads folder
+         — which the export card explains. -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <meta name="theme-color" content="#03173d" />
     <script type="importmap"></script>
 </head>
 

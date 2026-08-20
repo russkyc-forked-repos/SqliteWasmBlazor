@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
+     aria-label="An encrypted database">
+  <!--
+    The same mark as icon.svg, redrawn for 16-32px. A favicon has room for two
+    shapes, so the disc seam is dropped and the cylinder is widened; what
+    remains is the silhouette and a keyhole big enough to still be a keyhole
+    at a sixteenth of this size. Browsers that take an SVG favicon render this
+    file directly; favicon.png is the fallback rendered from it.
+  -->
+  <rect width="512" height="512" fill="#03173d"/>
+  <g transform="translate(0 11)">
+    <path d="M106 140 A150 46 0 0 1 406 140 V350 A150 46 0 0 1 106 350 Z"
+          fill="#22d3ee"/>
+    <g fill="#03173d">
+      <circle cx="256" cy="270" r="62"/>
+      <path d="M226 306 L214 372 H298 L286 306 Z"/>
+    </g>
+  </g>
+</svg>

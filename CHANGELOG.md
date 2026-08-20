@@ -17,6 +17,12 @@ Exporting used to materialise the entire database as a `byte[]`, hand it across 
 - **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
 - Staging files are swept on worker start rather than after the click: an anchor download drains its `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
 
+### Demo: a Real Web-App Manifest and an Icon That Says What the App Is
+
+The demo ships a `manifest.webmanifest` that was never linked from `index.html` and pointed at an `icon-512.png` that did not exist. It is now linked, complete, and correct: explicit `scope`, a `short_name` that fits under a Home Screen icon, a splash `background_color` matching the theme, and both icon sizes declared `any maskable`.
+
+The stock Blazor template icon is replaced by a mark drawn for this app — a database cylinder for storage that outlives the session, a keyhole for the fact that what it stores is encrypted at rest, on the manifest's theme colour so the icon, splash screen and status bar are one colour. Source art is checked in as `icon.svg` (full detail) and `favicon.svg` (redrawn for 16-32px, where a disc seam is one shape too many); the PNGs are rendered from them with `rsvg-convert`. Everything sits inside the 80% safe circle, so cropping to a circle or a squircle loses nothing. `.svg` was added to the service worker's offline asset filter.
+
 ### Formal Verification (Tamarin)
 
 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover.

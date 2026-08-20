@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
+     aria-label="An encrypted database">
+  <!--
+    Source art for every icon this app ships; the PNGs beside it are rendered
+    from this file with `rsvg-convert -w N -h N icon.svg -o icon-N.png`.
+
+    The mark says what the app is: a database cylinder for storage that
+    survives the session, a keyhole for the fact that what it stores is
+    encrypted at rest. The field is the manifest's theme_color, so icon,
+    splash screen and status bar are one colour.
+
+    Everything sits inside a centred circle of radius 205 — 80% of the 512
+    box — so the same file works as a maskable icon: Android may crop it to a
+    circle and iOS to a squircle, and nothing important is lost either way.
+
+    Both the seam and the bottom cap are filled shapes rather than stroked
+    arcs. A stroke across the cylinder runs vertical where it meets the sides,
+    so half its width would hang off the silhouette as two small ledges.
+  -->
+  <rect width="512" height="512" fill="#03173d"/>
+  <g transform="translate(0 20)">
+    <!-- Taller than it is wide, and the bottom bulges the way the top disc
+         does, so the form reads as a stack rather than as a can. -->
+    <path d="M126 128 A130 44 0 0 1 386 128 V344 A130 44 0 0 1 126 344 Z"
+          fill="#22d3ee"/>
+    <!-- The seam under the top disc is what makes the silhouette read as a
+         database rather than a rounded rectangle. -->
+    <path d="M126 168 A130 44 0 0 0 386 168 V186 A130 44 0 0 1 126 186 Z"
+          fill="#03173d"/>
+    <!-- Keyhole, cut through to the field behind it. -->
+    <g fill="#03173d">
+      <circle cx="256" cy="288" r="42"/>
+      <path d="M235 314 L222 364 H290 L277 314 Z"/>
+    </g>
+  </g>
+</svg>
