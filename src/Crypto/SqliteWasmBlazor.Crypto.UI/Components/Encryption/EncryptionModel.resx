@@ -10,6 +10,7 @@
 
   <data name="Card_VfsTitle" xml:space="preserve"><value>Encrypted VFS</value></data>
   <data name="Card_ExportsTitle" xml:space="preserve"><value>Disk export / import</value></data>
+  <data name="Hint_ExportIntermediateScreen" xml:space="preserve"><value>Installed on a Home Screen, this app has no downloads folder: a finished export arrives on an intermediate screen instead of being saved. That screen is the export — open the share menu on it and choose "Save to Files".</value></data>
 
   <data name="Pill_Plain" xml:space="preserve"><value>Plain</value></data>
   <data name="Pill_Unlocked" xml:space="preserve"><value>Encrypted · Unlocked</value></data>

@@ -210,6 +210,22 @@ main thread ever holds the payload. Peak memory is flat regardless of database s
 Staging files are cleaned up on the next worker start (a download reads its file
 lazily, so it cannot be deleted at click time).
 
+### Downloads Installed on a Home Screen
+
+A web app installed on a Home Screen has no downloads folder, so WebKit drops the
+`download` attribute and navigates to the file instead: a finished export arrives
+on a full-screen OS intermediate screen — an icon, a size, and "Open in
+&lt;app&gt;" — and the user saves it from that screen's share menu. The export
+itself is unaffected, because WebKit streams the disk-backed staging file onto
+that screen, so it holds at any size.
+
+Worth a line of UI copy above your export controls: it is the one place where the
+export looks like it failed while having entirely succeeded, and the OS screen
+covers anything you could say afterwards. Handing the file to `navigator.share`
+instead is a trap worth naming — the share sheet has to materialise the file to
+pass it to another process, so it dies on a large database, while this path does
+not.
+
 ### Schema Validation
 
 Validate that an imported database matches the expected EF model schema:

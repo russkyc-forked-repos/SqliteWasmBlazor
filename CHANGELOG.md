@@ -17,6 +17,12 @@ Exporting used to materialise the entire database as a `byte[]`, hand it across 
 - **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
 - Staging files are swept on worker start rather than after the click: an anchor download drains its `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
 
+### Installed Web Apps: Saying What iOS Is About to Do
+
+Installed on a Home Screen, an export arrives on a full-screen OS intermediate screen — an icon, a size, and "Open in &lt;app&gt;" — rather than as a saved file. Such a container has no downloads folder, so WebKit drops the `download` attribute and navigates to the file instead. Nothing is wrong with the export: WebKit streams the disk-backed staging file onto that screen, so it holds at any size, and its share menu saves to Files. It simply looks like a failure to anyone who was not told, so the demo's encryption page now says so above the export buttons — after an export the OS screen covers anything the page could add.
+
+Handing the file to `navigator.share` was tried and rejected: the share sheet must materialise the file to pass it to another process, which dies on a large database, while the intermediate-screen path streams and does not. The presentation is the platform's; only the explanation was ours to fix.
+
 ### Demo: a Real Web-App Manifest and an Icon That Says What the App Is
 
 The demo ships a `manifest.webmanifest` that was never linked from `index.html` and pointed at an `icon-512.png` that did not exist. It is now linked, complete, and correct: explicit `scope`, a `short_name` that fits under a Home Screen icon, a splash `background_color` matching the theme, and both icon sizes declared `any maskable`.

@@ -175,6 +175,16 @@
                 @Model.Localizer["Card_ExportsTitle"]
             </MudText>
 
+            @* Sits above the export buttons on purpose: installed on a Home
+               Screen, a finished export arrives on a full-screen OS
+               intermediate screen rather than as a saved file, and that
+               screen covers anything we could say afterwards. The wording
+               carries its own condition, so no platform sniffing is needed
+               to decide whether to show it. *@
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+                @Model.Localizer["Hint_ExportIntermediateScreen"]
+            </MudText>
+
             @if (Model.IsUnlocked)
             {
                 @* Encrypted+Unlocked: envelope export (backup or rekey

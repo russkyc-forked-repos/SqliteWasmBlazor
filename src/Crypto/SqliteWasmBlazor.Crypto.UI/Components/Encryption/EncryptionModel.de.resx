@@ -10,6 +10,7 @@
 
   <data name="Card_VfsTitle" xml:space="preserve"><value>Verschlüsseltes VFS</value></data>
   <data name="Card_ExportsTitle" xml:space="preserve"><value>Festplatte exportieren / importieren</value></data>
+  <data name="Hint_ExportIntermediateScreen" xml:space="preserve"><value>Auf dem Home-Bildschirm installiert hat diese App keinen Download-Ordner: Ein fertiger Export landet auf einem Zwischenbildschirm, statt gespeichert zu werden. Dieser Bildschirm ist der Export — dort das Teilen-Menü öffnen und „In Dateien sichern“ wählen.</value></data>
 
   <data name="Pill_Plain" xml:space="preserve"><value>Klartext</value></data>
   <data name="Pill_Unlocked" xml:space="preserve"><value>Verschlüsselt · Entsperrt</value></data>
