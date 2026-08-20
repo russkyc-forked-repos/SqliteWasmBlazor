@@ -23,13 +23,13 @@ import {
 import { rekeySlots } from './vfs-prf/rekey';
 import { clearBytes } from '@sqlitewasmblazor/crypto-core';
 import {
-    readDiskManifestOp,
-    writeDiskManifestOp,
-    clearDiskManifestOp,
+    readPoolManifestOp,
+    writePoolManifestOp,
+    clearPoolManifestOp,
 } from './worker-manifest';
 import {
-    importDiskStreamPreflight,
-    importDiskStreamCommit,
+    importPoolStreamPreflight,
+    importPoolStreamCommit,
     importDatabaseFromBlob,
     assertImportFileCount,
 } from './vfs-prf/import-streamed';
@@ -317,29 +317,29 @@ async function handleStreamingRequest(
 ): Promise<void> {
     try {
         switch (data.type) {
-            case 'exportDiskToStaging':
+            case 'exportPoolToStaging':
                 if (!binaryPayload) {
-                    throw new Error('exportDiskToStaging requires binaryPayload (raw K_wrap)');
+                    throw new Error('exportPoolToStaging requires binaryPayload (raw K_wrap)');
                 }
-                await exportDiskToStagingHandler(streamId, new Uint8Array(binaryPayload));
+                await exportPoolToStagingHandler(streamId, new Uint8Array(binaryPayload));
                 return;
-            case 'importDiskStreamPreflight':
+            case 'importPoolStreamPreflight':
                 if (!binaryPayload) {
-                    throw new Error('importDiskStreamPreflight requires binaryPayload (raw K_wrap)');
+                    throw new Error('importPoolStreamPreflight requires binaryPayload (raw K_wrap)');
                 }
                 if (!(blob instanceof Blob)) {
-                    throw new Error('importDiskStreamPreflight requires a Blob');
+                    throw new Error('importPoolStreamPreflight requires a Blob');
                 }
-                await importDiskStreamPreflightHandler(streamId, blob, new Uint8Array(binaryPayload));
+                await importPoolStreamPreflightHandler(streamId, blob, new Uint8Array(binaryPayload));
                 return;
-            case 'importDiskStreamCommit':
+            case 'importPoolStreamCommit':
                 if (!binaryPayload) {
-                    throw new Error('importDiskStreamCommit requires binaryPayload (raw K_wrap)');
+                    throw new Error('importPoolStreamCommit requires binaryPayload (raw K_wrap)');
                 }
                 if (!(blob instanceof Blob)) {
-                    throw new Error('importDiskStreamCommit requires a Blob');
+                    throw new Error('importPoolStreamCommit requires a Blob');
                 }
-                await importDiskStreamCommitHandler(streamId, blob, new Uint8Array(binaryPayload));
+                await importPoolStreamCommitHandler(streamId, blob, new Uint8Array(binaryPayload));
                 return;
             case 'importDatabaseFromSession':
                 if (!(blob instanceof Blob)) {
@@ -389,17 +389,17 @@ async function handleStreamingRequest(
  * OK (0) on success or WRONG_KEY (1) on tag failure via streamDone.result.
  * Pure read; no pool mutation.
  */
-async function importDiskStreamPreflightHandler(
+async function importPoolStreamPreflightHandler(
     streamId: number,
     blob: Blob,
     kWrap: Uint8Array,
 ): Promise<void> {
     if (kWrap.length !== 32) {
-        throw new Error(`importDiskStreamPreflight: K_wrap must be 32 bytes, got ${kWrap.length}`);
+        throw new Error(`importPoolStreamPreflight: K_wrap must be 32 bytes, got ${kWrap.length}`);
     }
     let result: number;
     try {
-        result = await importDiskStreamPreflight(blob, kWrap);
+        result = await importPoolStreamPreflight(blob, kWrap);
     } catch (err) {
         throw err;
     } finally {
@@ -414,22 +414,22 @@ async function importDiskStreamPreflightHandler(
  * slot under K_wrap, re-encrypts under globalKey via the chunked
  * writeFileSlice + atomicReplaceFile path. Returns OK (0) on streamDone.
  */
-async function importDiskStreamCommitHandler(
+async function importPoolStreamCommitHandler(
     streamId: number,
     blob: Blob,
     kWrap: Uint8Array,
 ): Promise<void> {
     if (kWrap.length !== 32) {
-        throw new Error(`importDiskStreamCommit: K_wrap must be 32 bytes, got ${kWrap.length}`);
+        throw new Error(`importPoolStreamCommit: K_wrap must be 32 bytes, got ${kWrap.length}`);
     }
     if (!hasGlobalKey()) {
         throw new Error(
-            'importDiskStreamCommit rejected: no globalKey registered. ' +
+            'importPoolStreamCommit rejected: no globalKey registered. ' +
             'C# caller must have run EnterEncryptedAsync between preflight and commit.');
     }
     const globalKey = snapshotGlobalKey()!;
     try {
-        await importDiskStreamCommit(blob, kWrap, globalKey, poolUtil!);
+        await importPoolStreamCommit(blob, kWrap, globalKey, poolUtil!);
     } catch (err) {
         throw err;
     } finally {
@@ -825,16 +825,16 @@ async function importDatabaseFromSessionHandler(
  * most one chunk into JS heap at a time) and decrypt+re-encrypt under
  * K_wrap via the chunked rekeySlots path.
  */
-async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): Promise<void> {
+async function exportPoolToStagingHandler(streamId: number, kWrap: Uint8Array): Promise<void> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
     if (kWrap.length !== 32) {
-        throw new Error(`exportDiskToStaging: K_wrap must be 32 bytes, got ${kWrap.length}`);
+        throw new Error(`exportPoolToStaging: K_wrap must be 32 bytes, got ${kWrap.length}`);
     }
     if (!hasGlobalKey()) {
         throw new Error(
-            'exportDiskToStaging rejected: no globalKey registered. Caller must ' +
+            'exportPoolToStaging rejected: no globalKey registered. Caller must ' +
             'have Unlocked the disk before invoking the streaming export.');
     }
 
@@ -850,7 +850,7 @@ async function exportDiskToStagingHandler(streamId: number, kWrap: Uint8Array): 
             const fileSize = poolUtil.getFileSize(dbPath);
             if (fileSize === 0 || fileSize % ENCRYPTED_SLOT_SIZE !== 0) {
                 throw new Error(
-                    `exportDiskToStaging: ${name} length ${fileSize} is not a non-zero ` +
+                    `exportPoolToStaging: ${name} length ${fileSize} is not a non-zero ` +
                     `multiple of the encrypted slot size ${ENCRYPTED_SLOT_SIZE}; ` +
                     `refusing to export a non-encrypted source.`);
             }
@@ -1027,29 +1027,29 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
                 data as any
             );
 
-        case 'readDiskManifest':
+        case 'readPoolManifest':
             // Disk-bound passkey manifest read. Walks every DB in the SAHPool,
             // pulls bytes 524..1023 of each header sector, asserts they all
             // match, and parses out the body. When `verifyMac` is true (only
             // valid post-unlock — globalKey present) the HMAC is also checked.
-            return await readDiskManifestOp((data as any).verifyMac === true);
+            return await readPoolManifestOp((data as any).verifyMac === true);
 
-        case 'writeDiskManifest':
+        case 'writePoolManifest':
             // Disk-bound passkey manifest write. binaryPayload carries the
             // (already-MessagePack-serialized) body bytes from C#; globalKey
             // MUST be installed so we can HKDF-derive the manifest MAC key.
             // Writes the same 500-byte region into every DB's header sector.
             if (!binaryPayload) {
-                throw new Error('writeDiskManifest requires binaryPayload (manifest body bytes)');
+                throw new Error('writePoolManifest requires binaryPayload (manifest body bytes)');
             }
-            return await writeDiskManifestOp(new Uint8Array(binaryPayload));
+            return await writePoolManifestOp(new Uint8Array(binaryPayload));
 
-        case 'clearDiskManifest':
+        case 'clearPoolManifest':
             // Zero bytes 524..1023 of every DB's header sector. Used by
             // LeaveEncryptedAsync / ResetPoolAsync when the disk transitions
             // out of Encrypted state. No globalKey requirement (we're erasing,
             // not authenticating).
-            return await clearDiskManifestOp();
+            return await clearPoolManifestOp();
 
         default:
             throw new Error(`Unknown request type: ${type}`);

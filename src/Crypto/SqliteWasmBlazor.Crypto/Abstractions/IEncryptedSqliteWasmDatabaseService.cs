@@ -22,7 +22,7 @@ namespace SqliteWasmBlazor;
     /// Set whenever <see cref="Encrypted"/> = true. UI uses
 /// it to render "Sign in with passkey: {hint}" so the user recognises
 /// which credential to provide. Null when the manifest is in a corrupted
-/// state (Mismatch / Tampered / Malformed) — UI surfaces a "ResetDisk
+/// state (Mismatch / Tampered / Malformed) — UI surfaces a "ResetPool
 /// required" affordance instead of routing to a specific credential.
 /// </param>
 public sealed record EncryptedPoolState(bool Encrypted, bool Unlocked, string? Hint)

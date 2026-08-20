@@ -16,7 +16,7 @@ import {
     type ManifestParseState,
 } from './vfs-prf/manifest';
 
-export async function readDiskManifestOp(verifyMac: boolean) {
+export async function readPoolManifestOp(verifyMac: boolean) {
     if (!poolUtil) {
         throw new Error('SQLite not initialized');
     }
@@ -30,7 +30,7 @@ export async function readDiskManifestOp(verifyMac: boolean) {
     let macKey: Uint8Array | undefined;
     if (verifyMac) {
         if (!hasGlobalKey()) {
-            throw new Error('readDiskManifest verifyMac=true requires globalKey to be installed');
+            throw new Error('readPoolManifest verifyMac=true requires globalKey to be installed');
         }
         const snapshot = snapshotGlobalKey()!;
         try {
@@ -90,12 +90,12 @@ export async function readDiskManifestOp(verifyMac: boolean) {
     }
 }
 
-export async function writeDiskManifestOp(body: Uint8Array) {
+export async function writePoolManifestOp(body: Uint8Array) {
     if (!poolUtil) {
         throw new Error('SQLite not initialized');
     }
     if (!hasGlobalKey()) {
-        throw new Error('writeDiskManifest requires globalKey to be installed (manifest MAC is keyed)');
+        throw new Error('writePoolManifest requires globalKey to be installed (manifest MAC is keyed)');
     }
 
     const databases = poolUtil.listDatabases();
@@ -127,7 +127,7 @@ export async function writeDiskManifestOp(body: Uint8Array) {
     }
 }
 
-export async function clearDiskManifestOp() {
+export async function clearPoolManifestOp() {
     if (!poolUtil) {
         throw new Error('SQLite not initialized');
     }

@@ -19,9 +19,9 @@ import {
 } from '../../../bridge/msgpack-stream.js';
 import { buildPageAad } from '../aad.js';
 import {
-    importDiskStreamPreflight,
-    importDiskStreamCommit,
-    DiskImportResult,
+    importPoolStreamPreflight,
+    importPoolStreamCommit,
+    PoolImportResult,
     MAX_IMPORT_FILES,
 } from '../import-streamed.js';
 
@@ -50,7 +50,7 @@ function sealSlot(
     return slot;
 }
 
-/** Compose a v3 EncryptedDiskEnvelope from already-sealed slot bytes. */
+/** Compose a v3 EncryptedPoolEnvelope from already-sealed slot bytes. */
 function buildEnvelope(
     files: Array<{ name: string; slots: Uint8Array[] }>,
     filesHeaderOverride?: Uint8Array,
@@ -88,22 +88,22 @@ function makeFile(
     return { name, slots };
 }
 
-describe('importDiskStreamPreflight (full-envelope verification)', () => {
+describe('importPoolStreamPreflight (full-envelope verification)', () => {
     it('returns OK for a fully valid multi-file envelope', async () => {
         const kWrap = makeKey(1);
         const blob = buildEnvelope([
             makeFile('a.db', 3, kWrap),
             makeFile('b.db', 2, kWrap),
         ]);
-        await expect(importDiskStreamPreflight(blob, kWrap))
-            .resolves.toBe(DiskImportResult.OK);
+        await expect(importPoolStreamPreflight(blob, kWrap))
+            .resolves.toBe(PoolImportResult.OK);
     });
 
     it('returns WRONG_KEY when the very first slot fails to authenticate', async () => {
         const kWrap = makeKey(1);
         const blob = buildEnvelope([makeFile('a.db', 2, kWrap)]);
-        await expect(importDiskStreamPreflight(blob, makeKey(2)))
-            .resolves.toBe(DiskImportResult.WRONG_KEY);
+        await expect(importPoolStreamPreflight(blob, makeKey(2)))
+            .resolves.toBe(PoolImportResult.WRONG_KEY);
     });
 
     it('throws (not WRONG_KEY, not OK) when a non-zero slot is corrupted', async () => {
@@ -114,7 +114,7 @@ describe('importDiskStreamPreflight (full-envelope verification)', () => {
         const file = makeFile('a.db', 3, kWrap);
         file.slots[1][100] ^= 0x01;
         const blob = buildEnvelope([file]);
-        await expect(importDiskStreamPreflight(blob, kWrap))
+        await expect(importPoolStreamPreflight(blob, kWrap))
             .rejects.toThrow(/tampered or corrupt/);
     });
 
@@ -126,7 +126,7 @@ describe('importDiskStreamPreflight (full-envelope verification)', () => {
         const bad = makeFile('b.db', 1, kWrap);
         bad.slots[0][0] ^= 0x01;
         const blob = buildEnvelope([good, bad]);
-        await expect(importDiskStreamPreflight(blob, kWrap))
+        await expect(importPoolStreamPreflight(blob, kWrap))
             .rejects.toThrow(/tampered or corrupt/);
     });
 
@@ -134,13 +134,13 @@ describe('importDiskStreamPreflight (full-envelope verification)', () => {
         const kWrap = makeKey(1);
         const full = buildEnvelope([makeFile('a.db', 3, kWrap)]);
         const truncated = full.slice(0, full.size - PHYSICAL_SLOT_SIZE);
-        await expect(importDiskStreamPreflight(truncated, kWrap))
+        await expect(importPoolStreamPreflight(truncated, kWrap))
             .rejects.toThrow(/stream ended/);
     });
 
     it('rejects an empty Files array', async () => {
         const blob = buildEnvelope([]);
-        await expect(importDiskStreamPreflight(blob, makeKey(1)))
+        await expect(importPoolStreamPreflight(blob, makeKey(1)))
             .rejects.toThrow(/Files count 0/);
     });
 
@@ -149,19 +149,19 @@ describe('importDiskStreamPreflight (full-envelope verification)', () => {
         // never ran, and preflight returned OK with nothing authenticated.
         const bogusHeader = Uint8Array.of(0xdd, 0xff, 0xff, 0xff, 0xff);
         const blob = buildEnvelope([], bogusHeader);
-        await expect(importDiskStreamPreflight(blob, makeKey(1)))
+        await expect(importPoolStreamPreflight(blob, makeKey(1)))
             .rejects.toThrow(/Files count 4294967295/);
     });
 
     it(`rejects counts above MAX_IMPORT_FILES (${MAX_IMPORT_FILES})`, async () => {
         const header = packArrayHeader(MAX_IMPORT_FILES + 1);
         const blob = buildEnvelope([], header);
-        await expect(importDiskStreamPreflight(blob, makeKey(1)))
+        await expect(importPoolStreamPreflight(blob, makeKey(1)))
             .rejects.toThrow(/refusing import/);
     });
 });
 
-describe('importDiskStreamCommit (deferred promotion)', () => {
+describe('importPoolStreamCommit (deferred promotion)', () => {
     interface Call { op: string; args: unknown[] }
 
     function makePoolUtil(calls: Call[]) {
@@ -191,7 +191,7 @@ describe('importDiskStreamCommit (deferred promotion)', () => {
             makeFile('a.db', 2, kWrap),
             makeFile('b.db', 1, kWrap),
         ]);
-        await importDiskStreamCommit(blob, kWrap, globalKey, makePoolUtil(calls));
+        await importPoolStreamCommit(blob, kWrap, globalKey, makePoolUtil(calls));
         const firstPromote = calls.findIndex(c => c.op === 'atomicReplaceFile');
         const lastWrite = calls.map(c => c.op).lastIndexOf('writeFileSlice');
         expect(firstPromote).toBeGreaterThan(lastWrite);
@@ -210,7 +210,7 @@ describe('importDiskStreamCommit (deferred promotion)', () => {
         bad.slots[1][0] ^= 0x01;
         const blob = buildEnvelope([good, bad]);
         await expect(
-            importDiskStreamCommit(blob, kWrap, globalKey, makePoolUtil(calls)),
+            importPoolStreamCommit(blob, kWrap, globalKey, makePoolUtil(calls)),
         ).rejects.toThrow();
         expect(calls.some(c => c.op === 'atomicReplaceFile')).toBe(false);
         // Both temps cleaned up.

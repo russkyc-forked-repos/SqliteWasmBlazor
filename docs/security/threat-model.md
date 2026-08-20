@@ -97,7 +97,7 @@ byte-for-byte vendor SAHPool behavior.
 | .NET ↔ Worker (intra-page) | `postMessage` request/response envelope | Same-origin, structured cloning. No application-layer crypto. |
 | Worker ↔ OPFS (Plane 1) | Raw SQLite pages | None — relies on OS file permissions. |
 | Worker ↔ OPFS (Plane 2) | `[ciphertext(4096) \| nonce(12) \| tag(16)]` per slot | ChaCha20-Poly1305 AEAD with AAD `"prf-vfs-v1\|" + dbPath + "\|" + slotIndex_LE32`. Slot-0 probe gates unlock. Manifest MAC binds to credential. |
-| Whole-disk export (`.eds`) | MessagePacked `EncryptedDiskEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD with path+slot-bound AAD, verified over the whole envelope before any pool mutation on import. No sender authenticity: ECIES is anonymous-sender, so the envelope proves only that it was sealed *to* the recipient, not *by* whom (see §8). |
+| Whole-disk export (`.eds`) | MessagePacked `EncryptedPoolEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD with path+slot-bound AAD, verified over the whole envelope before any pool mutation on import. No sender authenticity: ECIES is anonymous-sender, so the envelope proves only that it was sealed *to* the recipient, not *by* whom (see §8). |
 | Whole-disk export (`.zip` plain) | ZIP of `.db` files | None at this layer. Confidentiality is on Plane 1 storage. |
 
 ## 6. Cryptographic primitives

@@ -180,7 +180,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     internal async Task<(string state, byte[]? body, int? schemaVersion)>
         ReadPoolManifestAsync(bool verifyMac, CancellationToken cancellationToken = default)
     {
-        var request = new { type = "readDiskManifest", verifyMac };
+        var request = new { type = "readPoolManifest", verifyMac };
         var result = await _bridge.SendRequestAsync(request, cancellationToken);
         var state = result.ManifestState ?? "absent";
         var body = !string.IsNullOrEmpty(result.ManifestBody)
@@ -204,7 +204,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
         try
         {
             await _bridge.PostBinaryAsync(
-                new { type = "writeDiskManifest" },
+                new { type = "writePoolManifest" },
                 bodyArray,
                 cancellationToken);
         }
@@ -223,7 +223,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     /// </summary>
     internal async Task ClearPoolManifestAsync(CancellationToken cancellationToken = default)
     {
-        var request = new { type = "clearDiskManifest" };
+        var request = new { type = "clearPoolManifest" };
         await _bridge.SendRequestAsync(request, cancellationToken);
     }
 }

@@ -652,7 +652,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
 
         // Decode + length-check the recipient pubkey before doing any
-        // worker round-trip — mirrors ExportDiskToPubkeyAsync's preflight.
+        // worker round-trip — mirrors ExportPoolToPubkeyBytesAsync's preflight.
         byte[] recipientPubBytes;
         try
         {
@@ -1250,7 +1250,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Forward-parse the positional header via PeekEnvelopeHeader rather
-        // than full MessagePackSerializer.Deserialize<EncryptedDiskEnvelope> —
+        // than full MessagePackSerializer.Deserialize<EncryptedPoolEnvelope> —
         // works equally well on a small (≥ ~256 byte) prefix as on a full
         // envelope, which is what the streaming import path needs to peek
         // CredentialIdHint without buffering the whole .eds file in C#.

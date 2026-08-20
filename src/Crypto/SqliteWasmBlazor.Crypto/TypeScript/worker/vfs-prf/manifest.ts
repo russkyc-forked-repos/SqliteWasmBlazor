@@ -175,7 +175,7 @@ export function serializeManifestRegion(
 }
 
 /**
- * 500 bytes of zeros — used by `clearDiskManifest`. Returns a fresh buffer
+ * 500 bytes of zeros — used by `clearPoolManifest`. Returns a fresh buffer
  * each call (callers may keep the reference past write).
  */
 export function emptyManifestRegion(): Uint8Array {

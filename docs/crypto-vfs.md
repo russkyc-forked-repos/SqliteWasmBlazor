@@ -225,7 +225,7 @@ SecureKeyCache.TryGet(handle)
 Worker 'setGlobalEncryptionKey' handler
    │   unpackVfsKeyHeader → 32-byte key
    │   setGlobalKey(key)
-   │   readDiskManifest(verifyMac=true)
+   │   readPoolManifest(verifyMac=true)
    │   reject unlock if PFAM HMAC does not verify under key
    ▼
 EF resolves DbContextFactory<TContext>

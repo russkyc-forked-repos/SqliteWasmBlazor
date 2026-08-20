@@ -142,7 +142,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPrfService>(sp => sp.GetRequiredService<PrfService>());
 
         // Encrypted-disk lifecycle — see the IConfiguration overload above
-        // for the rationale (depends on IPrfService for ResetDisk cascade).
+        // for the rationale (depends on IPrfService for ResetPool cascade).
         services.AddSingleton<EncryptedSqliteWasmDatabaseService>();
         services.AddSingleton<IEncryptedSqliteWasmDatabaseService>(sp => sp.GetRequiredService<EncryptedSqliteWasmDatabaseService>());
         // Plane-1-facing probe so InitializeSqliteWasmDatabaseAsync<TContext>

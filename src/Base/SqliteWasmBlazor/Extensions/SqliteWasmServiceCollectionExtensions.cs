@@ -41,7 +41,7 @@ public static class SqliteWasmServiceCollectionExtensions
 
         // Encrypted-disk lifecycle (IEncryptedSqliteWasmDatabaseService) is
         // registered by AddSqliteWasmBlazorCrypto — it depends on IPrfService
-        // for the implicit PRF cache cleanup on ResetDisk. Plain-only
+        // for the implicit PRF cache cleanup on ResetPool. Plain-only
         // consumers (AdoNetSample) only call AddSqliteWasm and never see
         // the encrypted-disk surface.
         services.AddSingleton<DbInitializationService>();
