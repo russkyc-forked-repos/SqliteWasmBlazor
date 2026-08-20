@@ -104,7 +104,7 @@
        write directly into our bundles/. See base SqliteWasmBlazor.csproj for
        the race rationale and the build/register target split. -->
   <Target Name="BuildTypeScriptBundles"
-          Inputs="@(_TsSrc);TypeScript/package.json;@(_CryptoCoreSrc);../../Base/SqliteWasmBlazor/TypeScript-Crypto/package.json"
+          Inputs="@(_TsSrc);TypeScript/package.json;@(_CryptoCoreSrc);../../Base/SqliteWasmBlazor/TypeScript-Crypto/package.json;@(_WorkerCommonSrc)"
           Outputs="$(MSBuildProjectDirectory)/bundles/.build.stamp"
           Condition="Exists('TypeScript/package.json')">
     <Exec WorkingDirectory="../../Base/SqliteWasmBlazor/TypeScript-Crypto" Command="npm run build" Condition="'$(Configuration)' != 'Release' And Exists('../../Base/SqliteWasmBlazor/TypeScript-Crypto/package.json')" />
@@ -145,6 +145,11 @@
     <_TsSrc Include="TypeScript/**/*.ts;TypeScript/package.json" Exclude="TypeScript/node_modules/**" />
     <_CryptoCoreSrc Include="../../Base/SqliteWasmBlazor/TypeScript-Crypto/**/*.ts;../../Base/SqliteWasmBlazor/TypeScript-Crypto/package.json"
                     Exclude="../../Base/SqliteWasmBlazor/TypeScript-Crypto/node_modules/**" />
+    <!-- @sqlitewasmblazor/worker-common is a file: dependency bundled into our
+         worker, so its sources are build inputs too — without them a change to
+         the shared MessagePack ↔ SQLite conversions leaves this bundle stale. -->
+    <_WorkerCommonSrc Include="../../Base/SqliteWasmBlazor/TypeScript-Common/**/*.ts;../../Base/SqliteWasmBlazor/TypeScript-Common/package.json"
+                      Exclude="../../Base/SqliteWasmBlazor/TypeScript-Common/node_modules/**" />
   </ItemGroup>
 
 </Project>

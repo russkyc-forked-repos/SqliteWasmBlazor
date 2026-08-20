@@ -110,7 +110,10 @@ public class MessagePackFileHeaderV2
     /// <param name="recordCount">Total record count</param>
     /// <param name="mode">0 = Seed, 1 = Delta</param>
     /// <param name="appIdentifier">Optional app identifier</param>
-    /// <param name="sqlTypeOverrides">Override SQL types for specific columns (e.g., {"Id": "BLOB"} when entity uses [Column(TypeName="BLOB")])</param>
+    /// <param name="sqlTypeOverrides">Override SQL types for specific columns whose storage form differs from the
+    /// C# type default. Never override a <see cref="Guid"/> column: the whole stack addresses Guid keys as uppercase
+    /// TEXT, and a row written in any other form is unreachable by key. A <c>[Column(TypeName="BLOB")]</c> annotation
+    /// is not a reason to override — SQLite's BLOB affinity is "none", so a TEXT value stays TEXT in a BLOB column.</param>
     public static MessagePackFileHeaderV2 Create<T>(
         string tableName,
         string primaryKeyColumn,
@@ -191,7 +194,9 @@ public class MessagePackFileHeaderV2
         // EF Core SQLite defaults (verified from migration snapshot):
         if (underlyingType == typeof(Guid))
         {
-            return "TEXT"; // EF Core default — override with "BLOB" via sqlTypeOverrides if [Column(TypeName="BLOB")]
+            // Uppercase TEXT is the one form the ADO layer binds and EF Core generates
+            // literals in; anything else cannot be matched by a Guid key parameter.
+            return "TEXT";
         }
 
         if (underlyingType == typeof(string))

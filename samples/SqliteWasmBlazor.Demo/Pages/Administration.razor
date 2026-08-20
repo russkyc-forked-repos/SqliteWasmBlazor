@@ -196,7 +196,6 @@
 
         // Generate and insert in batches to keep memory bounded
         const int batchSize = 10000;
-        var sqlTypeOverrides = new Dictionary<string, string> { ["Id"] = "BLOB" };
         var totalInserted = 0;
 
         try
@@ -211,8 +210,7 @@
                     tableName: "TodoItems",
                     primaryKeyColumn: "Id",
                     recordCount: count,
-                    mode: 0,
-                    sqlTypeOverrides: sqlTypeOverrides);
+                    mode: 0);
 
                 using var stream = new MemoryStream();
                 MessagePackSerializer.Serialize(stream, header);

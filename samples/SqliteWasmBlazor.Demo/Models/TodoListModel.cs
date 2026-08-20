@@ -320,12 +320,16 @@ public partial class TodoListModel : ObservableModel
         var stopwatch = Stopwatch.StartNew();
         await using (var context = await ContextFactory.CreateDbContextAsync(cancellationToken))
         {
-            var tracked = await context.TodoItems.FindAsync([todo.Id], cancellationToken);
-            if (tracked is not null)
-            {
-                tracked.IsDeleted = true;
-                tracked.DeletedAt = DateTime.UtcNow;
-            }
+            // A row the list rendered but the key can't reach means the stored
+            // Id isn't in the form the provider binds. Reporting success here
+            // would leave the row on screen with a "deleted" notice next to it.
+            var tracked = await context.TodoItems.FindAsync([todo.Id], cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"No TodoItem with Id {todo.Id} — the row is not addressable by its key.");
+
+            tracked.IsDeleted = true;
+            tracked.DeletedAt = DateTime.UtcNow;
+
             try
             {
                 await context.SaveChangesAsync(cancellationToken);

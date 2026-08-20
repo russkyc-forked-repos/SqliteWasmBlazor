@@ -172,12 +172,14 @@
     {
         await using var context = await DbContextFactory.CreateDbContextAsync();
 
-        var trackedItem = await context.TodoItems.FindAsync(todo.Id);
-        if (trackedItem is not null)
-        {
-            trackedItem.IsDeleted = true;
-            trackedItem.DeletedAt = DateTime.UtcNow;
-        }
+        // Silently skipping a row the key can't reach would leave it on screen
+        // with nothing to explain why.
+        var trackedItem = await context.TodoItems.FindAsync(todo.Id)
+            ?? throw new InvalidOperationException(
+                $"No TodoItem with Id {todo.Id} — the row is not addressable by its key.");
+
+        trackedItem.IsDeleted = true;
+        trackedItem.DeletedAt = DateTime.UtcNow;
 
         try
         {

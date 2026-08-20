@@ -36,6 +36,8 @@ public static class TestRegistry
         "BulkInsert_100Entities",
         "FTS5_Search",
         "FTS5_SoftDeleteThenClear",
+        "SoftDelete_ViaFind",
+        "BulkImport_RowsAreEfAddressable",
 
         // Transactions
         "Transaction_Commit",

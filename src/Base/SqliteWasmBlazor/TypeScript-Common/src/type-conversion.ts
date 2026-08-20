@@ -18,33 +18,18 @@ export function convertValueForSqlite(value: any, csharpType: string, sqlType: s
     const baseType = csharpType.endsWith('?') ? csharpType.slice(0, -1) : csharpType;
 
     switch (baseType) {
-        case 'Guid': {
-            // MessagePack-CSharp serializes Guid as 36-char string "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            if (sqlType === 'BLOB') {
-                // Convert to 16-byte Uint8Array matching .NET Guid.ToByteArray() layout:
-                // Groups 1-3 are little-endian, groups 4-5 are big-endian
-                const hex = (value as string).replace(/-/g, '');
-                const bytes = new Uint8Array(16);
-                // Group 1 (4 bytes, LE): hex[0..7] reversed
-                bytes[0] = parseInt(hex.substring(6, 8), 16);
-                bytes[1] = parseInt(hex.substring(4, 6), 16);
-                bytes[2] = parseInt(hex.substring(2, 4), 16);
-                bytes[3] = parseInt(hex.substring(0, 2), 16);
-                // Group 2 (2 bytes, LE): hex[8..11] reversed
-                bytes[4] = parseInt(hex.substring(10, 12), 16);
-                bytes[5] = parseInt(hex.substring(8, 10), 16);
-                // Group 3 (2 bytes, LE): hex[12..15] reversed
-                bytes[6] = parseInt(hex.substring(14, 16), 16);
-                bytes[7] = parseInt(hex.substring(12, 14), 16);
-                // Groups 4-5 (8 bytes, BE): hex[16..31] as-is
-                for (let i = 8; i < 16; i++) {
-                    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-                }
-                return bytes as any;
-            }
-            // TEXT column: pass string as-is
-            return String(value);
-        }
+        case 'Guid':
+            // MessagePack-CSharp serializes Guid as a lowercase 36-char string
+            // "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx". The ADO layer binds Guid
+            // parameters — and EF Core generates Guid literals — as uppercase
+            // TEXT, and SQLite's default BINARY collation makes `=` case- and
+            // storage-class-sensitive. Imported rows must therefore land in that
+            // exact form or nothing can address them by key: they list and
+            // display fine (no Id predicate involved) while FindAsync returns
+            // null and `UPDATE ... WHERE Id = @p` silently affects zero rows.
+            // The declared column type is irrelevant here — SQLite's BLOB
+            // affinity is "none", so a TEXT value stays TEXT in a BLOB column.
+            return String(value).toUpperCase();
 
         case 'DateTime':
             // MessagePack-CSharp: Timestamp ext (-1) → msgpackr: Date object

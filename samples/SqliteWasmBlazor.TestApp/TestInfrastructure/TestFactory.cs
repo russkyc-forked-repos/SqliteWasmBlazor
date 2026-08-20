@@ -268,6 +268,8 @@ internal class TestFactory
         Add("CRUD", new BulkInsert100EntitiesTest(factory));
         Add("CRUD", new FTS5SearchTest(factory));
         Add("CRUD", new FTS5SoftDeleteThenClearTest(factory));
+        Add("CRUD", new SoftDeleteViaFindTest(factory));
+        Add("CRUD", new BulkImportedRowsAreEfAddressableTest(factory, databaseService));
 
         // Transaction Tests
         Add("Transactions", new TransactionCommitTest(factory));
