@@ -29,6 +29,16 @@ The demo ships a `manifest.webmanifest` that was never linked from `index.html` 
 
 The stock Blazor template icon is replaced by a mark drawn for this app — a database cylinder for storage that outlives the session, a keyhole for the fact that what it stores is encrypted at rest, on the manifest's theme colour so the icon, splash screen and status bar are one colour. Source art is checked in as `icon.svg` (full detail) and `favicon.svg` (redrawn for 16-32px, where a disc seam is one shape too many); the PNGs are rendered from them with `rsvg-convert`. Everything sits inside the 80% safe circle, so cropping to a circle or a squircle loses nothing. `.svg` was added to the service worker's offline asset filter.
 
+### Bulk Import: Guid Keys Now Land Where EF Core Can Find Them
+
+Rows written through `ImportRowsAsync` listed and displayed correctly but could not be reached by their primary key: `FindAsync` returned null and `UPDATE ... WHERE Id = @p` affected zero rows, so a delete or an edit would report success and change nothing.
+
+The ADO layer binds every `Guid` as uppercase TEXT, and EF Core generates its literals the same way, but the import path wrote the lowercase string MessagePack-CSharp produces — or a 16-byte BLOB when a caller passed a `sqlTypeOverrides` entry for the key column. SQLite's default BINARY collation makes `=` sensitive to both case and storage class, so those rows were unreachable while still reading back fine, because list queries carry no `Id` predicate and the reader decodes every form.
+
+- The worker now writes uppercase TEXT for every `Guid`, whatever the declared column type. A `[Column(TypeName = "BLOB")]` annotation is not a reason to override: SQLite's BLOB affinity is "none", so a TEXT value stays TEXT in a BLOB column.
+- **Action required:** databases populated by an earlier bulk import still hold the old representation. Those rows have to be re-imported; queries that don't filter on the key keep working, key-addressed ones don't.
+- New TestApp coverage reaches an imported row by key (`BulkImport_RowsAreEfAddressable`) — the gap that let this ship.
+
 ### Formal Verification (Tamarin)
 
 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover.
