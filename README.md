@@ -54,18 +54,18 @@ registered the entire encryption layer engages:
   [BlazorPRF](https://github.com/b-straub/BlazorPRF). No password, no
   client-side key file; the authenticator does the unlock.
 - **Verified unlock, not silent** — a slot-0 AEAD probe gates unlock, and a
-  manifest MAC binds the on-disk state to the credential. Wrong key, wrong
+  manifest MAC binds the stored pool state to the credential. Wrong key, wrong
   credential, or tampered manifest fail loudly before any decryption hits
   the page cache.
-- **Whole-disk envelope export (`.eds`)** — encrypted dumps wrap the slot
+- **Whole-pool envelope export (`.eds`)** — encrypted dumps wrap the slot
   key under a recipient X25519 pubkey (ECIES). Carries a `credentialId`
   hint so the receiver's UI can pick the right passkey automatically.
 - **Guided import primitive** — a single click on a `.eds` runs the whole
   ritual: preflight, wipe, EnterEncrypted, rekey-import, manifest rebind.
-  Works from a Plain or Locked disk state; mistargeted envelopes are
-  rejected before the current disk is touched.
-- **Plain-ZIP import on encrypted disks** — state-aware: a Locked disk
-  breaks to plain (recovery path), an Unlocked disk re-encrypts on write
+  Works from a Plain or Locked pool state; mistargeted envelopes are
+  rejected before the current pool is touched.
+- **Plain-ZIP import on an encrypted pool** — state-aware: a Locked pool
+  breaks to plain (recovery path), an Unlocked pool re-encrypts on write
   (passkey binding survives). Preflight validates SQLite shape + page
   geometry before any wipe.
 - **Drop-in host UI** — `SqliteWasmBlazor.Crypto.UI` ships the
