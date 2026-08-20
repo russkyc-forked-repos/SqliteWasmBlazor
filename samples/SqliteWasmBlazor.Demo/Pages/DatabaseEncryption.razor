@@ -262,7 +262,7 @@
                 @* Unified import picker. .db → single-DB streaming write;
                    .dbs → multi-DB envelope replace-pool; .eds → guided
                    passkey-rebinding disk import (Plain only — Unlocked
-                   rejects .eds via CanImportDisk to avoid orphaning open
+                   rejects .eds via CanImportPool to avoid orphaning open
                    EF contexts mid-session). Extension dispatch lives in
                    HandleImportPickedAsync. *@
                 <MudText Typo="Typo.body2" Class="mb-2">
