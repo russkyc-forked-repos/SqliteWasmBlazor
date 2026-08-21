@@ -192,7 +192,11 @@ public partial class EncryptionModel : ObservableModel
         // pool has lost still gets a row (so a backup can be imported into
         // it), and a pool entry the app doesn't open still gets one (so it
         // can be exported or removed).
-        var present = await DatabaseService.ListDatabasesAsync(cancellationToken);
+        // Parks belong to an import that is either in flight or died with
+        // its tab; they are pool bookkeeping, not databases anyone opens.
+        var present = (await DatabaseService.ListDatabasesAsync(cancellationToken))
+            .Where(name => !PoolNaming.IsImportPark(name))
+            .ToArray();
         var presentSet = new HashSet<string>(present, StringComparer.Ordinal);
         var owned = HostDatabaseService.OwnedDatabases;
         var ownedSet = new HashSet<string>(owned, StringComparer.Ordinal);
@@ -536,7 +540,7 @@ public partial class EncryptionModel : ObservableModel
             target,
             stream,
             file.Size,
-            (staged, ct) => ValidateStagedImportAsync(target, file.Name, staged, ct),
+            (imported, ct) => ValidateImportedAsync(imported, file.Name, ct),
             cancellationToken);
         // The file may carry an older schema than the app's model, and the
         // worker closed the database to swap its slot in — re-migrate before
@@ -549,24 +553,30 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Host schema gate for a staged import, with the file and target names
-    /// folded into the message. The host's check knows which tables are
-    /// missing but not which file the user picked or which row they picked
-    /// it on — and that is the part that tells them what to do differently.
-    /// Only a validation failure is wrapped; a truncated stream or a worker
-    /// error keeps its own diagnostic.
+    /// Host schema gate for a staged import, restated in the user's
+    /// language. The host's check knows which tables are missing but not
+    /// which file the user picked, and its own message is English written
+    /// for a log — so only the table names travel, and the sentence around
+    /// them comes from the resx. Anything that isn't a schema mismatch
+    /// keeps its own diagnostic.
     /// </summary>
-    private async ValueTask ValidateStagedImportAsync(
-        string target, string fileName, string staged, CancellationToken cancellationToken)
+    private async ValueTask ValidateImportedAsync(
+        string databaseName, string source, CancellationToken cancellationToken)
     {
         try
         {
-            await HostDatabaseService.ValidateSchemaAsync(target, staged, cancellationToken);
+            await HostDatabaseService.ValidateSchemaAsync(
+                databaseName, databaseName, cancellationToken);
         }
-        catch (InvalidOperationException ex)
+        catch (SchemaMismatchException ex)
         {
             throw new InvalidOperationException(
-                Localizer["Error_SchemaMismatch", fileName, target, ex.Message], ex);
+                Localizer[
+                    "Error_SchemaMismatch",
+                    source,
+                    databaseName,
+                    string.Join(", ", ex.MissingTables)],
+                ex);
         }
     }
 
@@ -591,7 +601,11 @@ public partial class EncryptionModel : ObservableModel
         }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
-        await Session.ImportDatabasesFromStreamAsync(stream, file.Size, cancellationToken);
+        await Session.ImportDatabasesFromStreamAsync(
+            stream,
+            file.Size,
+            (imported, ct) => ValidateImportedAsync(imported, file.Name, ct),
+            cancellationToken);
         // The bundle decides what the pool holds — including whether an
         // owned database is in it at all. Re-migrate so a database the
         // bundle omitted is back before the next query hits it.

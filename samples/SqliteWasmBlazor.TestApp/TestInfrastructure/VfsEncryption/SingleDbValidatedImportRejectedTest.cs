@@ -3,27 +3,27 @@ using Microsoft.EntityFrameworkCore;
 namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 
 /// <summary>
-/// Staged single-DB import whose validator rejects the file — the shape the
-/// encryption panel produces when a database file is picked on the wrong
-/// row (a TodoDb backup offered to NotesDb). File names say nothing about
-/// what is inside, so the tables have to, and the check has to happen
-/// before anything is replaced.
+/// Validated single-DB import whose validator rejects the file — the shape
+/// the encryption panel produces when a database file is picked on the
+/// wrong row (a TodoDb backup offered to NotesDb). File names say nothing
+/// about what is inside, so the tables have to, and the refusal has to
+/// leave the database it was aimed at untouched.
 ///
 /// <para>
 /// The validator here is the real one the Demo host uses:
 /// <c>DbContext.ValidateImportedSchemaAsync</c> against a context bound to
-/// the staged pool name. The imported file is a database whose schema is
+/// the imported database. The file is a database whose schema is
 /// deliberately foreign — one table, not the model's — so the check fails
 /// for the same reason a mismatched pick does.
 /// </para>
 ///
 /// <para>
-/// Asserted: the rejection propagates, the target still holds its original
-/// rows, and the staging entry is gone from the pool rather than left
-/// behind as a stray.
+/// Asserted: the rejection propagates, the database still holds its
+/// original rows (restored from the park, byte-for-byte), and no park is
+/// left behind as a stray.
 /// </para>
 /// </summary>
-internal sealed class SingleDbStagedImportRejectedTest
+internal sealed class SingleDbValidatedImportRejectedTest
 {
     private const int RowCount = 5;
     private const string ForeignDbName = "ForeignSchema.db";
@@ -32,9 +32,9 @@ internal sealed class SingleDbStagedImportRejectedTest
     private readonly ISqliteWasmDatabaseService _databaseService;
     private readonly IEncryptedSqliteWasmDatabaseService _session;
 
-    public string Name => "SingleDb_StagedImport_RejectedBySchemaCheck";
+    public string Name => "SingleDb_ValidatedImport_RejectedBySchemaCheck";
 
-    public SingleDbStagedImportRejectedTest(
+    public SingleDbValidatedImportRejectedTest(
         IDbContextFactory<PrfVfsTestContext> factory,
         ISqliteWasmDatabaseService databaseService,
         IEncryptedSqliteWasmDatabaseService session)
@@ -89,7 +89,7 @@ internal sealed class SingleDbStagedImportRejectedTest
         }
         await _databaseService.DeleteDatabaseAsync(ForeignDbName);
 
-        // ---- Phase 3: import it into the target, staged + validated ------
+        // ---- Phase 3: import it into the target, validated ---------------
         var rejected = false;
         try
         {
@@ -98,7 +98,7 @@ internal sealed class SingleDbStagedImportRejectedTest
                 dbName,
                 stream,
                 foreignBytes.Length,
-                ValidateStagedAsync);
+                ValidateImportedAsync);
         }
         catch (InvalidOperationException)
         {
@@ -128,27 +128,28 @@ internal sealed class SingleDbStagedImportRejectedTest
             }
         }
 
-        // ---- Phase 5: no staging entry left in the pool ------------------
+        // ---- Phase 5: no park left in the pool ---------------------------
         var pool = await _databaseService.ListDatabasesAsync();
-        var strays = pool.Where(n => n.Contains(".staged-import", StringComparison.Ordinal)).ToArray();
+        var strays = pool.Where(PoolNaming.IsImportPark).ToArray();
         if (strays.Length > 0)
         {
-            return $"FAIL[Verify]: staging entries left in the pool: {string.Join(", ", strays)}";
+            return $"FAIL[Verify]: parked entries left in the pool: {string.Join(", ", strays)}";
         }
 
         await CleanupAsync();
         return "OK";
     }
 
-    // The Demo host's check, inlined: open the staged pool entry with the
-    // target's model and let ValidateImportedSchemaAsync decide.
-    private async ValueTask ValidateStagedAsync(string staged, CancellationToken cancellationToken)
+    // The Demo host's check, inlined: open the imported database with the
+    // model that is supposed to fit it and let ValidateImportedSchemaAsync
+    // decide.
+    private async ValueTask ValidateImportedAsync(string imported, CancellationToken cancellationToken)
     {
         await using var probe = new PrfVfsTestContext(
             new DbContextOptionsBuilder<PrfVfsTestContext>()
-                .UseSqliteWasm(new SqliteWasmConnection($"Data Source={staged}"))
+                .UseSqliteWasm(new SqliteWasmConnection($"Data Source={imported}"))
                 .Options);
-        await probe.ValidateImportedSchemaAsync(PrfVfsTestContext.DatabaseName);
+        await probe.ValidateImportedSchemaAsync(imported);
     }
 
     private async Task<List<VfsTestItem>> ReadRowsAsync()

@@ -369,7 +369,8 @@ async function handleStreamingRequest(
                 if (!(blob instanceof Blob)) {
                     throw new Error('importDatabasesFromSession requires a Blob');
                 }
-                await importDatabasesFromSessionHandler(streamId, blob);
+                await importDatabasesFromSessionHandler(
+                    streamId, blob, (data as any).keepExisting === true);
                 return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
@@ -649,6 +650,12 @@ async function exportDatabasesToStagingHandler(
  *      per-file stream-write the plain pages through the chunked SAH
  *      path with rekey-on-write if a globalKey is registered.
  *
+ * With <paramref name="keepExisting"/> the commit pass skips the wipe: C#
+ * has already parked the previous content under a suffixed name and will
+ * restore or drop it once it has inspected what arrived. Entries always
+ * land under their real names — page AAD binds ciphertext to the database
+ * path, so a file written under any other name would not decrypt there.
+ *
  * State dispatch matches the single-DB import: Plain writes plain;
  * Encrypted+Unlocked rekey-on-writes; Encrypted+Locked is refused by
  * the C# caller before opening the BlobSession.
@@ -656,6 +663,7 @@ async function exportDatabasesToStagingHandler(
 async function importDatabasesFromSessionHandler(
     streamId: number,
     blob: Blob,
+    keepExisting: boolean,
 ): Promise<void> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
@@ -697,21 +705,25 @@ async function importDatabasesFromSessionHandler(
         }
     }
 
-    // Pass 2 — wipe the pool, then commit. Only reached once the whole
-    // envelope has validated; the wipe stays the documented destructive
-    // contract of a *successful* import, not of a malformed file.
+    // Pass 2 — commit. Only reached once the whole envelope has validated.
     //
-    // Close every cached DB before unlinking: an open OFile captures its
-    // SAH at xOpen time, so a handle that survives the unlink keeps
+    // Close every cached DB first: an open OFile captures its SAH at xOpen
+    // time, so a handle that survives an unlink or a slot swap keeps
     // reading and writing a slot the pool has already handed back to the
     // free list — and the very next writeFileSlice can hand that slot to
     // another file.
     for (const dbName of [...openDatabases.keys()]) {
         await closeDatabase(dbName);
     }
-    const existing = poolUtil.listDatabases();
-    for (const name of existing) {
-        try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
+    // A validated run leaves the pool alone — C# parked the previous
+    // content and decides its fate once it has seen what arrived. An
+    // unvalidated one keeps the replace-the-pool contract, whose
+    // user-facing confirmation the caller owns.
+    if (!keepExisting) {
+        const existing = poolUtil.listDatabases();
+        for (const name of existing) {
+            try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
+        }
     }
 
     const reader = new BufferedStreamReader(blob.stream().getReader());
@@ -962,12 +974,6 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
 
         case 'rename':
             return await renameDatabase(database!, (data as any).newName);
-
-        case 'promoteDatabase':
-            // Staged import commit: replace `newName` with `database` in one
-            // message, so C# never observes a pool with the target gone and
-            // the staging entry still under its own name.
-            return await promoteDatabase(database!, (data as any).newName);
 
           case 'importDb':
               if (!binaryPayload) {
@@ -1608,48 +1614,6 @@ async function exportDatabaseVerbatim(dbName: string) {
     const raw: Uint8Array = poolUtil.exportFile(dbPath);
     logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw.length}B`);
     return { rawBinary: true, data: raw };
-}
-
-/**
- * Promote `srcName` over `dstName` — the commit half of a staged import.
- * Both are closed first: atomicReplaceFile hands dst's SAH back to the
- * free list, and an OFile captures its SAH at xOpen, so a surviving handle
- * would keep serving the replaced file's pages. SQLite deletes its own
- * -wal/-shm on a clean close; anything left behind is unlinked here, since
- * a stale WAL beside a freshly promoted main file is a corrupt database.
- */
-async function promoteDatabase(srcName: string, dstName: string) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    const srcPath = `/databases/${srcName}`;
-    const dstPath = `/databases/${dstName}`;
-    await closeDatabase(srcName);
-    await closeDatabase(dstName);
-
-    const files: string[] = poolUtil.getFileNames();
-    for (const base of [srcPath, dstPath]) {
-        for (const suffix of ['-wal', '-shm', '-journal']) {
-            if (files.includes(`${base}${suffix}`)) {
-                try { poolUtil.unlink(`${base}${suffix}`); } catch { /* best-effort */ }
-            }
-        }
-    }
-
-    poolUtil.atomicReplaceFile(srcPath, dstPath);
-
-    // The promoted file carries its own table definitions; anything cached
-    // under either name describes a database that no longer exists there.
-    // Schema cache keys are `${dbName}:${tableName}`.
-    pragmasSet.delete(srcName);
-    pragmasSet.delete(dstName);
-    for (const key of [...schemaCache.keys()]) {
-        if (key.startsWith(`${srcName}:`) || key.startsWith(`${dstName}:`)) {
-            schemaCache.delete(key);
-        }
-    }
-    logger.info(MODULE_NAME, `✓ Promoted ${srcName} → ${dstName}`);
-    return { success: true };
 }
 
 async function renameDatabase(oldName: string, newName: string) {

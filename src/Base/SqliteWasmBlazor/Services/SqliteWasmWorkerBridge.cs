@@ -1129,14 +1129,22 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// <summary>
     /// Streaming multi-DB plain import — consumes a <c>.dbs</c> envelope
     /// that the C# side already streamed into the BlobSession via
-    /// <see cref="BlobSessionAppend"/>. Worker wipes the pool first, then
-    /// parses the MessagePack array and writes each entry through the
-    /// chunked SAH path (Plain: verbatim; Encrypted+Unlocked: rekey-on-
-    /// write under globalKey). Caller refuses Encrypted+Locked.
+    /// <see cref="BlobSessionAppend"/>. Worker parses the MessagePack array
+    /// and writes each entry through the chunked SAH path (Plain: verbatim;
+    /// Encrypted+Unlocked: rekey-on-write under globalKey). Caller refuses
+    /// Encrypted+Locked.
     /// </summary>
+    /// <param name="sessionId">BlobSession holding the envelope's parts.</param>
+    /// <param name="keepExisting">
+    /// <c>false</c> wipes the pool before writing — the replace-the-pool
+    /// contract. <c>true</c> leaves it alone because the caller has parked
+    /// the previous content itself and will restore or drop it once the
+    /// import has been inspected.
+    /// </param>
     [JSImport("importDatabasesFromSession", "sqliteWasmWorker")]
     internal static partial Task<int> ImportDatabasesFromSessionAsync(
-        int sessionId);
+        int sessionId,
+        bool keepExisting);
 }
 
 /// <summary>

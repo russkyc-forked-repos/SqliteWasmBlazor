@@ -573,11 +573,14 @@ export function exportDatabasesToDownload(
 /**
  * JSImport entry — multi-DB plain import. Composes the BlobSession parts
  * into a Blob, posts to the worker's <c>importDatabasesFromSession</c>
- * handler, which wipes the pool then writes each envelope file via the
- * chunked SAH path (Plain: verbatim; Encrypted+Unlocked: rekey-on-write).
+ * handler, which writes each envelope file via the chunked SAH path
+ * (Plain: verbatim; Encrypted+Unlocked: rekey-on-write). It wipes the pool
+ * first unless <c>keepExisting</c> says C# has parked the previous content
+ * itself and will restore or drop it after inspecting the import.
  */
 export function importDatabasesFromSession(
     sessionId: number,
+    keepExisting: boolean,
 ): Promise<number> {
     if (!worker) {
         return Promise.reject(new Error('Worker not initialized'));
@@ -598,7 +601,7 @@ export function importDatabasesFromSession(
         });
         worker!.postMessage({
             streamId,
-            data: { type: 'importDatabasesFromSession' },
+            data: { type: 'importDatabasesFromSession', keepExisting },
             blob,
         });
     });

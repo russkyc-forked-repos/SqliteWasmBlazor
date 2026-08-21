@@ -296,10 +296,23 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// streamed into a JS-side BlobSession chunk by chunk; the worker
     /// reads via <c>blob.stream()</c> + the streaming MessagePack decoder.
     /// </para>
+    /// <para>
+    /// <b>Validated import.</b> Pass <paramref name="validateImported"/> to
+    /// see what arrived before it becomes the pool's content: the previous
+    /// databases are parked under
+    /// <see cref="PoolNaming.ImportParkSuffix"/>, the envelope's entries
+    /// land under their real names, and the delegate is called once per
+    /// imported database — long enough to open each with an ordinary
+    /// connection string and check whatever the caller considers identity.
+    /// A delegate that throws propagates and the pool goes back exactly as
+    /// it was, parked bytes and all. Without it the envelope replaces the
+    /// pool unconditionally.
+    /// </para>
     /// </summary>
     Task ImportDatabasesFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -319,24 +332,26 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// replaced.
     /// </para>
     /// <para>
-    /// <b>Staged import.</b> Pass <paramref name="validateStaged"/> to see
-    /// the imported database before it replaces anything: the bytes land
-    /// under a staging pool name, the delegate is called with that name —
-    /// long enough to open it with an ordinary connection string and check
-    /// whatever the caller considers identity (its tables, its migration
-    /// history) — and only a delegate that returns without throwing lets the
-    /// promotion happen. A delegate that throws propagates, the staging
-    /// entry is dropped, and <paramref name="databaseName"/> is exactly as
-    /// it was. This is what keeps a <c>.db</c> file from landing in a
-    /// database it does not belong to; without it the file is promoted
-    /// unconditionally.
+    /// <b>Validated import.</b> Pass <paramref name="validateImported"/> to
+    /// see the imported database before it becomes the database: the file
+    /// lands under <paramref name="databaseName"/> (page AAD binds
+    /// ciphertext to the database path, so it cannot be written anywhere
+    /// else and moved), what was there is parked under
+    /// <see cref="PoolNaming.ImportParkSuffix"/>, and the delegate is called
+    /// with the database name — long enough to open it with an ordinary
+    /// connection string and check whatever the caller considers identity
+    /// (its tables, its migration history). A delegate that throws
+    /// propagates, the imported file is dropped and the parked content goes
+    /// back untouched. This is what keeps a <c>.db</c> file from landing in
+    /// a database it does not belong to; without it the file replaces the
+    /// database unconditionally.
     /// </para>
     /// </summary>
     Task ImportDatabaseFromStreamAsync(
         string databaseName,
         Stream stream,
         long size,
-        Func<string, CancellationToken, ValueTask>? validateStaged = null,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

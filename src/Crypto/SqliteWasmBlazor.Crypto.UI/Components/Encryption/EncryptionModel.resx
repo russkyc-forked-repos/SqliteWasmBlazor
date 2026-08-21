@@ -97,5 +97,5 @@
   <data name="Error_Rejected_GuidedImportNeedsLock" xml:space="preserve"><value>The current session has to end before a backup with a different passkey can be imported. Lock, then import again.</value></data>
   <data name="Btn_ExportBundle" xml:space="preserve"><value>Export {0} databases as one file (.dbs)</value></data>
   <data name="Btn_ExportDatabase" xml:space="preserve"><value>Save {0} as a .db file</value></data>
-  <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} does not fit {1}, so nothing was changed: {2}</value></data>
+  <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} does not fit {1}. Missing tables: {2}. Nothing was changed.</value></data>
 </root>

@@ -113,7 +113,9 @@ public static class TestRegistry
         "Synthetic_PrfSeed_DecryptInPlace_PreservesRowsAsPlain",
         "SingleDb_StreamingImport_PlainAndEncryptedRoundTrip",
         "SingleDb_StreamingImport_OverOpenDatabase",
-        "SingleDb_StagedImport_RejectedBySchemaCheck",
+        "SingleDb_ValidatedImport_RejectedBySchemaCheck",
+        "SingleDb_ValidatedImport_AcceptedOnEncryptedPool",
+        "Dbs_ValidatedImport_RejectedBySchemaCheck",
         "Plain_DbsEnvelope_StreamingImport_RoundTrip",
         "PoolImport_GuidedCrossKey_StreamingRoundTrip",
     ];

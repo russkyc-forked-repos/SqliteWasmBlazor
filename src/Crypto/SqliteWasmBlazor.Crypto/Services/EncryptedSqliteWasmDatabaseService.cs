@@ -1026,10 +1026,10 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// <summary>
     /// Streaming multi-DB plain import — reads a <c>.dbs</c> envelope from
     /// <paramref name="envelopeStream"/> and writes each entry through the
-    /// chunked SAH path. Wipes the existing pool first (matching the old
-    /// plain-ZIP-on-Plain semantics). State-aware: Plain writes plain;
-    /// Encrypted+Unlocked rekey-on-writes per entry under the registered
-    /// globalKey; Encrypted+Locked throws.
+    /// chunked SAH path. The pool ends up holding exactly what the envelope
+    /// carries. State-aware: Plain writes plain; Encrypted+Unlocked
+    /// rekey-on-writes per entry under the registered globalKey;
+    /// Encrypted+Locked throws.
     ///
     /// <para>
     /// C# managed-heap peak: one ArrayPool chunk (~1 MB). The whole
@@ -1037,10 +1037,17 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// the worker reads via <c>blob.stream()</c> + the
     /// <c>BufferedStreamReader</c> MessagePack decoder.
     /// </para>
+    /// <para>
+    /// <paramref name="validateImported"/> makes it a validated import: the
+    /// previous content is parked, the envelope's entries land under their
+    /// real names, and the delegate is called once per imported database.
+    /// A delegate that throws puts the pool back exactly as it was.
+    /// </para>
     /// </summary>
     public async Task ImportDatabasesFromStreamAsync(
         Stream envelopeStream,
         long envelopeSize,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken cancellationToken = default)
     {
         if (envelopeSize <= 0)
@@ -1059,12 +1066,73 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "to a different credential.");
         }
 
-        // The worker's commit pass wipes the pool; an OFile that outlives
-        // its SAH keeps writing into a freed slot. The worker closes its
-        // own cache independently — this pre-pass keeps the C# mirror in
-        // sync, same contract as the Set/ClearEncryptionKey close pass.
+        // The commit pass replaces pool files; an OFile that outlives its
+        // SAH keeps writing into a freed slot. The worker closes its own
+        // cache independently — this pre-pass keeps the C# mirror in sync,
+        // same contract as the Set/ClearEncryptionKey close pass.
         await _bridge.CloseAllOpenDatabasesAsync(cancellationToken);
 
+        if (validateImported is null)
+        {
+            await StreamIntoPoolAsync(
+                envelopeStream, envelopeSize, keepExisting: false, cancellationToken);
+            ReportDbState(DbInitState.READY);
+            return;
+        }
+
+        await SweepImportParksAsync(cancellationToken);
+        var replaced = await _bridge.ListDatabasesAsync(cancellationToken);
+        foreach (var name in replaced)
+        {
+            await _bridge.RenameDatabaseAsync(
+                name, PoolNaming.ImportParkFor(name), cancellationToken);
+        }
+
+        IReadOnlyList<string> imported = [];
+        try
+        {
+            await StreamIntoPoolAsync(
+                envelopeStream, envelopeSize, keepExisting: true, cancellationToken);
+            // Everything unparked is what the envelope brought — the pool
+            // was emptied of its own names by the parking pass above.
+            imported = [.. (await _bridge.ListDatabasesAsync(cancellationToken))
+                .Where(name => !PoolNaming.IsImportPark(name))];
+            foreach (var name in imported)
+            {
+                await validateImported(name, cancellationToken);
+            }
+        }
+        catch
+        {
+            foreach (var name in imported)
+            {
+                await _bridge.DeleteDatabaseAsync(name, cancellationToken);
+            }
+            await RestoreImportParksAsync(replaced, cancellationToken);
+            throw;
+        }
+
+        // Accepted: the parked content is what the import replaces.
+        foreach (var name in replaced)
+        {
+            await _bridge.DeleteDatabaseAsync(
+                PoolNaming.ImportParkFor(name), cancellationToken);
+        }
+        ReportDbState(DbInitState.READY);
+    }
+
+    /// <summary>
+    /// Ship a <c>.dbs</c> envelope into the worker one ArrayPool chunk at a
+    /// time. <paramref name="keepExisting"/> is passed through to the
+    /// worker's commit pass: <c>false</c> wipes the pool first,
+    /// <c>true</c> leaves it to the caller's park/restore bookkeeping.
+    /// </summary>
+    private async Task StreamIntoPoolAsync(
+        Stream envelopeStream,
+        long envelopeSize,
+        bool keepExisting,
+        CancellationToken cancellationToken)
+    {
         var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
         try
@@ -1095,18 +1163,49 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 ArrayPool<byte>.Shared.Return(buf, clearArray: true);
             }
 
-            var result = await SqliteWasmWorkerBridge.ImportDatabasesFromSessionAsync(sessionId);
+            var result = await SqliteWasmWorkerBridge.ImportDatabasesFromSessionAsync(
+                sessionId, keepExisting);
             if (result != (int)PoolImportResult.OK)
             {
                 throw new InvalidOperationException(
                     $"ImportDatabasesFromStreamAsync: worker returned result={result}.");
             }
-
-            ReportDbState(DbInitState.READY);
         }
         finally
         {
             SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Put parked content back under its own name. Called when a validated
+    /// import is refused — the renames are metadata-only, so what comes
+    /// back is byte-identical to what was parked, page AAD included.
+    /// </summary>
+    private async Task RestoreImportParksAsync(
+        IReadOnlyList<string> names, CancellationToken cancellationToken)
+    {
+        foreach (var name in names)
+        {
+            await _bridge.RenameDatabaseAsync(
+                PoolNaming.ImportParkFor(name), name, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Drop parks a previous import left behind. Only a tab that died
+    /// mid-import can leave one; sweeping at the start of the next import
+    /// keeps them from colliding with its own parking pass.
+    /// </summary>
+    private async Task SweepImportParksAsync(CancellationToken cancellationToken)
+    {
+        var pool = await _bridge.ListDatabasesAsync(cancellationToken);
+        foreach (var name in pool)
+        {
+            if (PoolNaming.IsImportPark(name))
+            {
+                await _bridge.DeleteDatabaseAsync(name, cancellationToken);
+            }
         }
     }
 
@@ -1123,17 +1222,18 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// BlobSession; the worker reads them via <c>blob.stream()</c> and
     /// writes a temp SAH slot via writeFileSlice + atomicReplaceFile.
     ///
-    /// <paramref name="validateStaged"/> turns this into a staged import:
-    /// the bytes land under a staging name, the delegate gets to open that
-    /// database and decide, and only then is it promoted over
-    /// <paramref name="databaseName"/>. A delegate that throws leaves the
-    /// target exactly as it was.
+    /// <paramref name="validateImported"/> turns this into a validated
+    /// import: the previous content is parked under
+    /// <see cref="PoolNaming.ImportParkSuffix"/>, the file lands under
+    /// <paramref name="databaseName"/>, and the delegate gets to open it and
+    /// decide. A delegate that throws puts the parked content back exactly
+    /// as it was — the renames are metadata-only, so nothing is rewritten.
     /// </summary>
     public async Task ImportDatabaseFromStreamAsync(
         string databaseName,
         Stream stream,
         long size,
-        Func<string, CancellationToken, ValueTask>? validateStaged = null,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(databaseName))
@@ -1156,48 +1256,51 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "a different credential.");
         }
 
-        if (validateStaged is null)
+        // atomicReplaceFile frees the target's current SAH at commit time;
+        // an open handle would keep serving its pages. The worker closes the
+        // DB itself — this keeps the C# open-set mirror in step.
+        await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
+
+        if (validateImported is null)
         {
-            // atomicReplaceFile frees the target's current SAH at commit
-            // time; an open handle would keep serving its pages. The worker
-            // closes the DB itself — this keeps the C# open-set mirror in
-            // step.
-            await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
             await StreamIntoDatabaseAsync(databaseName, stream, size, cancellationToken);
             return;
         }
 
-        // Staged import. The staging name is a normal pool entry, so the
-        // validator can open it with an ordinary connection string — on an
-        // encrypted pool it was written under globalKey like any other
-        // database, so it reads back the same way.
-        var staged = $"{databaseName}{StagedImportSuffix}";
-        await _bridge.DeleteDatabaseAsync(staged, cancellationToken);
+        // Validated import. The file is written under the database's real
+        // name — page AAD binds ciphertext to the database path, so an
+        // import written under any other name would stop decrypting the
+        // moment it was moved there. What was in the way is parked instead,
+        // and the parked bytes go back untouched if the validator refuses.
+        await SweepImportParksAsync(cancellationToken);
+        var parked = PoolNaming.ImportParkFor(databaseName);
+        var replaced = (await _bridge.ListDatabasesAsync(cancellationToken))
+            .Contains(databaseName, StringComparer.Ordinal);
+        if (replaced)
+        {
+            await _bridge.RenameDatabaseAsync(databaseName, parked, cancellationToken);
+        }
+
         try
         {
-            await StreamIntoDatabaseAsync(staged, stream, size, cancellationToken);
-            await validateStaged(staged, cancellationToken);
+            await StreamIntoDatabaseAsync(databaseName, stream, size, cancellationToken);
+            await validateImported(databaseName, cancellationToken);
         }
         catch
         {
-            // Nothing has touched databaseName yet, so dropping the staging
-            // entry restores the pool to its pre-import content.
-            await _bridge.DeleteDatabaseAsync(staged, cancellationToken);
+            await _bridge.DeleteDatabaseAsync(databaseName, cancellationToken);
+            if (replaced)
+            {
+                await _bridge.RenameDatabaseAsync(parked, databaseName, cancellationToken);
+            }
             throw;
         }
 
-        // One worker message so C# never observes the pool between the
-        // target's removal and the staging entry taking its place.
-        await _bridge.CloseDatabaseAsync(staged, cancellationToken);
-        await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
-        await _encryptedBridge.PromoteDatabaseAsync(staged, databaseName, cancellationToken);
+        if (replaced)
+        {
+            await _bridge.DeleteDatabaseAsync(parked, cancellationToken);
+        }
     }
-
-    /// <summary>
-    /// Pool-name suffix for a staged import. Visible in the pool only while
-    /// an import is in flight — promoted on success, deleted on failure.
-    /// </summary>
-    private const string StagedImportSuffix = ".staged-import";
 
     /// <summary>
     /// Ship <paramref name="stream"/> into <paramref name="targetName"/> one

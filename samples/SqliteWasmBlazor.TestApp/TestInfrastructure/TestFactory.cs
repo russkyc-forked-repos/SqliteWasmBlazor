@@ -102,13 +102,29 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbOverOpen.Name, () => singleDbOverOpen.RunAsync()));
 
-                    // Staged import whose validator refuses the file — the
-                    // wrong-row pick. The target has to come out of it with
-                    // its own rows and no staging entry left behind.
-                    var singleDbRejected = new SingleDbStagedImportRejectedTest(
+                    // Validated import whose validator refuses the file —
+                    // the wrong-row pick. The database has to come out of it
+                    // with its own rows and no park left behind.
+                    var singleDbRejected = new SingleDbValidatedImportRejectedTest(
                         prfFactory, databaseService, session);
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbRejected.Name, () => singleDbRejected.RunAsync()));
+
+                    // The accepted half, on an encrypted pool: page AAD binds
+                    // ciphertext to the database path, so the import writes
+                    // under the real name and parks what was there. The
+                    // validator's own read is what proves it.
+                    var singleDbAccepted = new SingleDbValidatedImportAcceptedTest(
+                        prfFactory, databaseService, session);
+                    _entries.Add(new TestEntry(
+                        "VFS Encryption", singleDbAccepted.Name, () => singleDbAccepted.RunAsync()));
+
+                    // Same gate on the bundle, where a wrong file replaces
+                    // every database at once.
+                    var dbsRejected = new DbsValidatedImportRejectedTest(
+                        prfFactory, databaseService, session);
+                    _entries.Add(new TestEntry(
+                        "VFS Encryption", dbsRejected.Name, () => dbsRejected.RunAsync()));
 
                     // Streaming cross-key guided import — the .eds rebind
                     // path. Plants the recipient X25519 keypair under the PRF

@@ -60,11 +60,11 @@ public interface IHostDatabaseService
     ValueTask MigrateAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Decide whether the database at <paramref name="probeDatabaseName"/>
-    /// is a valid stand-in for <paramref name="ownedDatabaseName"/>, and
-    /// throw if it is not. Called on a staged import — the probe database
-    /// holds the picked file's content under a temporary pool name, and the
-    /// import is only promoted if this returns.
+    /// Decide whether what now sits at <paramref name="probeDatabaseName"/>
+    /// is a valid <paramref name="ownedDatabaseName"/>, and throw
+    /// <see cref="SchemaMismatchException"/> if it is not. Called on a
+    /// validated import, while the content it would replace is parked: the
+    /// import survives only if this returns.
     ///
     /// <para>
     /// The host is the only layer that can answer this: it owns the
@@ -76,7 +76,11 @@ public interface IHostDatabaseService
     /// </para>
     /// </summary>
     /// <param name="ownedDatabaseName">The database the import is destined for.</param>
-    /// <param name="probeDatabaseName">Temporary pool name holding the imported content.</param>
+    /// <param name="probeDatabaseName">
+    /// Pool name to open and inspect. The import writes under the database's
+    /// own name, so the two are the same today; the parameter stays separate
+    /// because it is the one a host must connect to, not the one it reports.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     ValueTask ValidateSchemaAsync(
         string ownedDatabaseName,

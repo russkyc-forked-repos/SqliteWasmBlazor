@@ -5,6 +5,43 @@ using Microsoft.EntityFrameworkCore.Metadata;
 namespace SqliteWasmBlazor;
 
 /// <summary>
+/// Raised by <see cref="SchemaValidationExtensions.ValidateImportedSchemaAsync"/>
+/// when an imported database does not carry the tables the model expects —
+/// the signature of a file that belongs to a different database.
+///
+/// <para>
+/// <see cref="MissingTables"/> and <see cref="DatabaseDisplayName"/> are
+/// the message: UI layers build their own localized sentence from them
+/// rather than showing <see cref="Exception.Message"/>, which is English
+/// and written for a developer reading a log.
+/// </para>
+/// </summary>
+public sealed class SchemaMismatchException : InvalidOperationException
+{
+    /// <summary>
+    /// Create a mismatch for <paramref name="databaseDisplayName"/> listing
+    /// the tables the model requires and the file does not have.
+    /// </summary>
+    /// <param name="databaseDisplayName">Database the file was checked against, e.g. "NotesDb.db".</param>
+    /// <param name="missingTables">Required tables absent from the file. Never empty.</param>
+    public SchemaMismatchException(
+        string databaseDisplayName,
+        IReadOnlyList<string> missingTables)
+        : base($"Incompatible database: missing tables {string.Join(", ", missingTables)}. " +
+               $"The file is not a valid {databaseDisplayName} database.")
+    {
+        DatabaseDisplayName = databaseDisplayName;
+        MissingTables = missingTables;
+    }
+
+    /// <summary>Database the file was checked against, e.g. <c>"NotesDb.db"</c>.</summary>
+    public string DatabaseDisplayName { get; }
+
+    /// <summary>Required tables the file does not contain.</summary>
+    public IReadOnlyList<string> MissingTables { get; }
+}
+
+/// <summary>
 /// Generic schema validation for any DbContext after raw database import.
 /// Derives expected table names from the EF model metadata and checks sqlite_master.
 /// </summary>
@@ -18,7 +55,10 @@ public static class SchemaValidationExtensions
     /// </summary>
     /// <param name="context">The database context connected to the imported database.</param>
     /// <param name="databaseDisplayName">Display name for error messages (e.g., "TodoDb.db").</param>
-    /// <exception cref="InvalidOperationException">Thrown when required tables are missing.</exception>
+    /// <exception cref="SchemaMismatchException">
+    /// Thrown when required tables are missing. Carries the table names so a
+    /// caller can phrase its own message in its own language.
+    /// </exception>
     public static async Task ValidateImportedSchemaAsync(this DbContext context, string databaseDisplayName)
     {
         var designTimeModel = context.GetService<IDesignTimeModel>().Model;
@@ -47,9 +87,7 @@ public static class SchemaValidationExtensions
         var missingTables = requiredTables.Where(t => !tables.Contains(t)).ToArray();
         if (missingTables.Length > 0)
         {
-            throw new InvalidOperationException(
-                $"Incompatible database: missing tables {string.Join(", ", missingTables)}. " +
-                $"The file is not a valid {databaseDisplayName} database.");
+            throw new SchemaMismatchException(databaseDisplayName, missingTables);
         }
     }
 }

@@ -97,5 +97,5 @@
   <data name="Error_Rejected_GuidedImportNeedsLock" xml:space="preserve"><value>Die aktuelle Sitzung muss enden, bevor eine Sicherung mit einem anderen Passkey importiert werden kann. Erst sperren, dann erneut importieren.</value></data>
   <data name="Btn_ExportBundle" xml:space="preserve"><value>{0} Datenbanken als eine Datei exportieren (.dbs)</value></data>
   <data name="Btn_ExportDatabase" xml:space="preserve"><value>{0} als .db-Datei speichern</value></data>
-  <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} passt nicht zu {1}, es wurde nichts geändert: {2}</value></data>
+  <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} passt nicht zu {1}. Fehlende Tabellen: {2}. Es wurde nichts geändert.</value></data>
 </root>

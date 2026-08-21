@@ -288,8 +288,7 @@ What each operation needs from `EncryptedPoolState`:
 |--------------------------|-------|--------------------|------------------|
 | Export `.db` / `.dbs`    | ✅ verbatim | ✅ decrypt on read | ❌ `EXPORT_NEEDS_UNLOCK` |
 | Export `.eds`            | ❌ no key   | ✅                 | ❌ `EXPORT_NEEDS_UNLOCK` |
-| Import `.db` (staged)    | ✅ plain pages | ✅ rekey on write | ❌ `PLAIN_IMPORT_NEEDS_UNLOCK` |
-| Import `.dbs`            | ✅ plain pages | ✅ rekey on write | ❌ `PLAIN_IMPORT_NEEDS_UNLOCK` |
+| Import `.db` / `.dbs`    | ✅ plain pages | ✅ rekey on write | ❌ `PLAIN_IMPORT_NEEDS_UNLOCK` |
 | Import `.eds` (guided)   | ✅ | ⚠️ `GUIDED_IMPORT_NEEDS_LOCK` — lock first | ✅ |
 | Delete one database      | ✅ | ✅ | ❌ |
 | `EnterEncryptedAsync`    | ✅ | ❌ `ENTER_NEEDS_PLAIN` | ❌ `ENTER_NEEDS_PLAIN` |
@@ -312,22 +311,35 @@ itself rather than reporting it.
   before the wipe.
 - `.db` — written to a temp SAH slot and promoted with
   `atomicReplaceFile`, so a failure mid-stream leaves the target as it
-  was. Pass `validateStaged` to `ImportDatabaseFromStreamAsync` and the
-  file goes further: it lands under a staging pool name, the delegate
-  opens *that* database and decides, and only a delegate that returns
-  lets the promotion happen. That is what keeps a TodoDb file from
-  landing in NotesDb — file names say nothing about what is inside, so
-  the tables have to. `DbContext.ValidateImportedSchemaAsync` is the
-  check; `IHostDatabaseService.ValidateSchemaAsync` is where a host wires
-  it in. Without a delegate the file is promoted unconditionally.
+  was.
 
-The staging entry is a normal pool file (`{target}.staged-import`), so
-the validator reaches it with an ordinary connection string; on an
-encrypted pool it was written under `globalKey` like anything else and
-reads back the same way. Promotion is one worker message
-(`promoteDatabase`) — close both, unlink stale WAL/SHM siblings,
-`atomicReplaceFile` — so C# never observes a pool with the target gone
-and the staging entry still under its own name.
+**Validated imports.** Envelope shape says nothing about whether the file
+belongs where it is being put: a TodoDb backup is a perfectly well-formed
+`.db`, and a bundle exported from another app carries perfectly
+well-formed entries. Both single-DB and `.dbs` imports therefore take an
+optional delegate — `validateImported` — that gets to open each imported
+database before it becomes the pool's content:
+
+- what the import would replace is **parked**, renamed to
+  `{name}` + `PoolNaming.ImportParkSuffix`;
+- the incoming file is written under the database's **own name** — page
+  AAD binds ciphertext to the database path (`prf-vfs-v1|{dbPath}|{slot}`),
+  so a file written under a staging name would stop decrypting the moment
+  it was moved;
+- the delegate opens that name with an ordinary connection string and
+  throws if it does not fit;
+- on success the parks are dropped; on refusal the imported files are
+  deleted and the parks renamed back. Renames are metadata-only, so what
+  comes back is byte-identical, page AAD included.
+
+`DbContext.ValidateImportedSchemaAsync` is the check (it throws
+`SchemaMismatchException`, which carries the missing table names so a UI
+can phrase its own message); `IHostDatabaseService.ValidateSchemaAsync` is
+where a host wires it in. Without a delegate an import replaces
+unconditionally, which is what a caller with no model to check against
+still gets. A park outlives an import only if the tab dies mid-flight; the
+next import sweeps whatever it finds, and UI listing pool content hides
+them via `PoolNaming.IsImportPark`.
 
 **Open databases.** `atomicReplaceFile` hands the replaced file's SAH back
 to the pool's free list, and an `OFile` captures its SAH at `xOpen` time.
@@ -335,8 +347,11 @@ Every import therefore closes the databases it is about to replace — in
 the worker (authoritative) and through the bridge (keeps the C# open-set
 mirror in step). Without that close, a surviving handle keeps serving
 pre-import pages and writes into a slot the pool can hand to the next
-file. Regression coverage: `SingleDb_StreamingImport_OverOpenDatabase`
-and `SingleDb_StagedImport_RejectedBySchemaCheck`.
+file. Regression coverage: `SingleDb_StreamingImport_OverOpenDatabase`,
+`SingleDb_ValidatedImport_RejectedBySchemaCheck`,
+`SingleDb_ValidatedImport_AcceptedOnEncryptedPool` (the AAD half — the
+validator's own read fails if an import is ever written under any name but
+the database's) and `Dbs_ValidatedImport_RejectedBySchemaCheck`.
 
 **After the import.** The bytes that landed decide what the pool holds;
 the schema the app expects is whatever its model says today. Hosts

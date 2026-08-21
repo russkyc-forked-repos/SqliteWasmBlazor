@@ -223,7 +223,12 @@
                                                     Command="@Model.DeleteDatabase"
                                                     Parameter="@row.Name"
                                                     ConfirmExecutionAsync="@(() => ConfirmClearDatabaseAsync(row))"
-                                                    Icon="@Icons.Material.Filled.Delete"
+                                                    @* Owned rows are emptied, not removed — the app
+                                                       opens them by connection string, so they come
+                                                       back empty. A broom says that; a trash can
+                                                       says the row disappears, which only happens
+                                                       for an entry nothing reads. *@
+                                                    Icon="@(row.Owned ? Icons.Material.Filled.CleaningServices : Icons.Material.Filled.Delete)"
                                                     Color="Color.Error"
                                                     Disabled="@(!row.Present)"
                                                     title="@(row.Owned ? Model.Localizer["Btn_ClearDatabase"] : Model.Localizer["Btn_DeleteDatabase"])"
