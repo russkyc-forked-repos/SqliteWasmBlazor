@@ -183,7 +183,7 @@ internal sealed class SingleDbStreamingRoundTripTest
     private async Task CleanupAsync(string dbName)
     {
         _ = dbName; // pool-wipe covers it; explicit name kept for callsite clarity
-        try { await _session.ResetDiskAsync(); } catch { }
+        try { await _session.ResetPoolAsync(); } catch { }
         try
         {
             var names = await _databaseService.ListDatabasesAsync();

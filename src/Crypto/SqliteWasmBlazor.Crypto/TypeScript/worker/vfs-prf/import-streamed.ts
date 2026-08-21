@@ -1,6 +1,6 @@
 // Streaming import path for the asymmetric encrypted-disk envelope (v3).
 //
-// Consumes a Blob holding the full MessagePack EncryptedDiskEnvelope via
+// Consumes a Blob holding the full MessagePack EncryptedPoolEnvelope via
 // blob.stream() — never materialises the whole envelope as a single buffer
 // in the worker. Two passes (run separately from C#):
 //
@@ -67,16 +67,16 @@ export function assertImportFileCount(count: number, context: string): void {
 }
 
 /**
- * Mirrors the C# `DiskImportResult` enum so callers can branch on the
+ * Mirrors the C# `PoolImportResult` enum so callers can branch on the
  * Promise resolution without crossing string boundaries.
  */
-export const DiskImportResult = Object.freeze({
+export const PoolImportResult = Object.freeze({
     OK: 0,
     WRONG_KEY: 1,
     EXISTING_DB_REFUSED: 2,
 } as const);
 
-export type DiskImportResultCode = typeof DiskImportResult[keyof typeof DiskImportResult];
+export type PoolImportResultCode = typeof PoolImportResult[keyof typeof PoolImportResult];
 
 interface PoolUtilLike {
     listDatabases(): string[];
@@ -205,22 +205,22 @@ async function consumeEnvelopeMetadata(reader: BufferedStreamReader): Promise<vo
     const arrLen = await readArrayHeader(reader);
     if (arrLen !== ENVELOPE_ARRAY_LEN) {
         throw new Error(
-            `importDiskStreamed: expected envelope array(${ENVELOPE_ARRAY_LEN}), got array(${arrLen})`);
+            `importPoolStreamed: expected envelope array(${ENVELOPE_ARRAY_LEN}), got array(${arrLen})`);
     }
     const version = await readUint(reader);
     if (version !== ENVELOPE_VERSION) {
         throw new Error(
-            `importDiskStreamed: unsupported envelope Version=${version} (expected ${ENVELOPE_VERSION})`);
+            `importPoolStreamed: unsupported envelope Version=${version} (expected ${ENVELOPE_VERSION})`);
     }
     const aadVersion = await readStr(reader);
     if (aadVersion !== ENVELOPE_AAD_VERSION) {
         throw new Error(
-            `importDiskStreamed: unsupported AadVersion='${aadVersion}' (expected '${ENVELOPE_AAD_VERSION}')`);
+            `importPoolStreamed: unsupported AadVersion='${aadVersion}' (expected '${ENVELOPE_AAD_VERSION}')`);
     }
     const prfSaltLen = await readBinHeader(reader);
     if (prfSaltLen !== PRF_SALT_LEN) {
         throw new Error(
-            `importDiskStreamed: PrfSalt must be ${PRF_SALT_LEN} bytes, got ${prfSaltLen}`);
+            `importPoolStreamed: PrfSalt must be ${PRF_SALT_LEN} bytes, got ${prfSaltLen}`);
     }
     await reader.skip(prfSaltLen);
     // Discard remaining metadata strings: EphPub, WrapCt, WrapNonce,
@@ -280,26 +280,26 @@ function writeEncryptedSlot(
  * crafted envelope that authenticates slot 0 but corrupts slot k>0
  * must be rejected here, while the existing disk is still intact.
  */
-export async function importDiskStreamPreflight(
+export async function importPoolStreamPreflight(
     blob: Blob,
     kWrap: Uint8Array,
-): Promise<DiskImportResultCode> {
+): Promise<PoolImportResultCode> {
     const reader = new BufferedStreamReader(blob.stream().getReader());
     try {
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
-        assertImportFileCount(fileCount, 'importDiskStreamed[preflight]');
+        assertImportFileCount(fileCount, 'importPoolStreamed[preflight]');
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
             if (tupleLen !== 2) {
                 throw new Error(
-                    `importDiskStreamed[preflight]: EncryptedDiskFile must be array(2), got array(${tupleLen})`);
+                    `importPoolStreamed[preflight]: EncryptedPoolFile must be array(2), got array(${tupleLen})`);
             }
             const name = await readStr(reader);
             const binLen = await readBinHeader(reader);
             if (binLen === 0 || binLen % PHYSICAL_SLOT_SIZE !== 0) {
                 throw new Error(
-                    `importDiskStreamed[preflight]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
+                    `importPoolStreamed[preflight]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
             }
             const dbPath = `/databases/${name}`;
             const totalSlots = binLen / PHYSICAL_SLOT_SIZE;
@@ -315,10 +315,10 @@ export async function importDiskStreamPreflight(
                     // is right and a later failure means the envelope itself
                     // is tampered or corrupt.
                     if (i === 0 && slotIdx === 0) {
-                        return DiskImportResult.WRONG_KEY;
+                        return PoolImportResult.WRONG_KEY;
                     }
                     throw new Error(
-                        `importDiskStreamed[preflight]: file '${name}' slot ${slotIdx} failed AEAD ` +
+                        `importPoolStreamed[preflight]: file '${name}' slot ${slotIdx} failed AEAD ` +
                         `authentication although earlier slots verified — envelope is tampered ` +
                         `or corrupt; refusing import (existing disk untouched).`);
                 } finally {
@@ -326,7 +326,7 @@ export async function importDiskStreamPreflight(
                 }
             }
         }
-        return DiskImportResult.OK;
+        return PoolImportResult.OK;
     } finally {
         reader.releaseLock();
     }
@@ -345,7 +345,7 @@ export async function importDiskStreamPreflight(
  * <paramref name="globalKey"/> as the worker's globalKey before calling
  * this — typically via WipePoolAsync + EnterEncryptedAsync.
  */
-export async function importDiskStreamCommit(
+export async function importPoolStreamCommit(
     blob: Blob,
     kWrap: Uint8Array,
     globalKey: Uint8Array,
@@ -364,18 +364,18 @@ export async function importDiskStreamCommit(
     try {
         await consumeEnvelopeMetadata(reader);
         const fileCount = await readArrayHeader(reader);
-        assertImportFileCount(fileCount, 'importDiskStreamed[commit]');
+        assertImportFileCount(fileCount, 'importPoolStreamed[commit]');
         for (let i = 0; i < fileCount; i++) {
             const tupleLen = await readArrayHeader(reader);
             if (tupleLen !== 2) {
                 throw new Error(
-                    `importDiskStreamed[commit]: EncryptedDiskFile must be array(2), got array(${tupleLen})`);
+                    `importPoolStreamed[commit]: EncryptedPoolFile must be array(2), got array(${tupleLen})`);
             }
             const name = await readStr(reader);
             const binLen = await readBinHeader(reader);
             if (binLen === 0 || binLen % PHYSICAL_SLOT_SIZE !== 0) {
                 throw new Error(
-                    `importDiskStreamed[commit]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
+                    `importPoolStreamed[commit]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
             }
             const dbPath = `/databases/${name}`;
             const tempPath = `${dbPath}.import-tmp`;

@@ -7,7 +7,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 
 /// <summary>
 /// End-to-end streaming cross-key guided import — the <c>.eds</c> rebind
-/// path (<see cref="IEncryptedSqliteWasmDatabaseService.ImportDiskGuidedFromStreamAsync"/>)
+/// path (<see cref="IEncryptedSqliteWasmDatabaseService.ImportPoolGuidedFromStreamAsync"/>)
 /// that powers "share / back-up to a passkey, then import on the recipient
 /// side". Closes the browser-E2E coverage gap left when commit c239c23
 /// deleted the old <c>byte[]</c> <c>DiskImportGuidedCrossKeyTest</c> without
@@ -16,7 +16,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 /// <para>
 /// The production export's download side (<c>&lt;a download&gt;</c>) is
 /// unreachable from in-page test code, so the envelope is produced by the
-/// REAL export assembly via the <c>ExportDiskToPubkeyBytesAsync</c> seam
+/// REAL export assembly via the <c>ExportPoolToPubkeyBytesAsync</c> seam
 /// (same ECIES wrap + worker slot rekey + bridge composition as the
 /// download path, only the final anchor click is swapped for a byte
 /// return). The bytes are then streamed back into the production guided
@@ -97,7 +97,7 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
 
         try
         {
-            // Clean slate. ResetDiskAsync also clears the PRF cache, so this
+            // Clean slate. ResetPoolAsync also clears the PRF cache, so this
             // MUST run before the keypair is planted (and never again until
             // the finally block).
             await CleanupAsync(dbName, jsKeyId);
@@ -131,7 +131,7 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
             byte[] envelope;
             try
             {
-                envelope = await concrete.ExportDiskToPubkeyBytesAsync(
+                envelope = await concrete.ExportPoolToPubkeyBytesAsync(
                     recipientPubBase64, recipientCredentialId);
             }
             catch (Exception ex)
@@ -149,18 +149,18 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
             await _session.LockAsync();
 
             // ---- Guided import: rebind to vfsKeyB / recipientCredentialId --
-            DiskImportResult result;
+            PoolImportResult result;
             try
             {
                 using var stream = new MemoryStream(envelope, writable: false);
-                result = await _session.ImportDiskGuidedFromStreamAsync(
+                result = await _session.ImportPoolGuidedFromStreamAsync(
                     stream, envelope.Length, vfsKeyB, recipientCredentialId);
             }
             catch (Exception ex)
             {
                 return $"FAIL[Import]: {ex.GetType().Name}: {ex.Message}";
             }
-            if (result != DiskImportResult.OK)
+            if (result != PoolImportResult.OK)
             {
                 return $"FAIL[Import]: guided import returned {result}";
             }
@@ -232,7 +232,7 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
 
     private async Task CleanupAsync(string dbName, string jsKeyId)
     {
-        try { await _session.ResetDiskAsync(); } catch { }
+        try { await _session.ResetPoolAsync(); } catch { }
         try { await _databaseService.DeleteDatabaseAsync(dbName); } catch { }
         _cryptoProvider.RemoveCachedKey(jsKeyId);
     }

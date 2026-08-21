@@ -47,5 +47,5 @@
   <data name="Error_Operation" xml:space="preserve"><value>Operation failed: {0}</value></data>
   <data name="Error_Search" xml:space="preserve"><value>Search error: {0}</value></data>
   <data name="Error_Fts5Syntax" xml:space="preserve"><value>FTS5 syntax error: {0}</value></data>
-  <data name="Error_DiskLocked" xml:space="preserve"><value>Database is locked. Please sign in to unlock.</value></data>
+  <data name="Error_PoolLocked" xml:space="preserve"><value>Database is locked. Please sign in to unlock.</value></data>
 </root>

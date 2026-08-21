@@ -7,7 +7,7 @@
 
    Two shapes, chosen by the disk:
 
-   - Encrypted VFS → Sign in, alone. The disk opens with the credential its
+   - Encrypted VFS → Sign in, alone. The pool opens with the credential its
      manifest names and no other, so a newly registered passkey would derive
      a key that cannot unlock it.
    - Plain VFS → Sign in and Register, both on screen at once.
@@ -36,7 +36,7 @@
            session itself is rejected — the user is NOT signed in. *@
         <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4 mud-width-full">
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
-                @Model.Localizer["Alert_WrongPasskeyForDisk"]
+                @Model.Localizer["Alert_WrongPasskeyForPool"]
             </MudAlert>
             <PublicKeyDisplay PublicKey="@Model.WrongPasskeyPublicKey" CredentialId="@Model.WrongPasskeyCredentialId" />
             <MudStack Row="true" Spacing="2" Class="mt-3">
@@ -66,8 +66,8 @@
     else if (Model.DiskEncrypted)
     {
         @* Encrypted VFS — sign-in only, targeted at the bound credential.
-           Recovery for a passkey that is gone lives on the encryption page
-           (reset, or import an .eds envelope), not here. *@
+           Recovery for a passkey that is gone lives elsewhere: the host's
+           full reset, or an .eds envelope import on the encryption page. *@
         <MudButtonAsyncRx Command="@Model.SignIn"
                           Variant="Variant.Filled"
                           Color="Color.Primary"
@@ -76,7 +76,7 @@
             @Model.Localizer["Btn_SignIn"]
         </MudButtonAsyncRx>
         <MudText Typo="Typo.caption" Class="mt-2 mud-text-secondary">
-            @Model.Localizer["Caption_EncryptedDisk"]
+            @Model.Localizer["Caption_EncryptedPool"]
         </MudText>
     }
     else

@@ -67,7 +67,7 @@ public interface ISecureKeyCache : IDisposable
     /// path the cache itself doesn't know about (e.g.
     /// <see cref="IPrfService.ClearKeys"/> bulk-clears the cache, then
     /// notifies subscribers per known key id so AuthenticationModel +
-    /// EncryptedDiskLifecycle subscriptions fire). Idempotent — safe to
+    /// EncryptedPoolLifecycle subscriptions fire). Idempotent — safe to
     /// call when the key was never present.
     /// </summary>
     void NotifyKeyCleared(string keyId);

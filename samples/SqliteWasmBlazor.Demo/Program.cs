@@ -107,9 +107,9 @@ await FileOperationsInterop.InitializeAsync();
 
 var host = builder.Build();
 
-// Eagerly construct EncryptedDiskLifecycle so its AuthenticationStateChanged +
+// Eagerly construct EncryptedPoolLifecycle so its AuthenticationStateChanged +
 // KeyExpired subscriptions are live before the first AuthorizeView renders.
-host.Services.UseEncryptedDiskLifecycle();
+host.Services.UseEncryptedPoolLifecycle();
 
 // Initialize SqliteWasm databases with migration support
 await host.Services.InitializeSqliteWasmDatabaseAsync<TodoDbContext>();

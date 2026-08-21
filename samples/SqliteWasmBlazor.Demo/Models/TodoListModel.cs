@@ -178,13 +178,13 @@ public partial class TodoListModel : ObservableModel
                     await LoadPlainSearchAsync(context, state, cancellationToken),
             };
         }
-        catch (DiskLockedException)
+        catch (PoolLockedException)
         {
             // Race-safe path: user hit Lock while a query was in flight.
             // AuthorizeView re-renders to NotAuthorized on the next state
             // tick; surface a transient localized notice and return empty.
             StatusModel.AddWarning(
-                Localizer["Error_DiskLocked"], nameof(LoadServerDataAsync));
+                Localizer["Error_PoolLocked"], nameof(LoadServerDataAsync));
             TotalCount = 0;
             return new TableData<TodoItem> { Items = new List<TodoItem>(), TotalItems = 0 };
         }
@@ -429,7 +429,7 @@ public partial class TodoListModel : ObservableModel
         // Disk-locked race during user-driven Lock — typed exception from the
         // bridge gate. Localized user-facing copy lives in this consumer's
         // resx; the exception's diagnostic message is for developer logs only.
-        DiskLockedException => Localizer["Error_DiskLocked"],
+        PoolLockedException => Localizer["Error_PoolLocked"],
         _ => Localizer["Error_Operation", ex.Message],
     };
 

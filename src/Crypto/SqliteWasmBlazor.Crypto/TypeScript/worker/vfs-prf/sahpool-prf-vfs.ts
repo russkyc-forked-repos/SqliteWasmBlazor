@@ -58,7 +58,7 @@ export interface PrfSAHPoolOptions {
 
 /**
  * Tri-state result of {@link PrfPoolUtil.verifyEncryptionKey}. The bridge
- * maps wrong-key outcomes to {@code DiskImportResult.WRONG_KEY} for import
+ * maps wrong-key outcomes to {@code PoolImportResult.WRONG_KEY} for import
  * and disk-envelope preflight paths.
  */
 export type VfsKeyVerifyResult = 'noExistingDb' | 'match' | 'wrongKey';

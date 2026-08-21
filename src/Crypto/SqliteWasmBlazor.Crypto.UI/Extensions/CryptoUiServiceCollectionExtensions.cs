@@ -114,17 +114,17 @@ public static class CryptoUiServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Eagerly resolve <see cref="EncryptedDiskLifecycle"/> + <see cref="DbStateModel"/>
+    /// Eagerly resolve <see cref="EncryptedPoolLifecycle"/> + <see cref="DbStateModel"/>
     /// so their auto-detected observers + R3 subscriptions are wired before
     /// the first page render. Call after <c>builder.Build()</c> in
     /// <c>Program.cs</c>; if skipped, the very first auth event or boot
     /// state push might fire before the singletons are constructed and the
     /// observer wiring would miss it.
     /// </summary>
-    public static IServiceProvider UseEncryptedDiskLifecycle(this IServiceProvider services)
+    public static IServiceProvider UseEncryptedPoolLifecycle(this IServiceProvider services)
     {
         _ = services.GetRequiredService<DbStateModel>();
-        _ = services.GetRequiredService<EncryptedDiskLifecycle>();
+        _ = services.GetRequiredService<EncryptedPoolLifecycle>();
         return services;
     }
 

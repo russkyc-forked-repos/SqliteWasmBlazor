@@ -19,7 +19,7 @@ namespace SqliteWasmBlazor.Demo.Services;
 /// of the existing reactive cascade so this service stays focused on
 /// what only the host knows (its DbContexts):
 /// <list type="number">
-///   <item><see cref="IEncryptedSqliteWasmDatabaseService.ResetDiskAsync"/> —
+///   <item><see cref="IEncryptedSqliteWasmDatabaseService.ResetPoolAsync"/> —
 ///         wipes every DB file from OPFS, drops the worker globalKey,
 ///         clears the PRF cache. The cache clear emits
 ///         <c>IPrfService.KeyExpired</c>, which
@@ -68,7 +68,7 @@ public sealed class DemoHostDatabaseService : IHostDatabaseService
         // KeyExpired → AuthenticationModel.OnSessionExpiredAsync, which
         // reads the now-empty manifest and full-signs-out (clears both
         // PublicKey AND CredentialId). No manual Auth.SignOut here.
-        await _session.ResetDiskAsync(cancellationToken);
+        await _session.ResetPoolAsync(cancellationToken);
 
         // Re-migrate every consumer DbContext. The host-specific step.
         await using (var todoCtx = await _todoFactory.CreateDbContextAsync(cancellationToken))

@@ -535,7 +535,7 @@
             // them what they're looking at.
             await TryReleaseWorkerStateAsync();
             _keyInstalled = false;
-            SetStatus(FormatDiskIoFailure("Round trip", ex), Severity.Error);
+            SetStatus(FormatPoolIoFailure("Round trip", ex), Severity.Error);
         }
         finally
         {
@@ -559,7 +559,7 @@
         {
             await TryReleaseWorkerStateAsync();
             _keyInstalled = false;
-            SetStatus(FormatDiskIoFailure("Read", ex), Severity.Error);
+            SetStatus(FormatPoolIoFailure("Read", ex), Severity.Error);
         }
         finally
         {
@@ -667,7 +667,7 @@
         StateHasChanged();
     }
 
-    private static string FormatDiskIoFailure(string operation, Exception ex)
+    private static string FormatPoolIoFailure(string operation, Exception ex)
     {
         if (LooksLikeWrongPasskeyFailure(ex))
         {

@@ -53,20 +53,20 @@ byte-for-byte vendor SAHPool behavior.
    fails to decrypt.
 4. **Cross-slot page swapping.** Moving an encrypted page from slot _i_ to
    slot _j_ within the same DB. Plane 2 binds `slotIndex` into AAD.
-5. **Whole-disk rollback to an earlier snapshot.** Replacing the entire OPFS
+5. **Whole-pool rollback to an earlier snapshot.** Replacing the entire OPFS
    tree with a previous capture of the same encrypted state. **Not defended
-   at this layer** — the AEAD authenticates each page but not the disk's
+   at this layer** — the AEAD authenticates each page but not the pool's
    monotonic history. Use a higher-layer integrity scheme (e.g., a
    server-signed manifest in a multi-device deployment) if this matters.
 6. **Wrong-key unlock attempt.** A different passkey is presented for an
-   existing encrypted disk. Plane 2 rejects via a slot-0 AEAD probe
+   existing encrypted pool. Plane 2 rejects via a slot-0 AEAD probe
    (`verifyEncryptionKey`) and a manifest MAC bound to the credential.
 7. **Mistargeted import.** A `.eds` envelope encrypted for a different
    recipient is imported. The ECIES unwrap of K_wrap fails (or the slot-0
    AEAD probe rejects), before any destructive operation on the current
-   disk.
+   pool.
 8. **Destructive import of a tampered / truncated / crafted envelope.**
-   Importing a disk replaces the existing pool, so a malformed source must
+   Importing a pool replaces the existing one, so a malformed source must
    never be able to trigger the wipe. The import paths validate the entire
    source on a read-only pass first — `.eds`: AEAD-verify every slot of
    every file under K_wrap; `.dbs` / `.db`: full structural walk including
@@ -97,8 +97,8 @@ byte-for-byte vendor SAHPool behavior.
 | .NET ↔ Worker (intra-page) | `postMessage` request/response envelope | Same-origin, structured cloning. No application-layer crypto. |
 | Worker ↔ OPFS (Plane 1) | Raw SQLite pages | None — relies on OS file permissions. |
 | Worker ↔ OPFS (Plane 2) | `[ciphertext(4096) \| nonce(12) \| tag(16)]` per slot | ChaCha20-Poly1305 AEAD with AAD `"prf-vfs-v1\|" + dbPath + "\|" + slotIndex_LE32`. Slot-0 probe gates unlock. Manifest MAC binds to credential. |
-| Whole-disk export (`.eds`) | MessagePacked `EncryptedDiskEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD with path+slot-bound AAD, verified over the whole envelope before any pool mutation on import. No sender authenticity: ECIES is anonymous-sender, so the envelope proves only that it was sealed *to* the recipient, not *by* whom (see §8). |
-| Whole-disk export (`.zip` plain) | ZIP of `.db` files | None at this layer. Confidentiality is on Plane 1 storage. |
+| Whole-pool export (`.eds`) | MessagePacked `EncryptedPoolEnvelope` | ECIES-wrapped slot key under recipient X25519 pubkey; per-slot AEAD with path+slot-bound AAD, verified over the whole envelope before any pool mutation on import. No sender authenticity: ECIES is anonymous-sender, so the envelope proves only that it was sealed *to* the recipient, not *by* whom (see §8). |
+| Whole-pool export (`.zip` plain) | ZIP of `.db` files | None at this layer. Confidentiality is on Plane 1 storage. |
 
 ## 6. Cryptographic primitives
 
@@ -132,7 +132,7 @@ import wipe-after-validate invariant (threat #8): `pool_wipe_requires_validated_
 
 | Limitation | Why |
 |---|---|
-| No defense against whole-disk rollback to a prior valid encrypted snapshot. | The AEAD authenticates pages but not disk monotonicity. A signed manifest at a higher layer can close this if needed. |
+| No defense against whole-pool rollback to a prior valid encrypted snapshot. | The AEAD authenticates pages but not pool monotonicity. A signed manifest at a higher layer can close this if needed. |
 | No defense against live-process memory dump after unlock. | The worker holds the global key in clear while a DB is open; this is fundamental to the at-rest model. |
 | No defense against same-origin script compromise. | A malicious script running in the page can read decrypted data straight from the worker. CSP, dependency hygiene, and code review are the host's job. |
 | Plain export (`.zip` / `.dbs` / `.db`) carries no application-layer authenticity. | Transport is the host's responsibility. The encrypted `.eds` export is the recommended cross-device path: its per-slot AEAD detects any in-transit tampering. |

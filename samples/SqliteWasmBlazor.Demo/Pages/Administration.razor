@@ -11,7 +11,8 @@
 @inject IDbContextFactory<NoteDbContext> NoteDbContextFactory
 @inject ISnackbar Snackbar
 @inject ISqliteWasmDatabaseService DatabaseService
-@inject SqliteWasmBlazor.Crypto.UI.Services.IHostDatabaseService HostDatabaseService
+@inject IDialogService DialogService
+@inherits EncryptionModelComponent
 
 <PageTitle>Administration</PageTitle>
 
@@ -118,16 +119,6 @@
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
                     <MudButton Variant="Variant.Outlined"
-                               Color="Color.Warning"
-                               OnClick="ResetDatabaseAsync"
-                               StartIcon="@Icons.Material.Filled.RestartAlt"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
-                        Reset Database
-                    </MudButton>
-                </MudItem>
-                <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Outlined"
                                Color="Color.Secondary"
                                OnClick="RebuildFTS5IndexAsync"
                                StartIcon="@Icons.Material.Filled.Build"
@@ -159,6 +150,31 @@
 
         </Authorized>
     </AuthorizeView>
+
+    @* Full reset — the app's single wipe surface, and the reason it sits
+       outside the AuthorizeView above: an encrypted pool whose passkey is
+       gone can never satisfy the DatabaseOpen policy, so a reset behind that
+       gate is a reset the user in trouble can never reach. Its own card at
+       the bottom of the page keeps it clear of the maintenance buttons
+       above, which only touch todo rows while this drops every database in
+       the pool. Copy and label follow the encryption state — an encrypted
+       pool loses its key along with its data, and the button says so. *@
+    <MudPaper Elevation="0" Outlined="true" Class="pa-4 mt-8 mb-6">
+        <MudText Typo="Typo.h6" Color="Color.Error" Class="mb-1">
+            <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Class="mr-1" />
+            @Model.Localizer["Card_ResetTitle"]
+        </MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            @Model.ResetHint
+        </MudText>
+        <MudButtonAsyncRx Command="@Model.Reset"
+                          ConfirmExecutionAsync="ConfirmResetAsync"
+                          Variant="Variant.Outlined"
+                          Color="Color.Error"
+                          StartIcon="@Icons.Material.Filled.RestartAlt">
+            @Model.ResetLabel
+        </MudButtonAsyncRx>
+    </MudPaper>
 </MudContainer>
 
 @code {
@@ -301,28 +317,19 @@
         Snackbar.Add($"All todos deleted in {stopwatch.ElapsedMilliseconds}ms", Severity.Warning);
     }
 
-    private async Task ResetDatabaseAsync()
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            // Single host-side seam: disk wipe, PRF clear, full sign-out,
-            // per-DbContext re-migrate, boot status → READY. Same call
-            // EncryptionModel.Reset and DatabaseErrorAlert route through.
-            await HostDatabaseService.ResetAsync();
-
-            stopwatch.Stop();
-
-            _performanceInfo = $"Database reset in {stopwatch.ElapsedMilliseconds}ms - FTS5 search enabled, encryption + PRF session cleared";
-            Snackbar.Add($"Database completely reset in {stopwatch.ElapsedMilliseconds}ms", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Database reset failed: {ex.Message}", Severity.Error);
-            _performanceInfo = $"Reset failed: {ex.Message}";
-        }
-    }
+    /// <summary>
+    /// Confirmation gate for <c>EncryptionModel.Reset</c>. Wired into
+    /// <c>MudButtonAsyncRx.ConfirmExecutionAsync</c>: the command runs only
+    /// when this returns <c>true</c>. Wording follows the encryption state —
+    /// an encrypted pool warns about the unrecoverable content, a plain one
+    /// has nothing to warn about beyond the data loss itself.
+    /// </summary>
+    private Task<bool> ConfirmResetAsync()
+        => DialogService.ConfirmDestructiveAsync(
+            title: Model.ResetLabel,
+            message: Model.ResetConfirmation,
+            destructiveLabel: Model.ResetLabel,
+            cancelLabel: Model.Localizer["Btn_Cancel"]);
 
     private async Task OptimizeFTS5IndexAsync()
     {

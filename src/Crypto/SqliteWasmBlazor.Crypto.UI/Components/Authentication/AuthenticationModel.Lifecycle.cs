@@ -17,7 +17,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Authentication;
 /// abandoned prompt reports a warning and leaves the shape untouched, so
 /// cancelling always lands back where it started.</para>
 ///
-/// <para><see cref="RefreshDiskStateAsync"/> is the single manifest read
+/// <para><see cref="RefreshPoolStateAsync"/> is the single manifest read
 /// behind that: it runs on context-ready, on TTL expiry
 /// (<see cref="IPrfService.KeyExpired"/> filtered on the seed key →
 /// <see cref="OnSessionExpiredAsync"/>), and on
@@ -41,7 +41,7 @@ public partial class AuthenticationModel
             return;
         }
 
-        await RefreshDiskStateAsync();
+        await RefreshPoolStateAsync();
 
         if (PrfService.HasCachedKeys() && PrfService.GetCachedPublicKey() is { Length: > 0 } cachedPub)
         {
@@ -68,7 +68,7 @@ public partial class AuthenticationModel
     private async ValueTask OnSessionExpiredAsync()
     {
         PublicKey = null;
-        await RefreshDiskStateAsync();
+        await RefreshPoolStateAsync();
     }
 
     // Manifest → panel state. CredentialId is the disk's binding, not a
@@ -77,7 +77,7 @@ public partial class AuthenticationModel
     // all. Only called while no session is active — an active session owns
     // CredentialId (it may be a plain disk's in-memory credential, which the
     // manifest knows nothing about until EnterEncrypted writes it).
-    private async ValueTask RefreshDiskStateAsync()
+    private async ValueTask RefreshPoolStateAsync()
     {
         var diskState = await Session.GetStateAsync();
         DiskEncrypted = diskState.Encrypted;

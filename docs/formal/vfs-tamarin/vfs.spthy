@@ -12,7 +12,7 @@ begin
  *
  * Concrete design being modeled:
  *   - A worker-wide 32-byte global key selects the encrypted VFS path for
- *     every DB in the virtual disk.
+ *     every DB in the pool.
  *   - Every encrypted logical 4096-byte slot is sealed with ChaCha20-Poly1305.
  *   - The physical slot is [ciphertext(4096) | nonce(12) | tag(16)].
  *   - AAD is "prf-vfs-v1|" || dbPath || "|" || slotIndex_LE32.
@@ -24,7 +24,7 @@ begin
  *   - Dolev-Yao attacker controls the encrypted disk channel: encrypted writes
  *     and encrypted rekey targets are Out(); encrypted reads, key probes, and
  *     encrypted rekey SOURCES are In(). Rekey-to-plain output is Out() — the
- *     plain result lands on the unprotected Plane-1 disk.
+ *     plain result lands on the unprotected Plane-1 pool.
  *   - Plain mode and rekey-to-plain are represented by events only, because
  *     the encrypted-path claims do not rely on confidentiality there.
  *   - Attacker can replay, swap, and fabricate terms.
@@ -33,7 +33,7 @@ begin
  * Out of scope:
  *   - WebAuthn PRF / HKDF derivation of VFS keys; modeled as Fr(~k).
  *   - Computational AEAD security bounds; modeled symbolically with senc/sdec.
- *   - Rollback of a whole old disk snapshot; accepted limitation in docs/crypto-vfs.md.
+ *   - Rollback of a whole old pool snapshot; accepted limitation in docs/crypto-vfs.md.
  *   - Same-origin live process attackers and memory disclosure.
  */
 

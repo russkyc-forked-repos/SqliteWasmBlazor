@@ -6,58 +6,60 @@
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e108</value></resheader>
 
   <data name="Page_Title" xml:space="preserve"><value>Database encryption</value></data>
-  <data name="Page_Subtitle" xml:space="preserve"><value>Single-key encrypted VFS — every database under one passkey-derived key. Sign in to unlock; encrypt or leave the encryption plane in one shot.</value></data>
+  <data name="Page_Subtitle" xml:space="preserve"><value>Every database this app stores in your browser, under one passkey-derived key. Sign in to unlock; encrypt them all or remove the encryption in one step.</value></data>
 
-  <data name="Card_VfsTitle" xml:space="preserve"><value>Encrypted VFS</value></data>
-  <data name="Card_ExportsTitle" xml:space="preserve"><value>Disk export / import</value></data>
+  <data name="Card_DatabasesTitle" xml:space="preserve"><value>Encrypted databases</value></data>
+  <data name="Card_ExportsTitle" xml:space="preserve"><value>Export &amp; import</value></data>
+  <data name="Card_ResetTitle" xml:space="preserve"><value>Full reset</value></data>
   <data name="Hint_ExportIntermediateScreen" xml:space="preserve"><value>Installed on a Home Screen, this app has no downloads folder: a finished export arrives on an intermediate screen instead of being saved. That screen is the export — open the share menu on it and choose "Save to Files".</value></data>
 
-  <data name="Pill_Plain" xml:space="preserve"><value>Plain</value></data>
+  <data name="Pill_Plain" xml:space="preserve"><value>Unencrypted</value></data>
   <data name="Pill_Unlocked" xml:space="preserve"><value>Encrypted · Unlocked</value></data>
   <data name="Pill_Locked" xml:space="preserve"><value>Encrypted · Locked</value></data>
 
   <data name="State_Hint" xml:space="preserve"><value>Passkey hint: {0}</value></data>
 
-  <data name="Hint_AuthForEncrypt" xml:space="preserve"><value>The VFS is currently plain. To encrypt all databases under a passkey, authenticate below first.</value></data>
-  <data name="Hint_AuthForUnlock" xml:space="preserve"><value>The VFS is encrypted but locked. Authenticate below to unlock.</value></data>
-  <data name="Hint_ResetWhenStuck" xml:space="preserve"><value>Can't sign in? Reset removes every database stored by this app and lets you start over.</value></data>
+  <data name="Hint_AuthForEncrypt" xml:space="preserve"><value>Your databases are currently unencrypted. To put all of them under a passkey, authenticate below first.</value></data>
+  <data name="Hint_AuthForUnlock" xml:space="preserve"><value>Your databases are encrypted and locked. Authenticate below to unlock them.</value></data>
+  <data name="Hint_ResetPlain" xml:space="preserve"><value>Removes every database this app stored in this browser and signs you out. Files on your computer are not affected.</value></data>
+  <data name="Hint_ResetEncrypted" xml:space="preserve"><value>Removes every database this app stored in this browser, discards the encryption key and signs you out. Anything stored afterwards is unencrypted until you encrypt again. This is the only way back in when the passkey is gone.</value></data>
 
-  <data name="Btn_Encrypt" xml:space="preserve"><value>Encrypt VFS with this passkey</value></data>
-  <data name="Btn_Leave" xml:space="preserve"><value>Decrypt VFS (leave encryption)</value></data>
+  <data name="Btn_Encrypt" xml:space="preserve"><value>Encrypt all databases with this passkey</value></data>
+  <data name="Btn_Leave" xml:space="preserve"><value>Remove encryption from all databases</value></data>
   <data name="Btn_Lock" xml:space="preserve"><value>Lock now</value></data>
   <data name="Btn_Reset" xml:space="preserve"><value>Remove all app databases</value></data>
+  <data name="Btn_ResetEncrypted" xml:space="preserve"><value>Remove all app databases and their encryption</value></data>
   <data name="Btn_SignOut" xml:space="preserve"><value>Sign out (use a different passkey)</value></data>
-  <data name="Btn_ExportDiskPlain" xml:space="preserve"><value>Export disk (plain)</value></data>
-  <data name="Btn_ExportDiskRekey" xml:space="preserve"><value>Export disk for recipient</value></data>
-  <data name="Btn_ImportDisk" xml:space="preserve"><value>Import disk</value></data>
+  <data name="Btn_ImportPool" xml:space="preserve"><value>Import all databases</value></data>
 
   <data name="Field_RecipientKey" xml:space="preserve"><value>Recipient identity (armored PFA PUBLIC KEY)</value></data>
   <data name="Field_RecipientKey_Help" xml:space="preserve"><value>Paste the recipient's armored PFA PUBLIC KEY block. The block carries both the recipient's X25519 public key (32 bytes) and their WebAuthn credentialId — the guided import on the recipient side uses the credentialId to drive WebAuthn directly to the matching passkey. The export uses ECIES (X25519 + AES-256-GCM) to wrap a fresh per-export key; only the holder of the matching private key can unwrap. No secrets cross between sender and recipient.</value></data>
 
-  <data name="Confirm_ImportDisk" xml:space="preserve"><value>Importing this envelope will replace every database currently in the encrypted disk AND rebind the disk to the passkey embedded in the envelope. The current passkey will no longer unlock this disk. Continue?</value></data>
-  <data name="Hint_ImportOnLocked" xml:space="preserve"><value>Or import an encrypted-disk envelope (.eds) to replace the disk and bind it to the import's passkey — useful for restoring a backup made under a different passkey (e.g. a YubiKey).</value></data>
-  <data name="Confirm_Reset" xml:space="preserve"><value>This removes every database this app has stored in your browser and signs you out. Encrypted content is permanently unrecoverable without a backup. Your computer's files are not affected. Continue?</value></data>
+  <data name="Confirm_ImportPool" xml:space="preserve"><value>This replaces every database currently stored with the ones in the file, and binds them to the passkey that file was made with. Your current passkey will no longer unlock them. Continue?</value></data>
+  <data name="Hint_ImportOnLocked" xml:space="preserve"><value>Or import a full encrypted backup (.eds) to replace all databases and bind them to the passkey that backup was made with — useful for restoring a backup made with a different passkey (e.g. a YubiKey).</value></data>
+  <data name="Confirm_Reset" xml:space="preserve"><value>This removes every database this app has stored in your browser and signs you out. Your computer's files are not affected. Continue?</value></data>
+  <data name="Confirm_ResetEncrypted" xml:space="preserve"><value>This removes every database this app has stored in your browser, discards the encryption key and signs you out. Encrypted content is permanently unrecoverable without a backup. Your computer's files are not affected. Continue?</value></data>
 
-  <data name="Status_Encrypted" xml:space="preserve"><value>VFS encrypted; every database is now under your passkey.</value></data>
-  <data name="Status_Decrypted" xml:space="preserve"><value>VFS decrypted; databases are stored in plain SQLite again. Revoke the passkey separately if no longer needed.</value></data>
-  <data name="Status_Locked" xml:space="preserve"><value>VFS locked; sign in again to access your databases.</value></data>
+  <data name="Status_Encrypted" xml:space="preserve"><value>All databases are now encrypted under your passkey.</value></data>
+  <data name="Status_Decrypted" xml:space="preserve"><value>Encryption removed; databases are stored as plain SQLite files again. Revoke the passkey separately if no longer needed.</value></data>
+  <data name="Status_Locked" xml:space="preserve"><value>Databases locked; sign in again to access them.</value></data>
   <data name="Status_Reset" xml:space="preserve"><value>All app databases removed. Sign in and Encrypt to start over.</value></data>
   <data name="Status_SignedOut" xml:space="preserve"><value>Signed out; pick a passkey to continue.</value></data>
-  <data name="Status_DiskExported" xml:space="preserve"><value>Exported encrypted disk as {0}.</value></data>
-  <data name="Status_DiskExportedForRecipient" xml:space="preserve"><value>Exported encrypted disk for recipient as {0}.</value></data>
-  <data name="Status_DiskImported" xml:space="preserve"><value>Disk imported; every database has been replaced with the envelope's contents.</value></data>
+  <data name="Status_PoolExported" xml:space="preserve"><value>Backed up all databases, encrypted, as {0}.</value></data>
+  <data name="Status_PoolExportedForRecipient" xml:space="preserve"><value>Exported all databases for the recipient as {0}.</value></data>
+  <data name="Status_PoolImported" xml:space="preserve"><value>Import complete; every database has been replaced with the file's contents.</value></data>
   <data name="Status_SingleDbImported" xml:space="preserve"><value>Imported single database {0}.</value></data>
   <data name="Status_SingleDbExported" xml:space="preserve"><value>Exported {0} as {1}.</value></data>
   <data name="Status_DbsExported" xml:space="preserve"><value>Exported {0} databases as {1}.</value></data>
-  <data name="Status_DbsImported" xml:space="preserve"><value>Imported {0}; the pool has been replaced with the envelope's contents.</value></data>
+  <data name="Status_DbsImported" xml:space="preserve"><value>Imported {0}; every database has been replaced with the file's contents.</value></data>
   <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Databases to export</value></data>
-  <data name="Hint_ExportShapes" xml:space="preserve"><value>Pick one and you get that database as a plain .db file any SQLite tool opens. Pick several and you get one .dbs bundle — the selected databases in a single file, restored together on import.</value></data>
-  <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Backup encrypted disk</value></data>
-  <data name="Btn_ExportDiskForRecipient" xml:space="preserve"><value>Export disk for recipient</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Pick one and you get that database as a plain .db file any SQLite tool opens. Pick several and you get one .dbs file — the selected databases together, restored as a set on import.</value></data>
+  <data name="Btn_ExportPoolBackup" xml:space="preserve"><value>Back up all databases (encrypted)</value></data>
+  <data name="Btn_ExportPoolForRecipient" xml:space="preserve"><value>Export all databases for a recipient</value></data>
   <data name="Btn_ExportDatabases" xml:space="preserve"><value>Export selected databases</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Import databases</value></data>
   <data name="Btn_ImportFile" xml:space="preserve"><value>Import a database file (.db, .dbs, or .eds)</value></data>
-  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — a single database, added or replaced by name. .dbs — a bundle of databases, replacing everything currently stored. .eds — a whole encrypted disk plus its passkey binding.</value></data>
+  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — a single database, added or replaced by name. .dbs — several databases in one file, replacing everything currently stored. .eds — all databases, encrypted, together with their passkey binding.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>All file types are streamed in chunks; no size limit.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>This replaces any existing database with the same name.</value></data>
   <data name="Lbl_ImportTargetName" xml:space="preserve"><value>Import into database</value></data>
@@ -68,8 +70,8 @@
   <data name="Btn_DeleteDatabase" xml:space="preserve"><value>Delete database</value></data>
   <data name="Confirm_DeleteDatabase" xml:space="preserve"><value>Delete {0} from this browser? Its contents are gone unless you exported it first.</value></data>
   <data name="Status_DatabaseDeleted" xml:space="preserve"><value>Deleted {0}.</value></data>
-  <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Importing this envelope will replace every database currently in the pool. Continue?</value></data>
-  <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Importing this envelope will replace every database currently in the encrypted pool. Encryption stays in place under the current passkey — the imported databases will be re-encrypted on write. Continue?</value></data>
+  <data name="Confirm_ImportDatabases" xml:space="preserve"><value>This replaces every database currently stored with the ones in the file. Continue?</value></data>
+  <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>This replaces every database currently stored with the ones in the file. Encryption stays in place under your current passkey — the imported databases are encrypted as they are written. Continue?</value></data>
   <data name="Status_OperationCancelled" xml:space="preserve"><value>Operation cancelled.</value></data>
   <data name="Btn_Cancel" xml:space="preserve"><value>Cancel</value></data>
 

@@ -1,9 +1,43 @@
-# Interactive-proof plan — the 3 `pending_*` lemmas
+# Interactive-proof plan — CLOSED, all three resolved
 
-Attack plan for a future hand-guided session on the three open statements in
-`vfs-inplace-lifecycle.spthy`. This is a **plan**, not a run log — nothing here
-has been executed. Mechanics (GUI, remote box, RTS flags) live in
-`HOWTO.md` §4–§6; this file is only *what to do once the GUI is open*.
+> **Historical.** All three statements this plan targeted are resolved; no
+> hand-guided session is needed. Kept for the reasoning, which explains why
+> the phrasings below diverge and what replaced them. The plan text after
+> this section is the original and was never executed.
+
+Resolution:
+
+| original | outcome |
+|---|---|
+| `pending_encrypt_in_place_no_live_key` | replaced in `76d3a34` by the weaker, provable `encrypt_in_place_no_live_key` |
+| `pending_export_encrypt_no_live_key` | replaced in `76d3a34` by the weaker, provable `export_encrypt_no_live_key` |
+| `pending_decrypt_no_clear_before_use` | replaced by `no_claim_held_after_clear`, verified in 12 steps — **stronger**, not weaker |
+
+The third is the interesting one. Its divergence was never the inductive
+descent this plan assumed. The premise carried `path`, `cipher_blob` and
+`plain_blob`, which sends the backward search down
+`PendingDecryptOp -> BeginDecryptInPlace -> the file-state claim`; the
+`deprioFiles` tactic matches `FileState|FileVer` and never the pending ops,
+so ranking could not help. Restated over `ClaimKeyState` — no file variables,
+and covering all seven rules that claim a held key rather than
+`CommitDecryptInPlace` alone — it closes in 12 steps and 0.33 s.
+
+Measured as diverging past ten minutes each, before the file-free restatement:
+`deprioFiles` alone; a tactic additionally deprioritising `PendingDecryptOp` /
+`PendingEncryptOp`; the key-side lemmas injected as `[reuse]`; and the
+file-free form without its two helper rungs.
+
+Note also that `76d3a34` dropped the `pending_` prefix from
+`decrypt_no_clear_before_use` without weakening the statement. `verify.sh`
+skips `pending_*`, so that single rename put an unprovable lemma into the
+gate and left it red from 2026-06-30 until the restatement.
+
+---
+
+## Original plan (not executed)
+
+Mechanics (GUI, remote box, RTS flags) live in `HOWTO.md` §4–§6; this file is
+only *what to do once the GUI is open*.
 
 > Do not run the prover on the dev Mac (memory pressure → thrash). Use the
 > rented-box recipe in HOWTO §6, then tunnel the interactive port (HOWTO §4).

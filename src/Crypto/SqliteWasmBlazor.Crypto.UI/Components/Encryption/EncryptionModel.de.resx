@@ -6,58 +6,60 @@
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e108</value></resheader>
 
   <data name="Page_Title" xml:space="preserve"><value>Datenbankverschlüsselung</value></data>
-  <data name="Page_Subtitle" xml:space="preserve"><value>Verschlüsseltes VFS mit einem einzigen Schlüssel — alle Datenbanken unter demselben Passkey-Schlüssel. Anmelden zum Entsperren; in einem Schritt verschlüsseln oder verlassen.</value></data>
+  <data name="Page_Subtitle" xml:space="preserve"><value>Alle Datenbanken, die diese App im Browser speichert, unter einem einzigen Passkey-Schlüssel. Anmelden zum Entsperren; in einem Schritt alle verschlüsseln oder die Verschlüsselung aufheben.</value></data>
 
-  <data name="Card_VfsTitle" xml:space="preserve"><value>Verschlüsseltes VFS</value></data>
-  <data name="Card_ExportsTitle" xml:space="preserve"><value>Festplatte exportieren / importieren</value></data>
+  <data name="Card_DatabasesTitle" xml:space="preserve"><value>Verschlüsselte Datenbanken</value></data>
+  <data name="Card_ExportsTitle" xml:space="preserve"><value>Export &amp; Import</value></data>
+  <data name="Card_ResetTitle" xml:space="preserve"><value>Vollständiges Zurücksetzen</value></data>
   <data name="Hint_ExportIntermediateScreen" xml:space="preserve"><value>Auf dem Home-Bildschirm installiert hat diese App keinen Download-Ordner: Ein fertiger Export landet auf einem Zwischenbildschirm, statt gespeichert zu werden. Dieser Bildschirm ist der Export — dort das Teilen-Menü öffnen und „In Dateien sichern“ wählen.</value></data>
 
-  <data name="Pill_Plain" xml:space="preserve"><value>Klartext</value></data>
+  <data name="Pill_Plain" xml:space="preserve"><value>Unverschlüsselt</value></data>
   <data name="Pill_Unlocked" xml:space="preserve"><value>Verschlüsselt · Entsperrt</value></data>
   <data name="Pill_Locked" xml:space="preserve"><value>Verschlüsselt · Gesperrt</value></data>
 
   <data name="State_Hint" xml:space="preserve"><value>Passkey-Hinweis: {0}</value></data>
 
-  <data name="Hint_AuthForEncrypt" xml:space="preserve"><value>Das VFS liegt aktuell im Klartext vor. Um alle Datenbanken unter einem Passkey zu verschlüsseln, bitte zunächst unten anmelden.</value></data>
-  <data name="Hint_AuthForUnlock" xml:space="preserve"><value>Das VFS ist verschlüsselt, aber gesperrt. Unten anmelden, um zu entsperren.</value></data>
-  <data name="Hint_ResetWhenStuck" xml:space="preserve"><value>Anmeldung nicht möglich? Zurücksetzen entfernt alle Datenbanken, die diese App im Browser gespeichert hat — und erlaubt einen Neustart.</value></data>
+  <data name="Hint_AuthForEncrypt" xml:space="preserve"><value>Deine Datenbanken sind aktuell unverschlüsselt. Um alle unter einen Passkey zu stellen, bitte zunächst unten anmelden.</value></data>
+  <data name="Hint_AuthForUnlock" xml:space="preserve"><value>Deine Datenbanken sind verschlüsselt und gesperrt. Unten anmelden, um sie zu entsperren.</value></data>
+  <data name="Hint_ResetPlain" xml:space="preserve"><value>Entfernt alle Datenbanken, die diese App in diesem Browser gespeichert hat, und meldet dich ab. Dateien auf deinem Computer bleiben unberührt.</value></data>
+  <data name="Hint_ResetEncrypted" xml:space="preserve"><value>Entfernt alle Datenbanken, die diese App in diesem Browser gespeichert hat, verwirft den Verschlüsselungsschlüssel und meldet dich ab. Was danach gespeichert wird, liegt unverschlüsselt vor, bis du erneut verschlüsselst. Der einzige Weg zurück, wenn der Passkey nicht mehr verfügbar ist.</value></data>
 
-  <data name="Btn_Encrypt" xml:space="preserve"><value>VFS mit diesem Passkey verschlüsseln</value></data>
-  <data name="Btn_Leave" xml:space="preserve"><value>VFS entschlüsseln (Verschlüsselung verlassen)</value></data>
+  <data name="Btn_Encrypt" xml:space="preserve"><value>Alle Datenbanken mit diesem Passkey verschlüsseln</value></data>
+  <data name="Btn_Leave" xml:space="preserve"><value>Verschlüsselung aller Datenbanken aufheben</value></data>
   <data name="Btn_Lock" xml:space="preserve"><value>Jetzt sperren</value></data>
   <data name="Btn_Reset" xml:space="preserve"><value>Alle App-Datenbanken entfernen</value></data>
+  <data name="Btn_ResetEncrypted" xml:space="preserve"><value>Alle App-Datenbanken samt Verschlüsselung entfernen</value></data>
   <data name="Btn_SignOut" xml:space="preserve"><value>Abmelden (anderen Passkey verwenden)</value></data>
-  <data name="Btn_ExportDiskPlain" xml:space="preserve"><value>Festplatte exportieren (Klartext)</value></data>
-  <data name="Btn_ExportDiskRekey" xml:space="preserve"><value>Festplatte für Empfänger exportieren</value></data>
-  <data name="Btn_ImportDisk" xml:space="preserve"><value>Festplatte importieren</value></data>
+  <data name="Btn_ImportPool" xml:space="preserve"><value>Alle Datenbanken importieren</value></data>
 
   <data name="Field_RecipientKey" xml:space="preserve"><value>Identität des Empfängers (armorierter PFA PUBLIC KEY)</value></data>
   <data name="Field_RecipientKey_Help" xml:space="preserve"><value>Den armorierten PFA PUBLIC KEY-Block des Empfängers einfügen. Der Block enthält sowohl den X25519 Public Key (32 Byte) als auch die WebAuthn-credentialId des Empfängers — der geführte Import auf der Empfängerseite verwendet die credentialId, um WebAuthn direkt zum passenden Passkey zu lenken. Der Export verwendet ECIES (X25519 + AES-256-GCM), um einen frischen Per-Export-Schlüssel zu wrappen; nur der Inhaber des passenden privaten Schlüssels kann ihn entpacken. Es kreuzen keine Geheimnisse zwischen Sender und Empfänger.</value></data>
 
-  <data name="Confirm_ImportDisk" xml:space="preserve"><value>Beim Importieren werden alle Datenbanken in der verschlüsselten Festplatte ersetzt UND die Festplatte an den im Umschlag eingebetteten Passkey gebunden. Der aktuelle Passkey kann diese Festplatte danach nicht mehr entsperren. Fortfahren?</value></data>
-  <data name="Hint_ImportOnLocked" xml:space="preserve"><value>Oder einen verschlüsselten-Festplatte-Umschlag (.eds) importieren, um die Festplatte zu ersetzen und an den Passkey des Imports zu binden — nützlich, um ein unter einem anderen Passkey (z.B. einem YubiKey) erstelltes Backup wiederherzustellen.</value></data>
-  <data name="Confirm_Reset" xml:space="preserve"><value>Damit werden alle Datenbanken entfernt, die diese App im Browser gespeichert hat, und du wirst abgemeldet. Verschlüsselte Inhalte sind ohne Backup nicht wiederherstellbar. Dateien auf deinem Computer bleiben unberührt. Fortfahren?</value></data>
+  <data name="Confirm_ImportPool" xml:space="preserve"><value>Damit werden alle aktuell gespeicherten Datenbanken durch die aus der Datei ersetzt und an den Passkey gebunden, mit dem die Datei erstellt wurde. Dein aktueller Passkey entsperrt sie danach nicht mehr. Fortfahren?</value></data>
+  <data name="Hint_ImportOnLocked" xml:space="preserve"><value>Oder eine vollständige verschlüsselte Sicherung (.eds) importieren, um alle Datenbanken zu ersetzen und an den Passkey dieser Sicherung zu binden — nützlich, um eine mit einem anderen Passkey (z.B. einem YubiKey) erstellte Sicherung wiederherzustellen.</value></data>
+  <data name="Confirm_Reset" xml:space="preserve"><value>Damit werden alle Datenbanken entfernt, die diese App im Browser gespeichert hat, und du wirst abgemeldet. Dateien auf deinem Computer bleiben unberührt. Fortfahren?</value></data>
+  <data name="Confirm_ResetEncrypted" xml:space="preserve"><value>Damit werden alle Datenbanken entfernt, die diese App im Browser gespeichert hat, der Verschlüsselungsschlüssel wird verworfen und du wirst abgemeldet. Verschlüsselte Inhalte sind ohne Backup nicht wiederherstellbar. Dateien auf deinem Computer bleiben unberührt. Fortfahren?</value></data>
 
-  <data name="Status_Encrypted" xml:space="preserve"><value>VFS verschlüsselt; alle Datenbanken sind jetzt unter Ihrem Passkey geschützt.</value></data>
-  <data name="Status_Decrypted" xml:space="preserve"><value>VFS entschlüsselt; Datenbanken liegen wieder als reine SQLite-Dateien vor. Der Passkey kann separat widerrufen werden.</value></data>
-  <data name="Status_Locked" xml:space="preserve"><value>VFS gesperrt; bitte erneut anmelden, um auf die Datenbanken zuzugreifen.</value></data>
+  <data name="Status_Encrypted" xml:space="preserve"><value>Alle Datenbanken sind jetzt unter deinem Passkey geschützt.</value></data>
+  <data name="Status_Decrypted" xml:space="preserve"><value>Verschlüsselung aufgehoben; Datenbanken liegen wieder als reine SQLite-Dateien vor. Der Passkey kann separat widerrufen werden.</value></data>
+  <data name="Status_Locked" xml:space="preserve"><value>Datenbanken gesperrt; bitte erneut anmelden, um darauf zuzugreifen.</value></data>
   <data name="Status_Reset" xml:space="preserve"><value>Alle App-Datenbanken wurden entfernt. Anmelden und Verschlüsseln, um neu zu beginnen.</value></data>
   <data name="Status_SignedOut" xml:space="preserve"><value>Abgemeldet; bitte einen Passkey auswählen, um fortzufahren.</value></data>
-  <data name="Status_DiskExported" xml:space="preserve"><value>Verschlüsselte Festplatte als {0} exportiert.</value></data>
-  <data name="Status_DiskExportedForRecipient" xml:space="preserve"><value>Verschlüsselte Festplatte für Empfänger als {0} exportiert.</value></data>
-  <data name="Status_DiskImported" xml:space="preserve"><value>Festplatte importiert; alle Datenbanken wurden durch den Inhalt des Umschlags ersetzt.</value></data>
+  <data name="Status_PoolExported" xml:space="preserve"><value>Alle Datenbanken verschlüsselt als {0} gesichert.</value></data>
+  <data name="Status_PoolExportedForRecipient" xml:space="preserve"><value>Alle Datenbanken für den Empfänger als {0} exportiert.</value></data>
+  <data name="Status_PoolImported" xml:space="preserve"><value>Import abgeschlossen; alle Datenbanken wurden durch den Inhalt der Datei ersetzt.</value></data>
   <data name="Status_SingleDbImported" xml:space="preserve"><value>Einzelne Datenbank {0} importiert.</value></data>
   <data name="Status_SingleDbExported" xml:space="preserve"><value>{0} als {1} exportiert.</value></data>
   <data name="Status_DbsExported" xml:space="preserve"><value>{0} Datenbanken als {1} exportiert.</value></data>
-  <data name="Status_DbsImported" xml:space="preserve"><value>{0} importiert; der Pool wurde durch den Inhalt des Envelopes ersetzt.</value></data>
+  <data name="Status_DbsImported" xml:space="preserve"><value>{0} importiert; alle Datenbanken wurden durch den Inhalt der Datei ersetzt.</value></data>
   <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Zu exportierende Datenbanken</value></data>
-  <data name="Hint_ExportShapes" xml:space="preserve"><value>Eine Auswahl ergibt diese Datenbank als reine .db-Datei, die jedes SQLite-Werkzeug öffnet. Mehrere ergeben ein .dbs-Bündel — die ausgewählten Datenbanken in einer Datei, die beim Import gemeinsam zurückkehren.</value></data>
-  <data name="Btn_ExportDiskBackup" xml:space="preserve"><value>Verschlüsselte Festplatte sichern</value></data>
-  <data name="Btn_ExportDiskForRecipient" xml:space="preserve"><value>Festplatte für Empfänger exportieren</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Eine Auswahl ergibt diese Datenbank als reine .db-Datei, die jedes SQLite-Werkzeug öffnet. Mehrere ergeben eine .dbs-Datei — die ausgewählten Datenbanken zusammen, die beim Import gemeinsam zurückkehren.</value></data>
+  <data name="Btn_ExportPoolBackup" xml:space="preserve"><value>Alle Datenbanken sichern (verschlüsselt)</value></data>
+  <data name="Btn_ExportPoolForRecipient" xml:space="preserve"><value>Alle Datenbanken für Empfänger exportieren</value></data>
   <data name="Btn_ExportDatabases" xml:space="preserve"><value>Ausgewählte Datenbanken exportieren</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Datenbanken importieren</value></data>
   <data name="Btn_ImportFile" xml:space="preserve"><value>Datenbank-Datei importieren (.db, .dbs oder .eds)</value></data>
-  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — eine einzelne Datenbank, die anhand ihres Namens ergänzt oder ersetzt wird. .dbs — ein Bündel von Datenbanken, das den gesamten aktuellen Bestand ersetzt. .eds — eine ganze verschlüsselte Festplatte samt Passkey-Bindung.</value></data>
+  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — eine einzelne Datenbank, die anhand ihres Namens ergänzt oder ersetzt wird. .dbs — mehrere Datenbanken in einer Datei, die den gesamten aktuellen Bestand ersetzt. .eds — alle Datenbanken, verschlüsselt, samt Passkey-Bindung.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>Alle Dateitypen werden in Chunks gestreamt; keine Größenbegrenzung.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Eine vorhandene Datenbank mit dem gleichen Namen wird ersetzt.</value></data>
   <data name="Lbl_ImportTargetName" xml:space="preserve"><value>Importieren in Datenbank</value></data>
@@ -68,8 +70,8 @@
   <data name="Btn_DeleteDatabase" xml:space="preserve"><value>Datenbank löschen</value></data>
   <data name="Confirm_DeleteDatabase" xml:space="preserve"><value>{0} aus diesem Browser löschen? Der Inhalt ist verloren, sofern er nicht vorher exportiert wurde.</value></data>
   <data name="Status_DatabaseDeleted" xml:space="preserve"><value>{0} gelöscht.</value></data>
-  <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im Pool ersetzt. Fortfahren?</value></data>
-  <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Beim Importieren dieses Envelopes werden alle Datenbanken im verschlüsselten Pool ersetzt. Die Verschlüsselung bleibt unter dem aktuellen Passkey bestehen — die importierten Datenbanken werden beim Schreiben neu verschlüsselt. Fortfahren?</value></data>
+  <data name="Confirm_ImportDatabases" xml:space="preserve"><value>Damit werden alle aktuell gespeicherten Datenbanken durch die aus der Datei ersetzt. Fortfahren?</value></data>
+  <data name="Confirm_ImportDatabases_Unlocked" xml:space="preserve"><value>Damit werden alle aktuell gespeicherten Datenbanken durch die aus der Datei ersetzt. Die Verschlüsselung bleibt unter deinem aktuellen Passkey bestehen — die importierten Datenbanken werden beim Schreiben verschlüsselt. Fortfahren?</value></data>
   <data name="Status_OperationCancelled" xml:space="preserve"><value>Vorgang abgebrochen.</value></data>
   <data name="Btn_Cancel" xml:space="preserve"><value>Abbrechen</value></data>
 

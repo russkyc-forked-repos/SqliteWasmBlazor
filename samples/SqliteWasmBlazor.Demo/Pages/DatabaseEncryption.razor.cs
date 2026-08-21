@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using MudBlazor;
 using SqliteWasmBlazor.Crypto.UI.Components.Encryption;
+using SqliteWasmBlazor.Demo.Components;
 
 namespace SqliteWasmBlazor.Demo.Pages;
 
@@ -32,44 +33,19 @@ public partial class DatabaseEncryption
     }
 
     /// <summary>
-    /// Confirmation gate for the destructive <c>Reset</c> command. Wired
-    /// into <c>MudButtonAsyncRx.ConfirmExecutionAsync</c>; returns
-    /// <c>true</c> when the user confirms (the button then runs the
-    /// command), <c>false</c> on cancel (the command never executes).
+    /// Page-local shorthand over <see cref="DestructiveConfirm"/> — supplies
+    /// this model's cancel label so the callsites below stay one line each.
     /// </summary>
-    private Task<bool> ConfirmResetAsync()
-        => ConfirmDestructiveAsync(
-            title: Model.Localizer["Btn_Reset"],
-            message: Model.Localizer["Confirm_Reset"],
-            destructiveLabel: Model.Localizer["Btn_Reset"]);
-
-    /// <summary>
-    /// Shared confirm-or-cancel dialog for destructive operations. Cancel
-    /// is the visually-primary default (filled, primary color); the
-    /// destructive action is colored red and outlined to mark it as the
-    /// consequential, non-default choice. Returns <c>true</c> only when
-    /// the user explicitly clicks the destructive button.
-    /// </summary>
-    private async Task<bool> ConfirmDestructiveAsync(string title, string message, string destructiveLabel)
-    {
-        var parameters = new DialogParameters<Components.DestructiveConfirmDialog>
-        {
-            { x => x.Title, title },
-            { x => x.Message, message },
-            { x => x.DestructiveLabel, destructiveLabel },
-            { x => x.CancelLabel, Model.Localizer["Btn_Cancel"].ToString() },
-        };
-        var dialog = await DialogService.ShowAsync<Components.DestructiveConfirmDialog>(title, parameters);
-        var result = await dialog.Result;
-        return result is { Canceled: false, Data: true };
-    }
+    private Task<bool> ConfirmDestructiveAsync(string title, string message, string destructiveLabel)
+        => DialogService.ConfirmDestructiveAsync(
+            title, message, destructiveLabel, Model.Localizer["Btn_Cancel"]);
 
     /// <summary>
     /// Unified file-pick handler for the import flow. Sniffs the picked
     /// file's extension and routes:
     /// <list type="bullet">
     ///   <item><c>.eds</c> → guided passkey-rebinding disk import
-    ///   (<see cref="EncryptionModel.ImportDisk"/>).</item>
+    ///   (<see cref="EncryptionModel.ImportPool"/>).</item>
     ///   <item><c>.db</c> → single-DB write into a database the user names
     ///   (<see cref="EncryptionModel.ImportDatabase"/>).</item>
     ///   <item><c>.dbs</c> → bundle import that replaces the pool
@@ -166,13 +142,13 @@ public partial class DatabaseEncryption
     private async Task HandleEnvelopeFileAsync(IBrowserFile file)
     {
         var confirmed = await ConfirmDestructiveAsync(
-            title: Model.Localizer["Btn_ImportDisk"],
-            message: Model.Localizer["Confirm_ImportDisk"],
-            destructiveLabel: Model.Localizer["Btn_ImportDisk"]);
+            title: Model.Localizer["Btn_ImportPool"],
+            message: Model.Localizer["Confirm_ImportPool"],
+            destructiveLabel: Model.Localizer["Btn_ImportPool"]);
 
         if (confirmed)
         {
-            await Model.ImportDisk.ExecuteAsync(file);
+            await Model.ImportPool.ExecuteAsync(file);
         }
     }
 }

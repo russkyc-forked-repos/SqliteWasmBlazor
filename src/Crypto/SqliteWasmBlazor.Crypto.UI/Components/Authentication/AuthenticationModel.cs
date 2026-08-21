@@ -127,7 +127,7 @@ public partial class AuthenticationModel : ObservableModel
     {
         PrfService.ClearKeys();
         PublicKey = null;
-        await RefreshDiskStateAsync();
+        await RefreshPoolStateAsync();
     }
 
     // Full sign-out. CredentialId and DiskEncrypted come straight back from
@@ -141,7 +141,7 @@ public partial class AuthenticationModel : ObservableModel
         RegisterDisplayName = null;
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
-        await RefreshDiskStateAsync();
+        await RefreshPoolStateAsync();
     }
 
     // Apply a freshly-derived session. Returns false when refused for a
@@ -164,7 +164,7 @@ public partial class AuthenticationModel : ObservableModel
             WrongPasskeyPublicKey = publicKeyBase64;
             WrongPasskeyCredentialId = credentialId;
             StatusModel.AddWarning(
-                Localizer["Status_WrongPasskeyForDisk"],
+                Localizer["Status_WrongPasskeyForPool"],
                 nameof(SignIn));
             return false;
         }

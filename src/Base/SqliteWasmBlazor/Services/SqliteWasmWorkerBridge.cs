@@ -26,7 +26,7 @@ internal sealed class SqlQueryResult
     /// </summary>
     public List<string>? Databases { get; set; }
     /// <summary>
-    /// Set by the JSON-only response of <c>readDiskManifest</c> — one of
+    /// Set by the JSON-only response of <c>readPoolManifest</c> — one of
     /// "absent" / "present" / "mismatch" / "tampered" / "malformed".
     /// </summary>
     public string? ManifestState { get; set; }
@@ -94,7 +94,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         return id;
     }
     private bool _isInitialized;
-    private volatile bool _diskLocked;
+    private volatile bool _poolLocked;
     private static TaskCompletionSource<bool>? _initializationTcs;
 
     /// <summary>
@@ -109,27 +109,27 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// <see cref="EncryptedSqliteWasmDatabaseService"/> at boot probe and on every Lock /
     /// Unlock / Enter / Leave / Reset transition; consulted by every
     /// DB-touching bridge method to refuse operations cleanly with
-    /// <see cref="DiskLockedException"/> instead of letting them reach
+    /// <see cref="PoolLockedException"/> instead of letting them reach
     /// SQLite and surface as SQLITE_NOTADB.
     /// </summary>
-    internal bool IsDiskLocked => _diskLocked;
+    internal bool IsPoolLocked => _poolLocked;
 
     /// <summary>
     /// Update the disk-locked flag. Production callers always go through
     /// <see cref="EncryptedSqliteWasmDatabaseService"/>, which is the single source of
     /// truth for VFS state. Idempotent.
     /// </summary>
-    internal void SetDiskLocked(bool locked) => _diskLocked = locked;
+    internal void SetPoolLocked(bool locked) => _poolLocked = locked;
 
     /// <summary>
-    /// Throw <see cref="DiskLockedException"/> if the disk is locked. Used
+    /// Throw <see cref="PoolLockedException"/> if the disk is locked. Used
     /// at the top of every DB-touching bridge method as a uniform gate.
     /// </summary>
-    private void ThrowIfDiskLocked(string operation)
+    private void ThrowIfPoolLocked(string operation)
     {
-        if (_diskLocked)
+        if (_poolLocked)
         {
-            throw new DiskLockedException(operation);
+            throw new PoolLockedException(operation);
         }
     }
 
@@ -205,7 +205,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
-        ThrowIfDiskLocked($"OpenDatabase('{database}')");
+        ThrowIfPoolLocked($"OpenDatabase('{database}')");
 
         // ALWAYS reach the worker. The worker's `openDatabase` is
         // idempotent (it short-circuits on its own openDatabases Map). The
@@ -281,7 +281,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
 
     /// <summary>
     /// Execute SQL in the worker and return results. Throws
-    /// <see cref="DiskLockedException"/> when the disk transitioned to
+    /// <see cref="PoolLockedException"/> when the disk transitioned to
     /// locked between connection open and query (e.g. the user explicitly
     /// hit Lock while a DbContext was alive).
     /// </summary>
@@ -292,7 +292,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
-        ThrowIfDiskLocked($"ExecuteSql on '{database}'");
+        ThrowIfPoolLocked($"ExecuteSql on '{database}'");
 
         var request = new
         {
@@ -323,7 +323,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
-        ThrowIfDiskLocked($"ExecuteSqlWithBlobs on '{database}'");
+        ThrowIfPoolLocked($"ExecuteSqlWithBlobs on '{database}'");
 
         var requestId = NextRequestId();
         var tcs = new TaskCompletionSource<SqlQueryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -511,7 +511,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// <summary>
     /// Post a binary envelope + JSON metadata to the worker, correlate the
     /// response as <see cref="SqlQueryResult"/>. Used for encryption ops
-    /// (setGlobalEncryptionKey, encryptDb, writeDiskManifest) where the
+    /// (setGlobalEncryptionKey, encryptDb, writePoolManifest) where the
     /// worker reports a status/code rather than returning raw bytes.
     /// </summary>
     internal async Task<SqlQueryResult> PostBinaryAsync(
@@ -1002,14 +1002,14 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// side <c>.slice()</c>s into a real <c>Uint8Array</c>; caller wipes
     /// the source buffer in <c>finally</c>.
     /// </remarks>
-    [JSImport("exportDiskToDownload", "sqliteWasmWorker")]
-    internal static partial Task<bool> ExportDiskToDownloadAsync(
+    [JSImport("exportPoolToDownload", "sqliteWasmWorker")]
+    internal static partial Task<bool> ExportPoolToDownloadAsync(
         string filename,
         string metadataJson,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
     /// <summary>
-    /// Test/diagnostic variant of <see cref="ExportDiskToDownloadAsync"/>:
+    /// Test/diagnostic variant of <see cref="ExportPoolToDownloadAsync"/>:
     /// assembles the identical v3 envelope Blob, materialises it into a JS
     /// byte stash keyed by <paramref name="sessionId"/>, and resolves with
     /// the envelope length. The caller then drains the stash via
@@ -1022,18 +1022,18 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// guided import (whose download side is unreachable from test code).
     /// <c>Task&lt;byte[]&gt;</c> isn't a supported JS-interop return shape
     /// (SYSLIB1072), hence the length + chunked-MemoryView-read protocol.
-    /// See <c>EncryptedSqliteWasmDatabaseService.ExportDiskToPubkeyBytesAsync</c>.
+    /// See <c>EncryptedSqliteWasmDatabaseService.ExportPoolToPubkeyBytesAsync</c>.
     /// </para>
     /// </summary>
-    [JSImport("exportDiskToBytesSession", "sqliteWasmWorker")]
-    internal static partial Task<int> ExportDiskToBytesSessionAsync(
+    [JSImport("exportPoolToBytesSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ExportPoolToBytesSessionAsync(
         string metadataJson,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap,
         int sessionId);
 
     /// <summary>
     /// Copies up to <c>dest.Length</c> bytes of the stashed envelope
-    /// (from <see cref="ExportDiskToBytesSessionAsync"/>) starting at
+    /// (from <see cref="ExportPoolToBytesSessionAsync"/>) starting at
     /// <paramref name="offset"/> into <paramref name="dest"/>, returning the
     /// number copied. Synchronous so the <see cref="Span{T}"/> MemoryView
     /// stays valid for the JS-side write.
@@ -1052,11 +1052,11 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// Streaming disk-import — preflight. Builds a Blob from the parts
     /// previously appended to <paramref name="sessionId"/> and posts it to
     /// the worker, which AEAD-verifies slot 0 of each file under
-    /// <paramref name="kWrap"/>. Returns <c>DiskImportResult</c> (0=OK,
+    /// <paramref name="kWrap"/>. Returns <c>PoolImportResult</c> (0=OK,
     /// 1=WRONG_KEY). No pool mutation either way.
     /// </summary>
-    [JSImport("importDiskStreamPreflightFromSession", "sqliteWasmWorker")]
-    internal static partial Task<int> ImportDiskStreamPreflightFromSessionAsync(
+    [JSImport("importPoolStreamPreflightFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportPoolStreamPreflightFromSessionAsync(
         int sessionId,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
@@ -1069,8 +1069,8 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// Caller MUST have run <c>WipePoolAsync</c> + <c>EnterEncryptedAsync</c>
     /// between preflight and commit.
     /// </summary>
-    [JSImport("importDiskStreamCommitFromSession", "sqliteWasmWorker")]
-    internal static partial Task<int> ImportDiskStreamCommitFromSessionAsync(
+    [JSImport("importPoolStreamCommitFromSession", "sqliteWasmWorker")]
+    internal static partial Task<int> ImportPoolStreamCommitFromSessionAsync(
         int sessionId,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
@@ -1166,7 +1166,7 @@ internal sealed class WorkerResponse
     /// </summary>
     public List<string>? Databases { get; set; }
     /// <summary>
-    /// Set by <c>readDiskManifest</c> — see <see cref="SqlQueryResult.ManifestState"/>.
+    /// Set by <c>readPoolManifest</c> — see <see cref="SqlQueryResult.ManifestState"/>.
     /// </summary>
     public string? ManifestState { get; set; }
     /// <summary>

@@ -233,12 +233,12 @@ export const logger = {
 // ---------------------------------------------------------------------------
 
 /**
- * JSImport entry point — called by C# `ExportDiskToDownloadAsync`. Drives
+ * JSImport entry point — called by C# `ExportPoolToDownloadAsync`. Drives
  * the worker staging export, composes the envelope Blob, triggers the
  * download. Returns `true` on completion. The staging file backing the
  * download is collected by the worker's init sweep next session.
  */
-export function exportDiskToDownload(
+export function exportPoolToDownload(
     filename: string,
     metadataJson: string,
     kWrapView: IMemoryView,
@@ -251,26 +251,26 @@ export function exportDiskToDownload(
 
 // ---------------------------------------------------------------------------
 // Test/diagnostic export-to-bytes — assembles the identical v3 envelope Blob
-// as {@link exportDiskToDownload}, then makes the bytes drainable by C#
+// as {@link exportPoolToDownload}, then makes the bytes drainable by C#
 // instead of triggering the anchor-click download. The whole envelope is
 // materialised in memory (the very thing the streaming download path avoids),
 // so this exists ONLY so in-page round-trip tests can feed a real export back
 // into the guided import. `Task<byte[]>` is not a supported JS-interop return
 // shape, so the protocol is: stash bytes → return length → C# reads chunks
 // into a MemoryView → discard. See the C# JSImports
-// `SqliteWasmWorkerBridge.{ExportDiskToBytesSessionAsync,ReadExportBytes,DiscardExportBytes}`.
+// `SqliteWasmWorkerBridge.{ExportPoolToBytesSessionAsync,ReadExportBytes,DiscardExportBytes}`.
 // ---------------------------------------------------------------------------
 
 const exportByteStash = new Map<number, Uint8Array>();
 
-export function exportDiskToBytesSession(
+export function exportPoolToBytesSession(
     metadataJson: string,
     kWrapView: IMemoryView,
     sessionId: number,
 ): Promise<number> {
     if (exportByteStash.has(sessionId)) {
         return Promise.reject(new Error(
-            `exportDiskToBytesSession: sessionId ${sessionId} already in use`));
+            `exportPoolToBytesSession: sessionId ${sessionId} already in use`));
     }
     return _assembleEnvelopeStaged(metadataJson, kWrapView)
         .then(async ({ blob, stagingFile }) => {
@@ -339,7 +339,7 @@ function _assembleEnvelopeStaged(
                 streamHandlers.delete(streamId);
                 if (stagingFile === undefined || files === undefined) {
                     reject(new Error(
-                        'exportDiskToStaging: streamDone missing stagingFile/files'));
+                        'exportPoolToStaging: streamDone missing stagingFile/files'));
                     return;
                 }
                 stagedExportFile(stagingFile)
@@ -374,7 +374,7 @@ function _assembleEnvelopeStaged(
         worker!.postMessage(
             {
                 streamId,
-                data: { type: 'exportDiskToStaging' },
+                data: { type: 'exportPoolToStaging' },
                 binaryPayload: kWrap.buffer,
             },
             [kWrap.buffer],
@@ -383,10 +383,10 @@ function _assembleEnvelopeStaged(
 }
 
 /**
- * Compose the v3 EncryptedDiskEnvelope wire shape as a Blob — small
+ * Compose the v3 EncryptedPoolEnvelope wire shape as a Blob — small
  * positional header bytes + per-DB Blob parts. Wire layout matches the
  * MessagePack-CSharp [Key(N)] positional record decoded by
- * <c>ImportDiskAsync</c>:
+ * <c>ImportPoolGuidedFromStreamAsync</c>:
  *
  *   [0] Version (uint)
  *   [1] AadVersion (str)
@@ -505,21 +505,21 @@ function blobSessionPartsRef(sessionId: number): BlobPart[] {
 // ---------------------------------------------------------------------------
 
 /** JSImport entry — preflight: AEAD-verify slot 0 of every file under K_wrap. */
-export function importDiskStreamPreflightFromSession(
+export function importPoolStreamPreflightFromSession(
     sessionId: number,
     kWrapView: IMemoryView,
 ): Promise<number> {
-    return _sendImportDiskStreamSession(
-        'importDiskStreamPreflight', sessionId, kWrapView);
+    return _sendImportPoolStreamSession(
+        'importPoolStreamPreflight', sessionId, kWrapView);
 }
 
 /** JSImport entry — commit: re-stream the envelope, decrypt under K_wrap, re-encrypt under globalKey. */
-export function importDiskStreamCommitFromSession(
+export function importPoolStreamCommitFromSession(
     sessionId: number,
     kWrapView: IMemoryView,
 ): Promise<number> {
-    return _sendImportDiskStreamSession(
-        'importDiskStreamCommit', sessionId, kWrapView);
+    return _sendImportPoolStreamSession(
+        'importPoolStreamCommit', sessionId, kWrapView);
 }
 
 /**
@@ -683,8 +683,8 @@ export function importDatabaseFromSession(
     });
 }
 
-function _sendImportDiskStreamSession(
-    type: 'importDiskStreamPreflight' | 'importDiskStreamCommit',
+function _sendImportPoolStreamSession(
+    type: 'importPoolStreamPreflight' | 'importPoolStreamCommit',
     sessionId: number,
     kWrapView: IMemoryView,
 ): Promise<number> {
@@ -732,15 +732,15 @@ export { downloadStagedExport };
     initializeBridge,
     sendToWorker,
     sendBinaryToWorker,
-    exportDiskToDownload,
-    exportDiskToBytesSession,
+    exportPoolToDownload,
+    exportPoolToBytesSession,
     readExportBytes,
     discardExportBytes,
     blobSessionOpen,
     blobSessionAppend,
     blobSessionDiscard,
-    importDiskStreamPreflightFromSession,
-    importDiskStreamCommitFromSession,
+    importPoolStreamPreflightFromSession,
+    importPoolStreamCommitFromSession,
     importDatabaseFromSession,
     importDatabasesFromSession,
     exportDatabaseToDownload,

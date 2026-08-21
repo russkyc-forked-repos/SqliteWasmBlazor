@@ -94,7 +94,7 @@ await host.Services.InitializeSqliteWasmAsync();
 
 // Boot setup is conditional on disk state. The on-disk passkey manifest is
 // the source of truth for "is this VFS encrypted?" — wiping it (the old
-// boot ResetDiskAsync did this) would orphan any persisted ciphertext
+// boot ResetPoolAsync did this) would orphan any persisted ciphertext
 // across an F5 reload. Same story for the TodoDb EnsureDeletedAsync: a
 // fresh plain-recreate of TodoDb in an otherwise-encrypted pool would
 // break the disk-as-unit invariant. So we only do the destructive

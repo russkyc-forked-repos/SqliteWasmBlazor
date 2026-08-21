@@ -152,7 +152,7 @@ layer.
 ## Key lifecycle (direct key path)
 
 ```
-Caller supplies 32-byte disk key (PRF-derived, or otherwise)
+Caller supplies 32-byte pool key (PRF-derived, or otherwise)
    │
    ▼
 IEncryptedSqliteWasmDatabaseService.UnlockAsync(key)
@@ -169,7 +169,7 @@ SqliteWasmWorkerBridge (C#)
 Worker 'setGlobalEncryptionKey' handler
    │   unpackVfsKeyHeader(bytes) → validates version + aad version
    │   close every open DB for page-cache coherence
-   │   setGlobalKey(key) ← one worker-wide key for the virtual disk
+   │   setGlobalKey(key) ← one worker-wide key for the whole pool
    ▼
 SqliteWasmConnection.OpenAsync
    │   → bridge.OpenDatabaseAsync(db) (no key envelope)
@@ -196,7 +196,7 @@ Zeroization touchpoints:
 
 ## Key lifecycle (PRF / DomainKeys path)
 
-The recommended flow for app-supplied keys: derive one 32-byte VFS disk key
+The recommended flow for app-supplied keys: derive one 32-byte VFS pool key
 from a WebAuthn PRF credential via `PrfService.DeriveDomainKeyAsync("vfs",
 "sqlite-vfs:globalKey:v1")`, install it as the worker global key, then open
 DBs without key envelopes. The passkey hint is written only by
@@ -225,7 +225,7 @@ SecureKeyCache.TryGet(handle)
 Worker 'setGlobalEncryptionKey' handler
    │   unpackVfsKeyHeader → 32-byte key
    │   setGlobalKey(key)
-   │   readDiskManifest(verifyMac=true)
+   │   readPoolManifest(verifyMac=true)
    │   reject unlock if PFAM HMAC does not verify under key
    ▼
 EF resolves DbContextFactory<TContext>
@@ -414,5 +414,5 @@ encryption layer does not introduce new concurrency concerns.
 - `src/Base/SqliteWasmBlazor/TypeScript/worker/sqlite-worker.ts` — `setGlobalEncryptionKey`, `openDatabase`, import preflight, `unpackVfsKeyHeader`.
 - `src/Crypto/SqliteWasmBlazor.Crypto/Models/VfsKeyHeader.cs` — C# envelope with `Clear()` zeroization.
 - `src/Crypto/SqliteWasmBlazor.Crypto/Services/EncryptedSqliteWasmWorkerBridge.cs` — `SetEncryptionKeyAsync`, `VerifyEncryptedImportAsync`.
-- `src/Crypto/SqliteWasmBlazor.Crypto/Services/EncryptedSqliteWasmDatabaseService.cs` — disk lifecycle and whole-disk import/export.
+- `src/Crypto/SqliteWasmBlazor.Crypto/Services/EncryptedSqliteWasmDatabaseService.cs` — pool lifecycle and whole-pool import/export.
 - `src/Base/SqliteWasmBlazor/TypeScript-Crypto/src/crypto-core/chacha20Poly1305.ts` — AEAD wrapper over `@awasm/noble`.

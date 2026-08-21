@@ -14,13 +14,13 @@ with [Tamarin Prover](https://tamarin-prover.com/).
   rekey.
 - `vfs-tamarin/vfs-inplace-lifecycle.spthy` — operational wrapper around export
   and in-place conversion: source-shape preconditions, worker global-key
-  lifecycle, temp/backup replacement, rollback, and disk-level
+  lifecycle, temp/backup replacement, rollback, and pool-level
   decrypt-to-plain key purge.
 - `vfs-tamarin/vfs-cache-import-lifecycle.spthy` — PRF seed / JS key-cache
   expiry, `KeyCacheStrategy.NONE` one-shot consumption, manifest-MAC-verified
-  unlock, lock-on-expiry, deferred manifest persistence, and whole-disk import
+  unlock, lock-on-expiry, deferred manifest persistence, and whole-pool import
   wipe-after-validate (pool wipe only after full-source validation; invalid
-  sources rejected with the disk untouched).
+  sources rejected with the pool untouched).
 
 ## Running
 

@@ -23,12 +23,12 @@ internal sealed partial class SqliteWasmWorkerBridge
     ///
     /// Opaque imports are subject to refuse-on-existing + verify-on-write:
     /// the worker rejects writes over an existing DB at this path
-    /// (<see cref="DiskImportResult.EXISTING_DB_REFUSED"/>) and, when an
+    /// (<see cref="PoolImportResult.EXISTING_DB_REFUSED"/>) and, when an
     /// encryption key is registered, AEAD-tests slot 0 of the freshly written
     /// DB. A failed verify rolls back the import (unlinks the file) and
-    /// returns <see cref="DiskImportResult.WRONG_KEY"/>.
+    /// returns <see cref="PoolImportResult.WRONG_KEY"/>.
     /// </summary>
-    public async Task<DiskImportResult> ImportDatabaseAsync(
+    public async Task<PoolImportResult> ImportDatabaseAsync(
         string databaseName,
         byte[] data,
         CancellationToken cancellationToken = default)
@@ -85,9 +85,9 @@ internal sealed partial class SqliteWasmWorkerBridge
             // 0 = OK, 1 = WRONG_KEY (rolled back), 2 = EXISTING_DB_REFUSED.
             return result.RowsAffected switch
             {
-                0 => DiskImportResult.OK,
-                1 => DiskImportResult.WRONG_KEY,
-                2 => DiskImportResult.EXISTING_DB_REFUSED,
+                0 => PoolImportResult.OK,
+                1 => PoolImportResult.WRONG_KEY,
+                2 => PoolImportResult.EXISTING_DB_REFUSED,
                 var other => throw new InvalidOperationException(
                     $"Worker returned unexpected import outcome code {other}"),
             };
@@ -131,7 +131,7 @@ internal sealed partial class SqliteWasmWorkerBridge
         // decrypt slots to plain pages — refuse up front with the same
         // guard the SQL path uses instead of surfacing a worker slot-size
         // error.
-        ThrowIfDiskLocked($"ExportDatabaseToDownload('{databaseName}')");
+        ThrowIfPoolLocked($"ExportDatabaseToDownload('{databaseName}')");
 
         var request = new { type = "exportDbToStaging", database = databaseName };
         var result = await SendRequestAsync(request, cancellationToken);

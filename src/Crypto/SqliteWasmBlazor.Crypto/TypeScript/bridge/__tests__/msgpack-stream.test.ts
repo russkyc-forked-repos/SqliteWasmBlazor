@@ -86,7 +86,7 @@ describe('msgpack-stream packers', () => {
             ...packStr('wrapNonceB64'),     // wrappedContentKeyNonce
             ...packStr('credIdHintB64'),    // credentialIdHint
             packArrayHeader(1),             // files
-            packArrayHeader(2),             //   one EncryptedDiskFile
+            packArrayHeader(2),             //   one EncryptedPoolFile
             ...packStr('TodoDb.db'),        //     name
             packBinHeader(file0Body.length), file0Body, // bytes
         ];

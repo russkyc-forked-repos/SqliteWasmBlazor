@@ -83,7 +83,7 @@
                 // Program.cs intentionally preserves Encrypted state for
                 // the F5/demo flow, but the test runner needs a true
                 // factory reset:
-                //   1. ResetDiskAsync clears manifest + globalKey + PRF
+                //   1. ResetPoolAsync clears manifest + globalKey + PRF
                 //      cache, releases the bridge gate.
                 //   2. Delete every DB in the pool. Otherwise stale
                 //      ciphertext from a prior PrfVfsTest run sits in
@@ -93,7 +93,7 @@
                 //      they hit residual files.
                 //   3. Recreate TodoDb plain — boot's conditional
                 //      EnsureDeleted skipped this when state was Encrypted.
-                await Session.ResetDiskAsync();
+                await Session.ResetPoolAsync();
                 foreach (var name in await DatabaseService.ListDatabasesAsync())
                 {
                     try { await DatabaseService.DeleteDatabaseAsync(name); }

@@ -31,7 +31,7 @@ public partial class EncryptionModel : ObservableModel
         StatusModel statusModel,
         IStringLocalizer<EncryptionModel> localizer);
 
-    public partial EncryptedDiskState? State { get; set; }
+    public partial EncryptedPoolState? State { get; set; }
     public partial string PastedRecipientKey { get; set; } = string.Empty;
     public partial string? PastedRecipientError { get; set; }
 
@@ -62,6 +62,21 @@ public partial class EncryptionModel : ObservableModel
     /// <summary>True when the VFS is encrypted but the worker has no global key.</summary>
     public bool IsLocked => State is { Encrypted: true, Unlocked: false };
 
+    /// <summary>
+    /// Button label for <see cref="Reset"/>. A plain pool only loses its
+    /// databases; an encrypted one loses the passkey binding with them, and
+    /// the button has to say so before it is clicked. A state that could not
+    /// be read yet falls to the encrypted wording — the heavier warning is
+    /// the safe default when the pool's state is unknown.
+    /// </summary>
+    public string ResetLabel => IsPlain ? Localizer["Btn_Reset"] : Localizer["Btn_ResetEncrypted"];
+
+    /// <summary>Hint copy paired with <see cref="ResetLabel"/>.</summary>
+    public string ResetHint => IsPlain ? Localizer["Hint_ResetPlain"] : Localizer["Hint_ResetEncrypted"];
+
+    /// <summary>Confirmation-dialog body paired with <see cref="ResetLabel"/>.</summary>
+    public string ResetConfirmation => IsPlain ? Localizer["Confirm_Reset"] : Localizer["Confirm_ResetEncrypted"];
+
     [ObservableCommand(nameof(RefreshAsync))]
     public partial IObservableCommandAsync Refresh { get; }
 
@@ -85,18 +100,18 @@ public partial class EncryptionModel : ObservableModel
     // Encrypted-disk envelope ops. Encrypted+Unlocked only. Two flavours:
     // backup (verbatim ciphertext under current K, no re-encryption cost)
     // and recipient share (rekey to recipient K).
-    [ObservableCommand(nameof(ExportDiskBackupAsync), nameof(CanExportDisk), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync ExportDiskBackup { get; }
+    [ObservableCommand(nameof(ExportPoolBackupAsync), nameof(CanExportPool), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync ExportPoolBackup { get; }
 
-    [ObservableCommand(nameof(ExportDiskForRecipientAsync), nameof(CanExportDiskForRecipient), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync ExportDiskForRecipient { get; }
+    [ObservableCommand(nameof(ExportPoolForRecipientAsync), nameof(CanExportPoolForRecipient), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync ExportPoolForRecipient { get; }
 
     // Replaces the entire pool. Caller (page partial) owns the destructive
     // confirmation dialog; parameter is the picked file itself — the model
     // streams it into the JS-side BlobSession one ArrayPool chunk at a time
     // so C# managed heap stays bounded regardless of envelope size.
-    [ObservableCommand(nameof(ImportDiskCmdAsync), nameof(CanImportDisk), nameof(FormatOperationError))]
-    public partial IObservableCommandAsync<IBrowserFile> ImportDisk { get; }
+    [ObservableCommand(nameof(ImportPoolCmdAsync), nameof(CanImportPool), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<IBrowserFile> ImportPool { get; }
 
     // Unified plain export. Reads <see cref="SelectedDatabases"/> and
     // dispatches by cardinality: 1 → vanilla .db download; ≥ 2 →
@@ -134,15 +149,15 @@ public partial class EncryptionModel : ObservableModel
     private bool CanLeaveEncrypted() => IsUnlocked;
     private bool CanLock() => IsUnlocked;
     private bool CanSignOut() => IsPlain && !string.IsNullOrEmpty(Auth.PublicKey);
-    private bool CanExportDisk() => IsUnlocked;
-    private bool CanExportDiskForRecipient() => IsUnlocked && TryGetPastedRecipientIdentity() is not null;
+    private bool CanExportPool() => IsUnlocked;
+    private bool CanExportPoolForRecipient() => IsUnlocked && TryGetPastedRecipientIdentity() is not null;
 
     // Guided import rebinds the disk to the import's credential — only
     // valid from Plain (no current binding) or Locked (binding exists but
     // worker key not installed). Unlocked is rejected: switching credentials
     // mid-session would orphan in-flight EF contexts and is conceptually a
     // Reset+Import, not an Import.
-    private bool CanImportDisk() => IsPlain || IsLocked;
+    private bool CanImportPool() => IsPlain || IsLocked;
 
     // Plain export needs at least one DB selected and a disk state that can
     // produce plain pages. Plain disks emit verbatim; Encrypted+Unlocked
@@ -243,7 +258,7 @@ public partial class EncryptionModel : ObservableModel
     // matching wrap key. The credentialId stamped into the envelope is the
     // caller's own, so the guided import drives WebAuthn back to the same
     // passkey on restore.
-    private async Task ExportDiskBackupAsync(CancellationToken cancellationToken)
+    private async Task ExportPoolBackupAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(Auth.PublicKey))
         {
@@ -257,25 +272,25 @@ public partial class EncryptionModel : ObservableModel
         }
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-backup-{stamp}.eds";
-        await Session.ExportDiskToPubkeyAndDownloadAsync(
+        await Session.ExportPoolToPubkeyAndDownloadAsync(
             fileName, Auth.PublicKey, Auth.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExported", fileName],
-            nameof(ExportDiskBackup));
+            Localizer["Status_PoolExported", fileName],
+            nameof(ExportPoolBackup));
     }
 
-    private async Task ExportDiskForRecipientAsync(CancellationToken cancellationToken)
+    private async Task ExportPoolForRecipientAsync(CancellationToken cancellationToken)
     {
         var recipient = TryGetPastedRecipientIdentity()
             ?? throw new InvalidOperationException(
                 "Pasted recipient identity is missing or invalid.");
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var fileName = $"disk-recipient-{stamp}.eds";
-        await Session.ExportDiskToPubkeyAndDownloadAsync(
+        await Session.ExportPoolToPubkeyAndDownloadAsync(
             fileName, recipient.PublicKey, recipient.CredentialId, cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DiskExportedForRecipient", fileName],
-            nameof(ExportDiskForRecipient));
+            Localizer["Status_PoolExportedForRecipient", fileName],
+            nameof(ExportPoolForRecipient));
     }
 
     /// <summary>
@@ -323,18 +338,18 @@ public partial class EncryptionModel : ObservableModel
 
     /// <summary>
     /// Guided import — collapses the recipient ritual (Reset → EnterEncrypted
-    /// → ImportDisk) into one orchestrated call. The picked file's stream is
+    /// → ImportPool) into one orchestrated call. The picked file's stream is
     /// shipped to the JS-side BlobSession one ArrayPool chunk at a time; the
     /// worker re-streams it for AEAD preflight + per-slot rekey commit.
     /// C# managed heap peak stays at one chunk (~1 MB).
     ///
     /// Flow: peek envelope header (first ~4 KB only) → read CredentialIdHint
     /// → drive WebAuthn pinned to that passkey → derive VFS key from the
-    /// freshly-cached PRF seed → call Session.ImportDiskGuidedFromStreamAsync.
+    /// freshly-cached PRF seed → call Session.ImportPoolGuidedFromStreamAsync.
     /// The PRF cache stays populated through the service call so the
     /// envelope's ECIES K_wrap can be unwrapped under the same seed.
     /// </summary>
-    private async Task ImportDiskCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
+    private async Task ImportPoolCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
     {
         if (file is null || file.Size == 0)
         {
@@ -401,17 +416,17 @@ public partial class EncryptionModel : ObservableModel
             // chunk at a time, then drives preflight + commit.
             await using var importStream = file.OpenReadStream(
                 maxAllowedSize: file.Size, cancellationToken);
-            var result = await Session.ImportDiskGuidedFromStreamAsync(
+            var result = await Session.ImportPoolGuidedFromStreamAsync(
                 importStream, file.Size, vfsKey, hint, cancellationToken);
-            if (result == DiskImportResult.WRONG_KEY)
+            if (result == PoolImportResult.WRONG_KEY)
             {
                 throw new InvalidOperationException(
                     "Imported envelope's wrap key did not verify under the recipient's PRF-derived priv key " +
                     "(envelope was sealed for a different pubkey than the one the chosen passkey derives).");
             }
-            if (result != DiskImportResult.OK)
+            if (result != PoolImportResult.OK)
             {
-                throw new InvalidOperationException($"ImportDisk failed: {result}");
+                throw new InvalidOperationException($"ImportPool failed: {result}");
             }
         }
         finally
@@ -425,7 +440,7 @@ public partial class EncryptionModel : ObservableModel
         Auth.ApplyImportedSession(hint, importedPublicKey);
 
         await RefreshAsync(cancellationToken);
-        StatusModel.AddSuccess(Localizer["Status_DiskImported"], nameof(ImportDisk));
+        StatusModel.AddSuccess(Localizer["Status_PoolImported"], nameof(ImportPool));
     }
 
     /// <summary>
@@ -552,8 +567,8 @@ public partial class EncryptionModel : ObservableModel
     private async ValueTask<byte[]> DeriveVfsKeyAsync()
     {
         var derive = await PrfService.DeriveDomainKeyAsync(
-            EncryptedDiskLifecycle.VfsDomainId,
-            EncryptedDiskLifecycle.VfsHkdfContext);
+            EncryptedPoolLifecycle.VfsDomainId,
+            EncryptedPoolLifecycle.VfsHkdfContext);
         if (!derive.Success || derive.Value is null)
         {
             throw new InvalidOperationException(

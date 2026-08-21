@@ -39,6 +39,58 @@ The ADO layer binds every `Guid` as uppercase TEXT, and EF Core generates its li
 - **Action required:** databases populated by an earlier bulk import still hold the old representation. Those rows have to be re-imported; queries that don't filter on the key keep working, key-addressed ones don't.
 - New TestApp coverage reaches an imported row by key (`BulkImport_RowsAreEfAddressable`) — the gap that let this ship.
 
+### Naming: the Encryption Unit Is a Pool of Databases, Not a "Disk"
+
+The API called its unit of encryption a *disk*, and the UI said the same in
+English and German. Neither was accurate. What the library stores into is an
+OPFS SAHPool: a fixed set of pre-allocated, opaquely-named OPFS files, each
+carrying the logical path SQLite thinks it is using in a plaintext header
+sector. There is no directory tree and no file-system semantics — the database
+names a user sees exist only as strings inside those headers. The unit that
+gets encrypted, locked and bound to a passkey is all of them together, which
+is what needed a noun.
+
+Every `Disk`-named symbol becomes `Pool`. `Databases` was not available: the
+per-selection `ExportDatabases` / `ImportDatabases` commands already mean
+something different.
+
+- **Breaking, public API:** `EncryptedDiskState` → `EncryptedPoolState`,
+  `DiskImportResult` → `PoolImportResult`, `DiskLockedException` →
+  `PoolLockedException`, `ResetDiskAsync` → `ResetPoolAsync`,
+  `ImportDiskGuidedFromStreamAsync` → `ImportPoolGuidedFromStreamAsync`,
+  `ExportDiskToPubkeyAndDownloadAsync` → `ExportPoolToPubkeyAndDownloadAsync`.
+- **Breaking, host registration:** `UseEncryptedDiskLifecycle()` →
+  `UseEncryptedPoolLifecycle()`. One call site in a typical `Program.cs`.
+- **Breaking, `EncryptionModel` commands:** `ImportDisk` → `ImportPool`,
+  `ExportDiskBackup` → `ExportPoolBackup`, `ExportDiskForRecipient` →
+  `ExportPoolForRecipient`, with their `CanX` companions.
+- The worker protocol moves with it — the `[JSImport]` names and the
+  `readDiskManifest` / `writeDiskManifest` / `clearDiskManifest` message types
+  are renamed on both sides at once. Consumers who only use the C# API are
+  unaffected; anyone driving the worker directly is not.
+- The `.db` / `.dbs` / `.eds` file extensions are **unchanged**. Renaming
+  `.eds` would orphan every backup already exported.
+
+**UI copy no longer names the container at all.** It says what the user has —
+"all databases" / "alle Datenbanken" — because a pool is an implementation
+detail and a user has databases, not a storage substrate. Only the file
+extensions survive as technical terms. German copy dropped *Festplatte*
+outright, which described a hard drive.
+
+### Demo: One Reset, Reachable When It Is Actually Needed
+
+The demo had two resets. The Administration page's sat inside
+`<AuthorizeView Policy="DatabaseOpen">` and fired on a single unconfirmed
+click; the encryption page had a second one, worded differently. The gated one
+was unreachable in precisely the situation a reset exists for: an encrypted
+pool whose passkey is gone can never satisfy that policy.
+
+Both collapse into one command on the Administration page, outside the policy
+gate, in its own card away from the row of todo-maintenance buttons it used to
+sit in, behind the destructive-confirm dialog. Its label, hint and confirmation
+follow the encryption state — an encrypted pool loses its key along with its
+data, and the button now says so before it is clicked.
+
 ### Formal Verification (Tamarin)
 
 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover.
