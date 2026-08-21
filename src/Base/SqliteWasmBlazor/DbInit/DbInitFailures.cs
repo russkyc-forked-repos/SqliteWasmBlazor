@@ -9,6 +9,7 @@ namespace SqliteWasmBlazor;
 /// </summary>
 public sealed record TabLockedFailure(string DatabaseName) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         "Database is locked by another browser tab. Close any other tab running this application and reload the page.";
 }
@@ -23,6 +24,7 @@ public sealed record SchemaIncompatibleFailure(
     string DatabaseName,
     IReadOnlyList<SchemaMismatch> Mismatches) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         "Database schema is incompatible with the current application version. Reset the database to recreate it with the correct schema.";
 }
@@ -33,6 +35,7 @@ public sealed record SchemaIncompatibleFailure(
 /// </summary>
 public sealed record TimeoutFailure(string DatabaseName) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         "Database initialization timed out. Close any other tab running this application and reload the page.";
 }
@@ -45,6 +48,7 @@ public sealed record TimeoutFailure(string DatabaseName) : IDbInitFailure
 /// </summary>
 public sealed record PrfUnavailableFailure(string DatabaseName) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         "No encryption key is available — passkey/PRF could not be obtained from the browser.";
 }
@@ -55,6 +59,7 @@ public sealed record PrfUnavailableFailure(string DatabaseName) : IDbInitFailure
 /// </summary>
 public sealed record PrfCredentialMismatchFailure(string DatabaseName) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         "The supplied key does not match the existing encrypted database. Either the wrong passkey was used or the file is corrupted.";
 }
@@ -66,6 +71,7 @@ public sealed record PrfCredentialMismatchFailure(string DatabaseName) : IDbInit
 /// </summary>
 public sealed record VfsInstallFailure(string DatabaseName, Exception Exception) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         $"Encrypted VFS install failed: {Exception.Message}";
 }
@@ -77,6 +83,7 @@ public sealed record VfsInstallFailure(string DatabaseName, Exception Exception)
 /// </summary>
 public sealed record GenericInitFailure(string DatabaseName, Exception Exception) : IDbInitFailure
 {
+    /// <inheritdoc />
     public string DefaultMessage =>
         $"Database initialization failed: {Exception.GetType().Name}: {Exception.Message}";
 }
@@ -103,5 +110,6 @@ public sealed record EncryptedDatabaseLockedFailure(
     // hint absent → discoverable picker). It is NOT user-facing copy; the
     // raw base64 credentialId has no meaningful display value to end users,
     // so the message stays hint-free.
+    /// <inheritdoc />
     public string DefaultMessage => "Database is encrypted — sign in to unlock.";
 }
