@@ -318,11 +318,25 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// to <paramref name="databaseName"/>. Existing same-name DB is
     /// replaced.
     /// </para>
+    /// <para>
+    /// <b>Staged import.</b> Pass <paramref name="validateStaged"/> to see
+    /// the imported database before it replaces anything: the bytes land
+    /// under a staging pool name, the delegate is called with that name —
+    /// long enough to open it with an ordinary connection string and check
+    /// whatever the caller considers identity (its tables, its migration
+    /// history) — and only a delegate that returns without throwing lets the
+    /// promotion happen. A delegate that throws propagates, the staging
+    /// entry is dropped, and <paramref name="databaseName"/> is exactly as
+    /// it was. This is what keeps a <c>.db</c> file from landing in a
+    /// database it does not belong to; without it the file is promoted
+    /// unconditionally.
+    /// </para>
     /// </summary>
     Task ImportDatabaseFromStreamAsync(
         string databaseName,
         Stream stream,
         long size,
+        Func<string, CancellationToken, ValueTask>? validateStaged = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -116,13 +116,17 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ImportPoolCmdAsync), null, nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportPool { get; }
 
-    // Unified plain export. Reads <see cref="SelectedDatabases"/> and
-    // dispatches by cardinality: 1 → vanilla .db download; ≥ 2 →
-    // streaming .dbs envelope (MessagePack array of [name, bytes],
-    // no compression). Plain disk emits verbatim; Encrypted+Unlocked
-    // decrypts slot-by-slot before emit; Encrypted+Locked is refused
-    // (CanExportDatabases gates).
-    [ObservableCommand(nameof(ExportDatabasesCmdAsync), nameof(CanExportDatabases), nameof(FormatOperationError))]
+    // Per-row plain export: one database as a vanilla .db file any SQLite
+    // tool opens. Plain disk emits verbatim; Encrypted+Unlocked decrypts
+    // slot-by-slot before emit; Encrypted+Locked is refused.
+    [ObservableCommand(nameof(ExportDatabaseCmdAsync), nameof(CanExportDatabases), nameof(FormatOperationError))]
+    public partial IObservableCommandAsync<string> ExportDatabase { get; }
+
+    // Bundle export: the ticked databases as one streaming .dbs envelope
+    // (MessagePack array of [name, bytes], no compression). Only meaningful
+    // for two or more — a single database is the row's own export button,
+    // which produces a file SQLite can open directly.
+    [ObservableCommand(nameof(ExportDatabasesCmdAsync), nameof(CanExportBundle), nameof(FormatOperationError))]
     public partial IObservableCommandAsync ExportDatabases { get; }
 
     // Single-DB plain import: streaming write into the database the picked
@@ -157,11 +161,15 @@ public partial class EncryptionModel : ObservableModel
     private bool CanExportPool() => IsUnlocked;
     private bool CanExportPoolForRecipient() => IsUnlocked && TryGetPastedRecipientIdentity() is not null;
 
-    // Plain export needs at least one DB selected and a disk state that can
-    // produce plain pages. Plain pools emit verbatim; Encrypted+Unlocked
-    // decrypts on read. Locked has no key to decrypt with — refuse.
-    private bool CanExportDatabases() =>
-        (IsPlain || IsUnlocked) && SelectedDatabases.Count > 0;
+    // Plain export needs a disk state that can produce plain pages. Plain
+    // pools emit verbatim; Encrypted+Unlocked decrypts on read. Locked has
+    // no key to decrypt with — refuse.
+    private bool CanExportDatabases() => IsPlain || IsUnlocked;
+
+    // The bundle is the multi-database shape; below two ticks the row's own
+    // export is the better file, so the command stays disabled.
+    private bool CanExportBundle() =>
+        CanExportDatabases() && SelectedDatabases.Count >= 2;
 
     // Plain import (single .db or multi-DB .dbs envelope) needs a writable
     // state. Plain writes plain pages; Encrypted+Unlocked rekey-on-writes.
@@ -306,45 +314,48 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Unified plain-export command. One picked DB → vanilla <c>.db</c>
-    /// download (filename = <c>{stem}-{stamp}.db</c>); multiple DBs →
-    /// streaming <c>.dbs</c> envelope (filename =
-    /// <c>databases-{stamp}.dbs</c>). Plain pools emit verbatim;
-    /// Encrypted+Unlocked decrypts each file slot-by-slot so downloads are
-    /// vanilla SQLite any tool can open. The service primitive
-    /// (<c>ExportDatabasesToDownloadAsync</c>) handles single-vs-multi
-    /// dispatch internally; we only choose the filename + status string.
+    /// Per-row plain export — one database as <c>{stem}-{stamp}.db</c>, the
+    /// format <c>sqlite3 file.db</c> opens directly. Plain pools emit
+    /// verbatim; Encrypted+Unlocked decrypts each slot on read.
+    /// </summary>
+    private async Task ExportDatabaseCmdAsync(
+        string databaseName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            throw new InvalidOperationException(
+                "databaseName must be non-empty.");
+        }
+        var stem = databaseName.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
+            ? databaseName[..^3]
+            : databaseName;
+        var fileName = $"{stem}-{DateTime.Now:yyyyMMdd-HHmmss}.db";
+        await Session.ExportDatabaseToDownloadAsync(databaseName, fileName, cancellationToken);
+        StatusModel.AddSuccess(
+            Localizer["Status_SingleDbExported", databaseName, fileName],
+            nameof(ExportDatabase));
+    }
+
+    /// <summary>
+    /// Bundle export — the ticked databases as one streaming <c>.dbs</c>
+    /// envelope (<c>databases-{stamp}.dbs</c>). Plain pools emit verbatim;
+    /// Encrypted+Unlocked decrypts each file slot-by-slot so the entries are
+    /// vanilla SQLite. Two databases minimum: one is the row's own export,
+    /// which produces a file that needs no unpacking
+    /// (<see cref="CanExportBundle"/> gates the button).
     /// </summary>
     private async Task ExportDatabasesCmdAsync(CancellationToken cancellationToken)
     {
         var picked = SelectedDatabases.ToArray();
-        if (picked.Length == 0)
+        if (picked.Length < 2)
         {
             throw new InvalidOperationException(
-                "Select at least one database before exporting.");
+                "Tick at least two databases before exporting a bundle.");
         }
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string fileName;
-        string statusKey;
-        if (picked.Length == 1)
-        {
-            var dbName = picked[0];
-            var stem = dbName.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
-                ? dbName[..^3]
-                : dbName;
-            fileName = $"{stem}-{stamp}.db";
-            statusKey = "Status_SingleDbExported";
-        }
-        else
-        {
-            fileName = $"databases-{stamp}.dbs";
-            statusKey = "Status_DbsExported";
-        }
+        var fileName = $"databases-{DateTime.Now:yyyyMMdd-HHmmss}.dbs";
         await Session.ExportDatabasesToDownloadAsync(picked, fileName, cancellationToken);
         StatusModel.AddSuccess(
-            picked.Length == 1
-                ? Localizer[statusKey, picked[0], fileName]
-                : Localizer[statusKey, picked.Length, fileName],
+            Localizer["Status_DbsExported", picked.Length, fileName],
             nameof(ExportDatabases));
     }
 
@@ -490,6 +501,14 @@ public partial class EncryptionModel : ObservableModel
     /// entry no connection string points at, which is storage nothing can
     /// ever read back.
     /// </para>
+    /// <para>
+    /// The import is staged: the file lands under a temporary pool name and
+    /// the host checks it against the target's model
+    /// (<see cref="IHostDatabaseService.ValidateSchemaAsync"/>) before
+    /// anything is replaced. A TodoDb file picked on the NotesDb row is
+    /// rejected with NotesDb untouched — the file names say nothing about
+    /// what is inside, so the tables have to.
+    /// </para>
     /// </summary>
     private async Task ImportDatabaseCmdAsync(
         SingleDatabaseImport request, CancellationToken cancellationToken)
@@ -514,7 +533,11 @@ public partial class EncryptionModel : ObservableModel
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
         await Session.ImportDatabaseFromStreamAsync(
-            target, stream, file.Size, cancellationToken);
+            target,
+            stream,
+            file.Size,
+            (staged, ct) => ValidateStagedImportAsync(target, file.Name, staged, ct),
+            cancellationToken);
         // The file may carry an older schema than the app's model, and the
         // worker closed the database to swap its slot in — re-migrate before
         // the next query reopens it.
@@ -523,6 +546,28 @@ public partial class EncryptionModel : ObservableModel
         StatusModel.AddSuccess(
             Localizer["Status_SingleDbImported", target],
             nameof(ImportDatabase));
+    }
+
+    /// <summary>
+    /// Host schema gate for a staged import, with the file and target names
+    /// folded into the message. The host's check knows which tables are
+    /// missing but not which file the user picked or which row they picked
+    /// it on — and that is the part that tells them what to do differently.
+    /// Only a validation failure is wrapped; a truncated stream or a worker
+    /// error keeps its own diagnostic.
+    /// </summary>
+    private async ValueTask ValidateStagedImportAsync(
+        string target, string fileName, string staged, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HostDatabaseService.ValidateSchemaAsync(target, staged, cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                Localizer["Error_SchemaMismatch", fileName, target, ex.Message], ex);
+        }
     }
 
     /// <summary>

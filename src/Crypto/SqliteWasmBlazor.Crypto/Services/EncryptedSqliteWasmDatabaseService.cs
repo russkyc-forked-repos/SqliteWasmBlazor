@@ -1122,11 +1122,18 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// size. The picked file's bytes are streamed into the JS-side
     /// BlobSession; the worker reads them via <c>blob.stream()</c> and
     /// writes a temp SAH slot via writeFileSlice + atomicReplaceFile.
+    ///
+    /// <paramref name="validateStaged"/> turns this into a staged import:
+    /// the bytes land under a staging name, the delegate gets to open that
+    /// database and decide, and only then is it promoted over
+    /// <paramref name="databaseName"/>. A delegate that throws leaves the
+    /// target exactly as it was.
     /// </summary>
     public async Task ImportDatabaseFromStreamAsync(
         string databaseName,
         Stream stream,
         long size,
+        Func<string, CancellationToken, ValueTask>? validateStaged = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(databaseName))
@@ -1149,11 +1156,61 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "a different credential.");
         }
 
-        // atomicReplaceFile frees the target's current SAH at commit time;
-        // an open handle would keep serving its pages. The worker closes
-        // the DB itself — this keeps the C# open-set mirror in step.
-        await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
+        if (validateStaged is null)
+        {
+            // atomicReplaceFile frees the target's current SAH at commit
+            // time; an open handle would keep serving its pages. The worker
+            // closes the DB itself — this keeps the C# open-set mirror in
+            // step.
+            await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
+            await StreamIntoDatabaseAsync(databaseName, stream, size, cancellationToken);
+            return;
+        }
 
+        // Staged import. The staging name is a normal pool entry, so the
+        // validator can open it with an ordinary connection string — on an
+        // encrypted pool it was written under globalKey like any other
+        // database, so it reads back the same way.
+        var staged = $"{databaseName}{StagedImportSuffix}";
+        await _bridge.DeleteDatabaseAsync(staged, cancellationToken);
+        try
+        {
+            await StreamIntoDatabaseAsync(staged, stream, size, cancellationToken);
+            await validateStaged(staged, cancellationToken);
+        }
+        catch
+        {
+            // Nothing has touched databaseName yet, so dropping the staging
+            // entry restores the pool to its pre-import content.
+            await _bridge.DeleteDatabaseAsync(staged, cancellationToken);
+            throw;
+        }
+
+        // One worker message so C# never observes the pool between the
+        // target's removal and the staging entry taking its place.
+        await _bridge.CloseDatabaseAsync(staged, cancellationToken);
+        await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
+        await _encryptedBridge.PromoteDatabaseAsync(staged, databaseName, cancellationToken);
+    }
+
+    /// <summary>
+    /// Pool-name suffix for a staged import. Visible in the pool only while
+    /// an import is in flight — promoted on success, deleted on failure.
+    /// </summary>
+    private const string StagedImportSuffix = ".staged-import";
+
+    /// <summary>
+    /// Ship <paramref name="stream"/> into <paramref name="targetName"/> one
+    /// ArrayPool chunk at a time via a JS-side BlobSession. The worker writes
+    /// a temp SAH slot and promotes it, so a mid-stream failure leaves
+    /// <paramref name="targetName"/> untouched.
+    /// </summary>
+    private async Task StreamIntoDatabaseAsync(
+        string targetName,
+        Stream stream,
+        long size,
+        CancellationToken cancellationToken)
+    {
         var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
         try
@@ -1185,11 +1242,12 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             }
 
             var result = await SqliteWasmWorkerBridge.ImportDatabaseFromSessionAsync(
-                sessionId, databaseName);
+                sessionId, targetName);
             if (result != (int)PoolImportResult.OK)
             {
                 throw new InvalidOperationException(
-                    $"ImportDatabaseFromStreamAsync: worker returned result={result}.");
+                    $"ImportDatabaseFromStreamAsync: worker returned result={result} " +
+                    $"for '{targetName}'.");
             }
         }
         finally

@@ -58,6 +58,30 @@ public interface IHostDatabaseService
     /// re-created before the next query hits it.
     /// </summary>
     ValueTask MigrateAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Decide whether the database at <paramref name="probeDatabaseName"/>
+    /// is a valid stand-in for <paramref name="ownedDatabaseName"/>, and
+    /// throw if it is not. Called on a staged import — the probe database
+    /// holds the picked file's content under a temporary pool name, and the
+    /// import is only promoted if this returns.
+    ///
+    /// <para>
+    /// The host is the only layer that can answer this: it owns the
+    /// <c>DbContext</c> whose model says which tables the database must
+    /// have. <c>DbContext.ValidateImportedSchemaAsync</c> implements the
+    /// check; open a context bound to <paramref name="probeDatabaseName"/>
+    /// and call it. Names outside <see cref="OwnedDatabases"/> have no
+    /// model to check against — return without throwing.
+    /// </para>
+    /// </summary>
+    /// <param name="ownedDatabaseName">The database the import is destined for.</param>
+    /// <param name="probeDatabaseName">Temporary pool name holding the imported content.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    ValueTask ValidateSchemaAsync(
+        string ownedDatabaseName,
+        string probeDatabaseName,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -81,5 +105,12 @@ public sealed class NullHostDatabaseService : IHostDatabaseService
 
     /// <inheritdoc />
     public ValueTask MigrateAsync(CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
+
+    /// <inheritdoc />
+    public ValueTask ValidateSchemaAsync(
+        string ownedDatabaseName,
+        string probeDatabaseName,
+        CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;
 }

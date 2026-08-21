@@ -963,6 +963,12 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
         case 'rename':
             return await renameDatabase(database!, (data as any).newName);
 
+        case 'promoteDatabase':
+            // Staged import commit: replace `newName` with `database` in one
+            // message, so C# never observes a pool with the target gone and
+            // the staging entry still under its own name.
+            return await promoteDatabase(database!, (data as any).newName);
+
           case 'importDb':
               if (!binaryPayload) {
                   throw new Error('importDb requires binaryPayload');
@@ -1602,6 +1608,48 @@ async function exportDatabaseVerbatim(dbName: string) {
     const raw: Uint8Array = poolUtil.exportFile(dbPath);
     logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw.length}B`);
     return { rawBinary: true, data: raw };
+}
+
+/**
+ * Promote `srcName` over `dstName` — the commit half of a staged import.
+ * Both are closed first: atomicReplaceFile hands dst's SAH back to the
+ * free list, and an OFile captures its SAH at xOpen, so a surviving handle
+ * would keep serving the replaced file's pages. SQLite deletes its own
+ * -wal/-shm on a clean close; anything left behind is unlinked here, since
+ * a stale WAL beside a freshly promoted main file is a corrupt database.
+ */
+async function promoteDatabase(srcName: string, dstName: string) {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    const srcPath = `/databases/${srcName}`;
+    const dstPath = `/databases/${dstName}`;
+    await closeDatabase(srcName);
+    await closeDatabase(dstName);
+
+    const files: string[] = poolUtil.getFileNames();
+    for (const base of [srcPath, dstPath]) {
+        for (const suffix of ['-wal', '-shm', '-journal']) {
+            if (files.includes(`${base}${suffix}`)) {
+                try { poolUtil.unlink(`${base}${suffix}`); } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    poolUtil.atomicReplaceFile(srcPath, dstPath);
+
+    // The promoted file carries its own table definitions; anything cached
+    // under either name describes a database that no longer exists there.
+    // Schema cache keys are `${dbName}:${tableName}`.
+    pragmasSet.delete(srcName);
+    pragmasSet.delete(dstName);
+    for (const key of [...schemaCache.keys()]) {
+        if (key.startsWith(`${srcName}:`) || key.startsWith(`${dstName}:`)) {
+            schemaCache.delete(key);
+        }
+    }
+    logger.info(MODULE_NAME, `✓ Promoted ${srcName} → ${dstName}`);
+    return { success: true };
 }
 
 async function renameDatabase(oldName: string, newName: string) {

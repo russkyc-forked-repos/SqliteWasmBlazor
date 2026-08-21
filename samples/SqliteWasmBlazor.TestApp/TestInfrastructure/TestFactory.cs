@@ -102,6 +102,14 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbOverOpen.Name, () => singleDbOverOpen.RunAsync()));
 
+                    // Staged import whose validator refuses the file — the
+                    // wrong-row pick. The target has to come out of it with
+                    // its own rows and no staging entry left behind.
+                    var singleDbRejected = new SingleDbStagedImportRejectedTest(
+                        prfFactory, databaseService, session);
+                    _entries.Add(new TestEntry(
+                        "VFS Encryption", singleDbRejected.Name, () => singleDbRejected.RunAsync()));
+
                     // Streaming cross-key guided import — the .eds rebind
                     // path. Plants the recipient X25519 keypair under the PRF
                     // convention id (needs IPrfService for the salt), exports

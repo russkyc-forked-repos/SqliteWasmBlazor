@@ -169,6 +169,29 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     }
 
     /// <summary>
+    /// Commit half of a staged import: replace <paramref name="targetName"/>
+    /// with <paramref name="stagedName"/> in one worker message. The worker
+    /// closes both databases, unlinks any WAL/SHM siblings and calls
+    /// <c>atomicReplaceFile</c>, so the pool is never observable with the
+    /// target gone and the staging entry still under its own name.
+    ///
+    /// <para>
+    /// Internal — the staged-import flow in
+    /// <c>ImportDatabaseFromStreamAsync</c> is the only caller.
+    /// </para>
+    /// </summary>
+    internal async Task PromoteDatabaseAsync(
+        string stagedName,
+        string targetName,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new { type = "promoteDatabase", database = stagedName, newName = targetName };
+        await _bridge.SendRequestAsync(request, cancellationToken);
+        _bridge.MarkDatabaseClosed(stagedName);
+        _bridge.MarkDatabaseClosed(targetName);
+    }
+
+    /// <summary>
     /// Read the disk-bound passkey manifest. Walks every DB in the SAHPool,
     /// pulls bytes 524..1023 of each header sector, and returns a typed state
     /// plus the (optional) body bytes.

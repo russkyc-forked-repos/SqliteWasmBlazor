@@ -50,10 +50,9 @@
   <data name="Status_SingleDbExported" xml:space="preserve"><value>{0} als {1} exportiert.</value></data>
   <data name="Status_DbsExported" xml:space="preserve"><value>{0} Datenbanken als {1} exportiert.</value></data>
   <data name="Status_DbsImported" xml:space="preserve"><value>{0} importiert; alle Datenbanken wurden durch den Inhalt der Datei ersetzt.</value></data>
-  <data name="Hint_ExportShapes" xml:space="preserve"><value>Eine Auswahl ergibt diese Datenbank als reine .db-Datei, die jedes SQLite-Werkzeug öffnet. Mehrere ergeben eine .dbs-Datei — die ausgewählten Datenbanken zusammen, die beim Import gemeinsam zurückkehren.</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Die Speichern-Schaltfläche einer Zeile schreibt diese Datenbank als reine .db-Datei, die jedes SQLite-Werkzeug öffnet. Kreuze zwei oder mehr an, um sie zusätzlich als eine .dbs-Datei zu erhalten, die gemeinsam zurückkehrt.</value></data>
   <data name="Btn_ExportPoolBackup" xml:space="preserve"><value>Alle Datenbanken sichern (verschlüsselt)</value></data>
   <data name="Btn_ExportPoolForRecipient" xml:space="preserve"><value>Alle Datenbanken für Empfänger exportieren</value></data>
-  <data name="Btn_ExportDatabases" xml:space="preserve"><value>Ausgewählte Datenbanken exportieren</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Datenbanken importieren</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>Alle Dateitypen werden in Chunks gestreamt; keine Größenbegrenzung.</value></data>
   <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Alles, was {0} derzeit enthält, wird durch den Inhalt von {1} ersetzt. Der bisherige Inhalt ist verloren, sofern er nicht vorher exportiert wurde. Fortfahren?</value></data>
@@ -72,7 +71,7 @@
   <data name="Error_PastedKey_NoCredentialId" xml:space="preserve"><value>Eingefügte Identität enthält keine WebAuthn-credentialId. Bitte den Empfänger, seine armorierte Identität von der Verschlüsselungsseite zu kopieren (ein frisch armorierter Block enthält die credentialId automatisch).</value></data>
   <data name="Error_ImportEnvelopeHasNoCredentialId" xml:space="preserve"><value>Der gewählte Umschlag hat keinen credentialId-Hinweis — er wurde mit einem älteren Exportpfad erzeugt. Bitte aus einem aktuellen Build neu exportieren.</value></data>
   <data name="Card_DatabaseListTitle" xml:space="preserve"><value>Datenbanken</value></data>
-  <data name="Hint_DatabaseRows" xml:space="preserve"><value>Eine Zeile pro Datenbank. Zum Exportieren ankreuzen, mit der Upload-Schaltfläche eine einzelne Datenbank aus einer .db-Datei ersetzen, mit der letzten Schaltfläche leeren. Nichts in einer Zeile berührt eine andere Datenbank.</value></data>
+  <data name="Hint_DatabaseRows" xml:space="preserve"><value>Eine Zeile pro Datenbank, und nichts in einer Zeile berührt eine andere. Als .db-Datei speichern, aus einer solchen ersetzen oder leeren. Das Kreuz gehört zum Bündel weiter unten.</value></data>
   <data name="Pill_NotCreated" xml:space="preserve"><value>noch nicht angelegt</value></data>
   <data name="Pill_Unused" xml:space="preserve"><value>von dieser App nicht genutzt</value></data>
   <data name="Btn_ImportIntoDatabase" xml:space="preserve"><value>{0} aus einer .db-Datei ersetzen</value></data>
@@ -96,4 +95,7 @@
   <data name="Error_Rejected_ExportNeedsUnlock" xml:space="preserve"><value>Zum Exportieren bitte anmelden und entsperren — gesperrte Datenbanken können nicht gelesen werden.</value></data>
   <data name="Error_Rejected_ImportNeedsUnlock" xml:space="preserve"><value>Zum Importieren bitte anmelden und entsperren. Eine verschlüsselte Sicherung (.eds) ist die einzige Datei, die sich im gesperrten Zustand importieren lässt.</value></data>
   <data name="Error_Rejected_GuidedImportNeedsLock" xml:space="preserve"><value>Die aktuelle Sitzung muss enden, bevor eine Sicherung mit einem anderen Passkey importiert werden kann. Erst sperren, dann erneut importieren.</value></data>
+  <data name="Btn_ExportBundle" xml:space="preserve"><value>{0} Datenbanken als eine Datei exportieren (.dbs)</value></data>
+  <data name="Btn_ExportDatabase" xml:space="preserve"><value>{0} als .db-Datei speichern</value></data>
+  <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} passt nicht zu {1}, es wurde nichts geändert: {2}</value></data>
 </root>

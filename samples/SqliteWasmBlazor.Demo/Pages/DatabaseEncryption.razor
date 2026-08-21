@@ -192,6 +192,18 @@
                             }
                         </MudStack>
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                            @* Save this one database as a plain .db file —
+                               the shape a SQLite tool opens directly. The
+                               tick box next to the name is for the bundle
+                               below, not for this button. *@
+                            <MudIconButtonAsyncRxOf T="string"
+                                                    Command="@Model.ExportDatabase"
+                                                    Parameter="@row.Name"
+                                                    Icon="@Icons.Material.Filled.SaveAlt"
+                                                    Color="Color.Default"
+                                                    Disabled="@(!row.Present)"
+                                                    title="@Model.Localizer["Btn_ExportDatabase", row.Name]"
+                                                    Size="Size.Small"/>
                             @* Per-row import: the file lands in this database,
                                so there is no name to type and no way to create
                                a stray the app will never open. *@
@@ -211,17 +223,18 @@
                                                     Command="@Model.DeleteDatabase"
                                                     Parameter="@row.Name"
                                                     ConfirmExecutionAsync="@(() => ConfirmClearDatabaseAsync(row))"
-                                                    Icon="@(row.Owned ? Icons.Material.Filled.LayersClear : Icons.Material.Filled.Delete)"
+                                                    Icon="@Icons.Material.Filled.Delete"
                                                     Color="Color.Error"
                                                     Disabled="@(!row.Present)"
+                                                    title="@(row.Owned ? Model.Localizer["Btn_ClearDatabase"] : Model.Localizer["Btn_DeleteDatabase"])"
                                                     Size="Size.Small"/>
                         </MudStack>
                     </MudStack>
                 }
             </MudStack>
 
-            @* Sits above the export button on purpose: installed on a Home
-               Screen, a finished export arrives on a full-screen OS
+            @* Sits above the export affordances on purpose: installed on a
+               Home Screen, a finished export arrives on a full-screen OS
                intermediate screen rather than as a saved file, and that
                screen covers anything we could say afterwards. The wording
                carries its own condition, so no platform sniffing is needed
@@ -230,13 +243,19 @@
                 @Model.Localizer["Hint_ExportShapes"]
                 @Model.Localizer["Hint_ExportIntermediateScreen"]
             </MudText>
-            <MudButtonAsyncRx Command="@Model.ExportDatabases"
-                              Variant="Variant.Outlined"
-                              Color="Color.Default"
-                              StartIcon="@Icons.Material.Filled.FileDownload"
-                              FullWidth="true">
-                @Model.Localizer["Btn_ExportDatabases"]
-            </MudButtonAsyncRx>
+            @* The bundle only exists above one database: a single tick is
+               better served by that row's own save button, which produces a
+               file SQLite opens without unpacking. *@
+            @if (Model.SelectedDatabases.Count >= 2)
+            {
+                <MudButtonAsyncRx Command="@Model.ExportDatabases"
+                                  Variant="Variant.Outlined"
+                                  Color="Color.Default"
+                                  StartIcon="@Icons.Material.Filled.Inventory2"
+                                  FullWidth="true">
+                    @Model.Localizer["Btn_ExportBundle", Model.SelectedDatabases.Count]
+                </MudButtonAsyncRx>
+            }
         </MudPaper>
     }
 
