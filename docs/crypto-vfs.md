@@ -270,6 +270,64 @@ the VFS adds transparently.
 
 Non-encrypted DBs keep the existing WAL-based configuration.
 
+## Import / export matrix
+
+Three file shapes cross the boundary, and they differ in how much of the
+pool they replace — not just in encoding. The scope is the thing to know
+before picking one:
+
+| File   | Replaces                       | Encryption / passkey                          |
+|--------|--------------------------------|-----------------------------------------------|
+| `.db`  | one database                   | untouched; writes are rekeyed under the pool's key |
+| `.dbs` | every database in the pool      | untouched; each entry rekeyed as it is written |
+| `.eds` | every database **and** the passkey binding | the envelope's own credential replaces the current one |
+
+What each operation needs from `EncryptedPoolState`:
+
+| Operation                | Plain | Encrypted+Unlocked | Encrypted+Locked |
+|--------------------------|-------|--------------------|------------------|
+| Export `.db` / `.dbs`    | ✅ verbatim | ✅ decrypt on read | ❌ `EXPORT_NEEDS_UNLOCK` |
+| Export `.eds`            | ❌ no key   | ✅                 | ❌ `EXPORT_NEEDS_UNLOCK` |
+| Import `.db` / `.dbs`    | ✅ plain pages | ✅ rekey on write | ❌ `PLAIN_IMPORT_NEEDS_UNLOCK` |
+| Import `.eds` (guided)   | ✅ | ⚠️ `GUIDED_IMPORT_NEEDS_LOCK` — lock first | ✅ |
+| Delete one database      | ✅ | ✅ | ❌ |
+| `EnterEncryptedAsync`    | ✅ | ❌ `ENTER_NEEDS_PLAIN` | ❌ `ENTER_NEEDS_PLAIN` |
+| `LeaveEncryptedAsync`    | ❌ `LEAVE_NEEDS_UNLOCK` | ✅ | ❌ `LEAVE_NEEDS_UNLOCK` |
+
+Refusals are `PoolOperationRejectedException`, whose `Reason` names the
+precondition (the codes above) so a UI can say what the pool needs rather
+than print a primitive's diagnostic. Nothing is written when one is
+thrown. The guided `.eds` import is the one case with a mechanical remedy
+— `LockAsync` then retry — and `EncryptionModel.ImportPool` performs it
+itself rather than reporting it.
+
+**Rollback.** Every import validates before it destroys:
+
+- `.eds` — the worker AEAD-verifies *every* slot of *every* file under
+  `K_wrap` in a preflight pass, before the pool is wiped. A crafted or
+  truncated envelope leaves the existing pool intact.
+- `.dbs` — a full read-only pass over the envelope (file count, tuple
+  arity, page alignment, SQLite magic per file, no premature EOF) runs
+  before the wipe.
+- `.db` — written to a temp SAH slot and promoted with
+  `atomicReplaceFile`, so a failure mid-stream leaves the target as it
+  was.
+
+**Open databases.** `atomicReplaceFile` hands the replaced file's SAH back
+to the pool's free list, and an `OFile` captures its SAH at `xOpen` time.
+Every import therefore closes the databases it is about to replace — in
+the worker (authoritative) and through the bridge (keeps the C# open-set
+mirror in step). Without that close, a surviving handle keeps serving
+pre-import pages and writes into a slot the pool can hand to the next
+file. Regression coverage: `SingleDb_StreamingImport_OverOpenDatabase`.
+
+**After the import.** The bytes that landed decide what the pool holds;
+the schema the app expects is whatever its model says today. Hosts
+implement `IHostDatabaseService.MigrateAsync` to re-run migrations for
+the databases they own, and the encryption panel calls it after every
+successful import — which also re-creates an owned database an import
+omitted, before the next query opens a schema-less one in its place.
+
 ## Auto-detection on import
 
 `ImportDatabaseAsync` auto-detects ciphertext vs plaintext by

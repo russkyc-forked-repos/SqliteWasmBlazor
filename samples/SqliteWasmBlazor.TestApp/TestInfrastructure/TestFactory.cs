@@ -93,6 +93,15 @@ internal class TestFactory
                     _entries.Add(new TestEntry(
                         "VFS Encryption", singleDbStreaming.Name, () => singleDbStreaming.RunAsync()));
 
+                    // Same path, but the target is OPEN when the import
+                    // commits — atomicReplaceFile frees the SAH an OFile
+                    // captured at xOpen, so the import has to close first
+                    // or every later query is served from a freed slot.
+                    var singleDbOverOpen = new SingleDbImportOverOpenDatabaseTest(
+                        prfFactory, databaseService, session);
+                    _entries.Add(new TestEntry(
+                        "VFS Encryption", singleDbOverOpen.Name, () => singleDbOverOpen.RunAsync()));
+
                     // Streaming cross-key guided import — the .eds rebind
                     // path. Plants the recipient X25519 keypair under the PRF
                     // convention id (needs IPrfService for the salt), exports

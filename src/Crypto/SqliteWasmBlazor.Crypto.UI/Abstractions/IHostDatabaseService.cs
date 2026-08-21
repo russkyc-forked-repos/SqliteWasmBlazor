@@ -1,12 +1,13 @@
 namespace SqliteWasmBlazor.Crypto.UI.Services;
 
 /// <summary>
-/// Host-supplied seam invoked by <see cref="Components.Shared.DatabaseErrorAlert"/>
-/// when the user requests recovery on a recoverable boot failure
-/// (<see cref="SchemaIncompatibleFailure"/>, <see cref="GenericInitFailure"/>,
-/// or any unmapped <see cref="IDbInitFailure"/>). The host typically deletes
-/// the affected database, re-runs migrations, and promotes
-/// <see cref="IDbInitializationStatus"/> back to <see cref="DbInitState.READY"/>.
+/// Host-supplied seam for the two things the library cannot know: which
+/// databases the app actually owns, and how to bring their schema up to
+/// date. Invoked by <see cref="Components.Shared.DatabaseErrorAlert"/> on a
+/// recoverable boot failure (<see cref="SchemaIncompatibleFailure"/>,
+/// <see cref="GenericInitFailure"/>, or any unmapped
+/// <see cref="IDbInitFailure"/>), and by the encryption panel after every
+/// operation that replaces pool content.
 ///
 /// <para>
 /// The library intentionally does not own the recovery path because the
@@ -27,11 +28,36 @@ public interface IHostDatabaseService
     bool IsAvailable { get; }
 
     /// <summary>
-    /// Perform the host-defined recovery: delete and re-migrate the
-    /// affected database, then promote the boot status back to
+    /// Names of the databases this app opens by connection string, e.g.
+    /// <c>["TodoDb.db", "NotesDb.db"]</c>. The pool can hold more entries
+    /// than this — imports and retired features leave rows behind — so the
+    /// encryption panel uses the list to tell "this app reads this one"
+    /// apart from "this is just stored here", and to keep an import from
+    /// landing on a name nothing will ever open.
+    ///
+    /// <para>
+    /// Empty when the host doesn't declare its databases; the panel then
+    /// treats every pool entry as unowned.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<string> OwnedDatabases { get; }
+
+    /// <summary>
+    /// Perform the host-defined recovery: wipe the pool, re-migrate every
+    /// owned database, then promote the boot status back to
     /// <see cref="DbInitState.READY"/>.
     /// </summary>
     ValueTask ResetAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Re-run migrations for every owned database and promote the boot
+    /// status back to <see cref="DbInitState.READY"/>, without destroying
+    /// anything. Called after an import has replaced pool content: the
+    /// bytes that just landed may carry an older schema than the app's
+    /// model, and an owned database the import didn't include has to be
+    /// re-created before the next query hits it.
+    /// </summary>
+    ValueTask MigrateAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -40,10 +66,20 @@ public interface IHostDatabaseService
 /// </summary>
 public sealed class NullHostDatabaseService : IHostDatabaseService
 {
+    /// <summary>Shared instance — the type carries no state.</summary>
     public static NullHostDatabaseService Instance { get; } = new();
 
+    /// <inheritdoc />
     public bool IsAvailable => false;
 
+    /// <inheritdoc />
+    public IReadOnlyList<string> OwnedDatabases => [];
+
+    /// <inheritdoc />
     public ValueTask ResetAsync(CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
+
+    /// <inheritdoc />
+    public ValueTask MigrateAsync(CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;
 }

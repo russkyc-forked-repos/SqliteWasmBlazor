@@ -7,6 +7,19 @@ All notable changes to SqliteWasmBlazor are documented in this file.
 ### A Note on the Development Delay
 > **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard when Anthropic made their services more or less unusable for my workflow. That situation has since been resolved — development is back on **Claude (Opus 5 / Fable 5)** and fully on track again!
 
+### Import: One Scope Per Affordance, and a Fix for Imports Over Open Databases
+
+Importing went through a single file picker whose extension silently decided how much it replaced — one database (`.db`), the whole pool (`.dbs`), or the whole pool plus its passkey binding (`.eds`) — and offered `.eds` in a state where the primitive refuses it, so the refusal arrived as an internal diagnostic naming a method. The panel is now shaped like the operations it performs.
+
+- **Data-loss fix:** the streaming imports never closed the database they replaced. `atomicReplaceFile` hands the replaced file's SAH back to the pool's free list while an open `OFile` still holds it, so a `DbContext` that had the database open kept reading pre-import pages and writing into a slot the pool could hand to the next file. Both the worker and the bridge now close first. New coverage: `SingleDb_StreamingImport_OverOpenDatabase`, which fails with the exact symptom if the close is dropped again.
+- **Per-database rows.** Each database has a row that owns everything scoped to it: pick it for export, replace it from a `.db` file, empty it. Whole-pool operations moved to their own card with the warning above the picker. The free-text "import into database" field is gone — it could only produce a pool entry no connection string points at.
+- **Locking is done for you.** A `.eds` import rebinds the pool to the envelope's passkey and is refused while a session is open. The command now ends the session itself after a confirmation that says so, instead of reporting "Lock or Reset first".
+- **Refusals are typed.** Disk-state preconditions throw `PoolOperationRejectedException` with a `Reason` (`ENTER_NEEDS_PLAIN`, `LEAVE_NEEDS_UNLOCK`, `EXPORT_NEEDS_UNLOCK`, `PLAIN_IMPORT_NEEDS_UNLOCK`, `GUIDED_IMPORT_NEEDS_LOCK`), so a UI can say what the pool needs rather than print a primitive's diagnostic. Nothing is written when one is thrown.
+- **Imports reconcile the schema.** `IHostDatabaseService` gains `MigrateAsync` and `OwnedDatabases`. Every successful import re-runs the host's migrations, so a file carrying an older schema is brought up to date and an owned database the import omitted is re-created before the next query opens a schema-less one in its place. Deleting a database the app owns now empties it rather than leaving a hole.
+- The state × operation matrix, the rollback guarantees behind each format, and the close-before-replace contract are documented in `docs/crypto-vfs.md`.
+
+**Breaking (`SqliteWasmBlazor.Crypto.UI`):** `IHostDatabaseService` implementations must add `OwnedDatabases` and `MigrateAsync`. `EncryptionModel.DatabaseNames` is replaced by `Databases` (rows carrying `Owned` / `Present`), and `ProposeDatabaseName` is gone with the free-text import target.
+
 ### Memory-Flat Exports — OPFS Staging Replaces `byte[]` Downloads
 
 Exporting used to materialise the entire database as a `byte[]`, hand it across the JS boundary, and wrap it in a Blob. That is fine for a few megabytes and fatal on mobile, where Safari kills the page rather than serve a large one. Exports now stage through OPFS instead: the worker writes the bytes into a staging file via a synchronous access handle — the same primitive the import path already uses for rekey-on-write — and the browser saves from that disk-backed `File`. Blobs built from `ArrayBuffer`s are held in process memory by WebKit; a `File` backed by an OPFS entry is disk-backed in every engine, so peak memory stays flat regardless of database size.

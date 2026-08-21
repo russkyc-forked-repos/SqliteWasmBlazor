@@ -8,12 +8,13 @@ namespace SqliteWasmBlazor.Demo.Pages;
 
 public partial class DatabaseEncryption
 {
-    [Inject] public required IDialogService DialogService { get; init; }
+    [Inject]
+    public required IDialogService DialogService { get; init; }
 
     /// <summary>
     /// Toggle a DB name in the model's
     /// <see cref="EncryptionModel.SelectedDatabases"/> list. Driven by the
-    /// per-DB checkboxes in the export card; ObservableList's Add / Remove
+    /// per-DB checkboxes in the database list; ObservableList's Add / Remove
     /// emit change notifications natively so the command's CanExecute
     /// re-evaluates without a manual reassign.
     /// </summary>
@@ -41,24 +42,67 @@ public partial class DatabaseEncryption
             title, message, destructiveLabel, Model.Localizer["Btn_Cancel"]);
 
     /// <summary>
-    /// Unified file-pick handler for the import flow. Sniffs the picked
-    /// file's extension and routes:
-    /// <list type="bullet">
-    ///   <item><c>.eds</c> → guided passkey-rebinding disk import
-    ///   (<see cref="EncryptionModel.ImportPool"/>).</item>
-    ///   <item><c>.db</c> → single-DB write into a database the user names
-    ///   (<see cref="EncryptionModel.ImportDatabase"/>).</item>
-    ///   <item><c>.dbs</c> → bundle import that replaces the pool
-    ///   (<see cref="EncryptionModel.ImportDatabases"/>).</item>
-    /// </list>
-    /// All three paths are stream-shaped — the C# managed heap never
-    /// holds the full envelope/file. The confirmation prompt is the
-    /// page's job; the destructive scope (one DB vs whole pool vs the
-    /// whole disk + credential) decides the wording.
+    /// A <c>.db</c> file picked on one database's row. The row decides the
+    /// target, so the only question left is whether the user means to
+    /// overwrite what that database currently holds.
     /// </summary>
-    private async Task HandleImportPickedAsync(IBrowserFile? file)
+    private async Task HandleRowFilePickedAsync(PoolDatabaseEntry entry, IBrowserFile? file)
     {
-        if (file is null) { return; }
+        if (file is null)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmDestructiveAsync(
+            title: Model.Localizer["Btn_ImportIntoDatabase", entry.Name],
+            message: Model.Localizer[
+                Model.IsUnlocked ? "Confirm_ImportSingleDatabase_Unlocked" : "Confirm_ImportSingleDatabase",
+                entry.Name, file.Name],
+            destructiveLabel: Model.Localizer["Btn_Import"]);
+
+        if (confirmed)
+        {
+            await Model.ImportDatabase.ExecuteAsync(new SingleDatabaseImport(file, entry.Name));
+        }
+    }
+
+    /// <summary>
+    /// Confirmation gate for the per-row clear/remove action. An owned
+    /// database comes back empty (the app opens it by connection string, so
+    /// it cannot be left missing); an unowned one is gone for good. The
+    /// wording has to say which of the two is about to happen.
+    /// </summary>
+    private Task<bool> ConfirmClearDatabaseAsync(PoolDatabaseEntry entry)
+        => entry.Owned
+            ? ConfirmDestructiveAsync(
+                title: Model.Localizer["Btn_ClearDatabase"],
+                message: Model.Localizer["Confirm_ClearDatabase", entry.Name],
+                destructiveLabel: Model.Localizer["Btn_ClearDatabase"])
+            : ConfirmDestructiveAsync(
+                title: Model.Localizer["Btn_DeleteDatabase"],
+                message: Model.Localizer["Confirm_DeleteDatabase", entry.Name],
+                destructiveLabel: Model.Localizer["Btn_DeleteDatabase"]);
+
+    /// <summary>
+    /// A file picked in the replace-everything card. Both accepted formats
+    /// wipe the pool; the extension decides how much else goes with it:
+    /// <list type="bullet">
+    ///   <item><c>.dbs</c> — pool content only, encryption and passkey stay
+    ///   as they are.</item>
+    ///   <item><c>.eds</c> — pool content plus the passkey binding, which
+    ///   ends the current session and signs the user back in as whoever the
+    ///   envelope was made for.</item>
+    /// </list>
+    /// Anything else was picked through a file dialog that ignored the
+    /// accept list; say so rather than letting a format check deep in the
+    /// import path phrase it.
+    /// </summary>
+    private async Task HandleReplaceAllFilePickedAsync(IBrowserFile? file)
+    {
+        if (file is null)
+        {
+            return;
+        }
 
         if (file.Name.EndsWith(".eds", StringComparison.OrdinalIgnoreCase))
         {
@@ -68,56 +112,13 @@ public partial class DatabaseEncryption
         {
             await HandleDbsFileAsync(file);
         }
-        else if (file.Name.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+        else
         {
-            await HandleSingleDbFileAsync(file);
+            Model.StatusModel.AddWarning(
+                Model.Localizer["Error_UnsupportedImportFile", file.Name],
+                nameof(Model.ImportPool));
         }
     }
-
-    /// <summary>
-    /// Single-DB import: ask which database the file lands in before
-    /// writing. The field starts at <see cref="EncryptionModel.ProposeDatabaseName"/>
-    /// (the file name minus our export stamp) so the common case — restore
-    /// what was exported — is one confirm away, while an import into a
-    /// different or new database stays one edit away.
-    /// </summary>
-    private async Task HandleSingleDbFileAsync(IBrowserFile file)
-    {
-        var title = Model.Localizer["Btn_ImportDatabase"].ToString();
-        var parameters = new DialogParameters<Components.DatabaseNameDialog>
-        {
-            { x => x.Message, Model.Localizer["Confirm_ImportSingleDatabase"].ToString() },
-            { x => x.Label, Model.Localizer["Lbl_ImportTargetName"].ToString() },
-            { x => x.HelperText, Model.Localizer["Hint_ImportTargetName"].ToString() },
-            { x => x.InitialName, Model.ProposeDatabaseName(file.Name) },
-            { x => x.ExistingSummary, ExistingDatabasesSummary() },
-            { x => x.ConfirmLabel, Model.Localizer["Btn_Import"].ToString() },
-            { x => x.CancelLabel, Model.Localizer["Btn_Cancel"].ToString() },
-        };
-        var dialog = await DialogService.ShowAsync<Components.DatabaseNameDialog>(title, parameters);
-        var result = await dialog.Result;
-        if (result is { Canceled: false, Data: string target } && target.Length > 0)
-        {
-            await Model.ImportDatabase.ExecuteAsync(new SingleDatabaseImport(file, target));
-        }
-    }
-
-    private string? ExistingDatabasesSummary()
-        => Model.DatabaseNames.Count == 0
-            ? null
-            : Model.Localizer["Lbl_ExistingDatabases", string.Join(", ", Model.DatabaseNames)].ToString();
-
-    /// <summary>
-    /// Confirmation gate for the per-database delete action in the export
-    /// picker. Wired into <c>MudIconButtonAsyncRxOf.ConfirmExecutionAsync</c>;
-    /// the database name is in the message because the list is the only
-    /// place the user sees which entries exist.
-    /// </summary>
-    private Task<bool> ConfirmDeleteDatabaseAsync(string dbName)
-        => ConfirmDestructiveAsync(
-            title: Model.Localizer["Btn_DeleteDatabase"],
-            message: Model.Localizer["Confirm_DeleteDatabase", dbName],
-            destructiveLabel: Model.Localizer["Btn_DeleteDatabase"]);
 
     private async Task HandleDbsFileAsync(IBrowserFile file)
     {
@@ -141,9 +142,14 @@ public partial class DatabaseEncryption
 
     private async Task HandleEnvelopeFileAsync(IBrowserFile file)
     {
+        // On an unlocked pool the command locks the session before it
+        // starts, so the confirmation has to cover the sign-out too.
+        var messageKey = Model.IsUnlocked
+            ? "Confirm_ImportPool_Unlocked"
+            : "Confirm_ImportPool";
         var confirmed = await ConfirmDestructiveAsync(
             title: Model.Localizer["Btn_ImportPool"],
-            message: Model.Localizer["Confirm_ImportPool"],
+            message: Model.Localizer[messageKey],
             destructiveLabel: Model.Localizer["Btn_ImportPool"]);
 
         if (confirmed)

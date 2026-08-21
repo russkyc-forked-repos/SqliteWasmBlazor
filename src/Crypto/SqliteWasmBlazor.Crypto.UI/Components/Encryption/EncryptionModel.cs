@@ -1,6 +1,4 @@
-using System.Buffers;
 using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.Localization;
 using ObservableCollections;
@@ -36,16 +34,18 @@ public partial class EncryptionModel : ObservableModel
     public partial string? PastedRecipientError { get; set; }
 
     /// <summary>
-    /// Names of every DB in the SAH pool (sourced from
-    /// <c>ISqliteWasmDatabaseService.ListDatabasesAsync</c> at the last
-    /// <see cref="RefreshAsync"/>). Drives the multi-select DB picker for
-    /// the unified export affordance. Empty list → the picker hides itself.
+    /// Every database row the panel shows: the union of what the SAH pool
+    /// holds (<c>ISqliteWasmDatabaseService.ListDatabasesAsync</c>) and what
+    /// the host declares it owns, refreshed by <see cref="RefreshAsync"/>.
+    /// Each row carries its own export checkbox, import picker and
+    /// clear/remove button — the per-row shape is what keeps "replace this
+    /// one database" apart from "replace everything".
     /// </summary>
-    public partial IReadOnlyList<string> DatabaseNames { get; set; } = Array.Empty<string>();
+    public partial IReadOnlyList<PoolDatabaseEntry> Databases { get; set; } = [];
 
     /// <summary>
-    /// Currently-selected DB names for the unified export affordance. UI
-    /// binds a list of checkboxes (one per <see cref="DatabaseNames"/>
+    /// Currently-selected DB names for the plain export affordance. UI
+    /// binds a list of checkboxes (one per present <see cref="Databases"/>
     /// entry) to <see cref="ObservableList{T}.Add"/> /
     /// <see cref="ObservableList{T}.Remove"/> on this list. Cardinality
     /// decides the export shape: one entry → vanilla <c>.db</c> file;
@@ -106,11 +106,14 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ExportPoolForRecipientAsync), nameof(CanExportPoolForRecipient), nameof(FormatOperationError))]
     public partial IObservableCommandAsync ExportPoolForRecipient { get; }
 
-    // Replaces the entire pool. Caller (page partial) owns the destructive
-    // confirmation dialog; parameter is the picked file itself — the model
-    // streams it into the JS-side BlobSession one ArrayPool chunk at a time
-    // so C# managed heap stays bounded regardless of envelope size.
-    [ObservableCommand(nameof(ImportPoolCmdAsync), nameof(CanImportPool), nameof(FormatOperationError))]
+    // Replaces the entire pool and rebinds it to the envelope's passkey.
+    // Runs from every disk state — an unlocked pool is locked by the command
+    // itself, because "Lock first, then import" is a step the user should
+    // not have to discover from an error. Caller (page partial) owns the
+    // destructive confirmation dialog; parameter is the picked file itself —
+    // the model streams it into the JS-side BlobSession one ArrayPool chunk
+    // at a time so C# managed heap stays bounded regardless of envelope size.
+    [ObservableCommand(nameof(ImportPoolCmdAsync), null, nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportPool { get; }
 
     // Unified plain export. Reads <see cref="SelectedDatabases"/> and
@@ -122,11 +125,11 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ExportDatabasesCmdAsync), nameof(CanExportDatabases), nameof(FormatOperationError))]
     public partial IObservableCommandAsync ExportDatabases { get; }
 
-    // Single-DB plain import: streaming write under the caller-chosen pool
-    // name (see SingleDatabaseImport for why the name is not the file's).
-    // Plain writes plain pages; Encrypted+Unlocked rekey-on-writes under
-    // globalKey; Encrypted+Locked is refused (the .eds guided import is the
-    // rebind-to-new-credential path).
+    // Single-DB plain import: streaming write into the database the picked
+    // row names (see SingleDatabaseImport for why the name is not the
+    // file's). Plain writes plain pages; Encrypted+Unlocked rekey-on-writes
+    // under globalKey; Encrypted+Locked is refused (the .eds guided import
+    // is the rebind-to-new-credential path).
     [ObservableCommand(nameof(ImportDatabaseCmdAsync), nameof(CanImportDatabases), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<SingleDatabaseImport> ImportDatabase { get; }
 
@@ -135,9 +138,11 @@ public partial class EncryptionModel : ObservableModel
     [ObservableCommand(nameof(ImportDatabasesCmdAsync), nameof(CanImportDatabases), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportDatabases { get; }
 
-    // Pool housekeeping: drop one database from the SAH pool. The pool
-    // outlives the app's own databases — imports and retired features leave
-    // entries behind — so the export picker needs a way to clean up.
+    // Pool housekeeping: empty one database. An owned database is re-created
+    // empty in the same command (the app would otherwise query a hole); an
+    // unowned one is simply gone. The pool outlives the app's own databases
+    // — imports and retired features leave entries behind — so the row list
+    // is also where strays get cleaned up.
     [ObservableCommand(nameof(DeleteDatabaseCmdAsync), nameof(CanDeleteDatabase), nameof(FormatOperationError))]
     public partial IObservableCommandAsync<string> DeleteDatabase { get; }
 
@@ -151,13 +156,6 @@ public partial class EncryptionModel : ObservableModel
     private bool CanSignOut() => IsPlain && !string.IsNullOrEmpty(Auth.PublicKey);
     private bool CanExportPool() => IsUnlocked;
     private bool CanExportPoolForRecipient() => IsUnlocked && TryGetPastedRecipientIdentity() is not null;
-
-    // Guided import rebinds the disk to the import's credential — only
-    // valid from Plain (no current binding) or Locked (binding exists but
-    // worker key not installed). Unlocked is rejected: switching credentials
-    // mid-session would orphan in-flight EF contexts and is conceptually a
-    // Reset+Import, not an Import.
-    private bool CanImportPool() => IsPlain || IsLocked;
 
     // Plain export needs at least one DB selected and a disk state that can
     // produce plain pages. Plain pools emit verbatim; Encrypted+Unlocked
@@ -180,16 +178,30 @@ public partial class EncryptionModel : ObservableModel
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
         State = await Session.GetStateAsync(cancellationToken);
-        // Refresh the DB list — single-DB export picker hangs off this.
-        // Read on every state transition so a newly-created or freshly-
-        // imported DB shows up immediately.
-        DatabaseNames = await DatabaseService.ListDatabasesAsync(cancellationToken);
+        // Rebuild the row list on every state transition so a newly-created
+        // or freshly-imported database shows up immediately. Rows are the
+        // union of pool content and host-owned names: an owned database the
+        // pool has lost still gets a row (so a backup can be imported into
+        // it), and a pool entry the app doesn't open still gets one (so it
+        // can be exported or removed).
+        var present = await DatabaseService.ListDatabasesAsync(cancellationToken);
+        var presentSet = new HashSet<string>(present, StringComparer.Ordinal);
+        var owned = HostDatabaseService.OwnedDatabases;
+        var ownedSet = new HashSet<string>(owned, StringComparer.Ordinal);
+        Databases =
+        [
+            .. present
+                .Concat(owned.Where(name => !presentSet.Contains(name)))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .Select(name => new PoolDatabaseEntry(
+                    name, ownedSet.Contains(name), presentSet.Contains(name))),
+        ];
         // Drop any selections that point at DBs no longer in the pool so the
         // export button disables itself once the last surviving choice is
         // gone. ObservableList has no RemoveWhere, so collect doomed names
         // first to avoid mutating during iteration.
-        var alive = new HashSet<string>(DatabaseNames, StringComparer.Ordinal);
-        var doomed = SelectedDatabases.Where(name => !alive.Contains(name)).ToArray();
+        var doomed = SelectedDatabases.Where(name => !presentSet.Contains(name)).ToArray();
         foreach (var name in doomed)
         {
             SelectedDatabases.Remove(name);
@@ -337,17 +349,19 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Guided import — collapses the recipient ritual (Reset → EnterEncrypted
-    /// → ImportPool) into one orchestrated call. The picked file's stream is
-    /// shipped to the JS-side BlobSession one ArrayPool chunk at a time; the
-    /// worker re-streams it for AEAD preflight + per-slot rekey commit.
-    /// C# managed heap peak stays at one chunk (~1 MB).
+    /// Guided import — collapses the recipient ritual (Lock → Reset →
+    /// EnterEncrypted → ImportPool) into one orchestrated call. The picked
+    /// file's stream is shipped to the JS-side BlobSession one ArrayPool
+    /// chunk at a time; the worker re-streams it for AEAD preflight +
+    /// per-slot rekey commit. C# managed heap peak stays at one chunk (~1 MB).
     ///
     /// Flow: peek envelope header (first ~4 KB only) → read CredentialIdHint
-    /// → drive WebAuthn pinned to that passkey → derive VFS key from the
-    /// freshly-cached PRF seed → call Session.ImportPoolGuidedFromStreamAsync.
-    /// The PRF cache stays populated through the service call so the
-    /// envelope's ECIES K_wrap can be unwrapped under the same seed.
+    /// → end the current session if one is open → drive WebAuthn pinned to
+    /// the envelope's passkey → derive VFS key from the freshly-cached PRF
+    /// seed → call Session.ImportPoolGuidedFromStreamAsync → re-migrate the
+    /// host's databases. The PRF cache stays populated from the ceremony
+    /// through the service call so the envelope's ECIES K_wrap can be
+    /// unwrapped under the same seed.
     /// </summary>
     private async Task ImportPoolCmdAsync(IBrowserFile file, CancellationToken cancellationToken)
     {
@@ -385,6 +399,19 @@ public partial class EncryptionModel : ObservableModel
         {
             throw new InvalidOperationException(
                 Localizer["Error_ImportEnvelopeHasNoCredentialId"]);
+        }
+
+        // The import rebinds the pool to the envelope's credential, so the
+        // current session has to end first — the service refuses outright on
+        // Encrypted+Unlocked. Lock rather than Reset: the existing data
+        // stays on disk until the envelope has passed AEAD preflight, so a
+        // bad file leaves the pool exactly as it was. The page's confirm
+        // dialog has already told the user this signs them out.
+        if (IsUnlocked)
+        {
+            await Session.LockAsync(cancellationToken);
+            await Auth.ClearKeysAsync();
+            await RefreshAsync(cancellationToken);
         }
 
         // WebAuthn pinned to the envelope's credentialId — bypasses
@@ -439,19 +466,30 @@ public partial class EncryptionModel : ObservableModel
         // been rewritten to match this credential.
         Auth.ApplyImportedSession(hint, importedPublicKey);
 
+        // The envelope decides what the pool holds; the app's schema is
+        // whatever its model says today. Reconcile before anything queries.
+        await HostDatabaseService.MigrateAsync(cancellationToken);
+
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(Localizer["Status_PoolImported"], nameof(ImportPool));
     }
 
     /// <summary>
     /// Single-DB plain-import command. Streams the picked <c>.db</c> file
-    /// into <see cref="SingleDatabaseImport.DatabaseName"/>, creating that
-    /// pool entry or replacing it wholesale. The JS-side BlobSession keeps
-    /// the C# managed heap bounded regardless of file size. Plain pools
-    /// write plain pages; Encrypted+Unlocked rekey-on-writes under
-    /// <c>globalKey</c>; Encrypted+Locked is refused (the <c>.eds</c>
-    /// guided import is the rebind-to-new-credential path;
-    /// <see cref="CanImportDatabases"/> gates the button).
+    /// into <see cref="SingleDatabaseImport.DatabaseName"/>, replacing that
+    /// database wholesale. The JS-side BlobSession keeps the C# managed heap
+    /// bounded regardless of file size. Plain pools write plain pages;
+    /// Encrypted+Unlocked rekey-on-writes under <c>globalKey</c>;
+    /// Encrypted+Locked is refused (the <c>.eds</c> guided import is the
+    /// rebind-to-new-credential path; <see cref="CanImportDatabases"/> gates
+    /// the button).
+    ///
+    /// <para>
+    /// The target must be a database this panel already lists — the user
+    /// picked the file on its row. A free-hand name would create a pool
+    /// entry no connection string points at, which is storage nothing can
+    /// ever read back.
+    /// </para>
     /// </summary>
     private async Task ImportDatabaseCmdAsync(
         SingleDatabaseImport request, CancellationToken cancellationToken)
@@ -467,11 +505,20 @@ public partial class EncryptionModel : ObservableModel
             throw new InvalidOperationException(
                 $"Unsupported single-database file '{file.Name}': expected .db.");
         }
-        var target = NormalizeDatabaseName(request.DatabaseName);
+        var target = request.DatabaseName;
+        if (!Databases.Any(entry => string.Equals(entry.Name, target, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"'{target}' is not one of this app's databases.");
+        }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
         await Session.ImportDatabaseFromStreamAsync(
             target, stream, file.Size, cancellationToken);
+        // The file may carry an older schema than the app's model, and the
+        // worker closed the database to swap its slot in — re-migrate before
+        // the next query reopens it.
+        await HostDatabaseService.MigrateAsync(cancellationToken);
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_SingleDbImported", target],
@@ -500,6 +547,10 @@ public partial class EncryptionModel : ObservableModel
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
         await Session.ImportDatabasesFromStreamAsync(stream, file.Size, cancellationToken);
+        // The bundle decides what the pool holds — including whether an
+        // owned database is in it at all. Re-migrate so a database the
+        // bundle omitted is back before the next query hits it.
+        await HostDatabaseService.MigrateAsync(cancellationToken);
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_DbsImported", file.Name],
@@ -507,9 +558,12 @@ public partial class EncryptionModel : ObservableModel
     }
 
     /// <summary>
-    /// Drop one database from the SAH pool and refresh the picker. The pool
-    /// is app-wide storage, not a session: whatever an import or a retired
-    /// feature created stays until deleted here.
+    /// Empty one database and refresh the rows. Two outcomes, and the row
+    /// decides which: an owned database is deleted and immediately
+    /// re-created empty, because the app opens it by connection string and
+    /// a missing file would come back as a schema-less one on the next
+    /// query. An unowned entry is storage nothing reads — it is simply
+    /// gone.
     /// </summary>
     private async Task DeleteDatabaseCmdAsync(
         string databaseName, CancellationToken cancellationToken)
@@ -519,49 +573,17 @@ public partial class EncryptionModel : ObservableModel
             throw new InvalidOperationException(
                 "databaseName must be non-empty.");
         }
+        var owned = Databases.Any(entry =>
+            entry.Owned && string.Equals(entry.Name, databaseName, StringComparison.Ordinal));
         await DatabaseService.DeleteDatabaseAsync(databaseName, cancellationToken);
+        if (owned)
+        {
+            await HostDatabaseService.MigrateAsync(cancellationToken);
+        }
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(
-            Localizer["Status_DatabaseDeleted", databaseName],
+            Localizer[owned ? "Status_DatabaseCleared" : "Status_DatabaseDeleted", databaseName],
             nameof(DeleteDatabase));
-    }
-
-    /// <summary>
-    /// Pool name proposed for a picked <c>.db</c> file: the file name minus
-    /// the stamp <see cref="ExportDatabasesCmdAsync"/> appends, so an
-    /// export/import round trip lands back on the database it came from
-    /// instead of leaving a <c>TodoDb-20260818-193737.db</c> stray. Any
-    /// other name is returned unchanged — this is the value a host prefills
-    /// its name field with, never a silent rewrite of the user's choice.
-    /// </summary>
-    public string ProposeDatabaseName(string fileName)
-    {
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new ArgumentException("fileName must be non-empty.", nameof(fileName));
-        }
-        return ExportStampPattern().Replace(fileName, ".db");
-    }
-
-    // Trailing "-yyyyMMdd-HHmmss.db" — the shape ExportDatabasesCmdAsync
-    // writes. Anchored at the end so a database whose own name contains
-    // digits keeps them.
-    [GeneratedRegex(@"-\d{8}-\d{6}\.db$", RegexOptions.IgnoreCase)]
-    private static partial Regex ExportStampPattern();
-
-    // Pool entries are addressed by file name; a name without the extension
-    // would create a database no connection string points at.
-    private static string NormalizeDatabaseName(string databaseName)
-    {
-        var trimmed = databaseName?.Trim() ?? string.Empty;
-        if (trimmed.Length == 0)
-        {
-            throw new InvalidOperationException(
-                "Enter the database name to import into.");
-        }
-        return trimmed.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
-            ? trimmed
-            : $"{trimmed}.db";
     }
 
     private async ValueTask<byte[]> DeriveVfsKeyAsync()
@@ -638,10 +660,23 @@ public partial class EncryptionModel : ObservableModel
         return (base64Key, metadata.CredentialId);
     }
 
+    // A disk-state refusal is a fact about the pool, not a defect: say what
+    // the pool needs in the user's language. Everything else keeps the
+    // diagnostic text — an unexpected failure the user may have to report.
     private string FormatOperationError(Exception ex) => ex switch
     {
         OperationCanceledException => Localizer["Status_OperationCancelled"],
-        InvalidOperationException => Localizer["Error_Operation", ex.Message],
+        PoolOperationRejectedException rejected => Localizer[
+            rejected.Reason switch
+            {
+                PoolOperationRejection.ENTER_NEEDS_PLAIN => "Error_Rejected_EnterNeedsPlain",
+                PoolOperationRejection.LEAVE_NEEDS_UNLOCK => "Error_Rejected_LeaveNeedsUnlock",
+                PoolOperationRejection.EXPORT_NEEDS_UNLOCK => "Error_Rejected_ExportNeedsUnlock",
+                PoolOperationRejection.PLAIN_IMPORT_NEEDS_UNLOCK => "Error_Rejected_ImportNeedsUnlock",
+                PoolOperationRejection.GUIDED_IMPORT_NEEDS_LOCK => "Error_Rejected_GuidedImportNeedsLock",
+                _ => throw new InvalidOperationException(
+                    $"Unhandled pool rejection '{rejected.Reason}'."),
+            }],
         _ => Localizer["Error_Operation", ex.Message],
     };
 }

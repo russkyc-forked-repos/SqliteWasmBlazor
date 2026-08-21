@@ -118,8 +118,9 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <para>
     /// Caller invariant: <see cref="GetStateAsync"/> must currently
     /// return <see cref="EncryptedPoolState.Plain"/>. Throws
-    /// <see cref="InvalidOperationException"/> otherwise. The auth flow's
-    /// Register ceremony returns the credential id to pass here.
+    /// <see cref="PoolOperationRejectedException"/>
+    /// (<see cref="PoolOperationRejection.ENTER_NEEDS_PLAIN"/>) otherwise.
+    /// The auth flow's Register ceremony returns the credential id to pass here.
     /// </para>
     /// </summary>
     /// <param name="key">Exactly 32 bytes of key material.</param>
@@ -143,7 +144,8 @@ public interface IEncryptedSqliteWasmDatabaseService
     ///
     /// <para>
     /// Caller invariant: must currently be Encrypted+Unlocked. Throws
-    /// <see cref="InvalidOperationException"/> otherwise. Caller is
+    /// <see cref="PoolOperationRejectedException"/>
+    /// (<see cref="PoolOperationRejection.LEAVE_NEEDS_UNLOCK"/>) otherwise. Caller is
     /// separately responsible for revoking the passkey credential at the
     /// WebAuthn layer.
     /// </para>
@@ -228,7 +230,8 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// </para>
     /// <para>
     /// Caller invariant: state must be <see cref="EncryptedPoolState.Plain"/>
-    /// or Encrypted+Locked. Encrypted+Unlocked is rejected — caller must
+    /// or Encrypted+Locked. Encrypted+Unlocked is rejected with
+    /// <see cref="PoolOperationRejection.GUIDED_IMPORT_NEEDS_LOCK"/> — caller must
     /// <see cref="LockAsync"/> first. The envelope's <c>CredentialIdHint</c>
     /// must match <paramref name="credentialId"/>; <paramref name="vfsKey"/>
     /// must come from the WebAuthn ceremony pinned to that credential.

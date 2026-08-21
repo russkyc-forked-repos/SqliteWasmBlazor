@@ -371,7 +371,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.ENTER_NEEDS_PLAIN,
                 "EnterEncryptedAsync requires EncryptedPoolState.Plain — VFS is already encrypted.");
         }
 
@@ -456,7 +457,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (!current.Encrypted || !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.LEAVE_NEEDS_UNLOCK,
                 "LeaveEncryptedAsync requires Encrypted + Unlocked — call UnlockAsync first.");
         }
 
@@ -674,7 +676,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (!current.Encrypted || !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.EXPORT_NEEDS_UNLOCK,
                 "Pubkey export requires Encrypted + Unlocked — call UnlockAsync first.");
         }
 
@@ -785,7 +788,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.GUIDED_IMPORT_NEEDS_LOCK,
                 "ImportPoolGuidedFromStreamAsync rejected: disk is Encrypted+Unlocked. " +
                 "Lock or Reset first; guided import rebinds the disk to the import's " +
                 "credential and is only allowed from Plain or Locked.");
@@ -948,7 +952,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.EXPORT_NEEDS_UNLOCK,
                 "ExportDatabaseToDownloadAsync rejected: disk is Encrypted+Locked. " +
                 "Unlock first; without globalKey the worker can't decrypt slots " +
                 "back to plain pages.");
@@ -995,7 +1000,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.EXPORT_NEEDS_UNLOCK,
                 "ExportDatabasesToDownloadAsync rejected: disk is Encrypted+Locked. " +
                 "Unlock first; without globalKey the worker can't decrypt slots " +
                 "back to plain pages.");
@@ -1046,11 +1052,18 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.PLAIN_IMPORT_NEEDS_UNLOCK,
                 "ImportDatabasesFromStreamAsync rejected: disk is Encrypted+Locked. " +
                 "Unlock first, or use the .eds guided import to rebind the disk " +
                 "to a different credential.");
         }
+
+        // The worker's commit pass wipes the pool; an OFile that outlives
+        // its SAH keeps writing into a freed slot. The worker closes its
+        // own cache independently — this pre-pass keeps the C# mirror in
+        // sync, same contract as the Set/ClearEncryptionKey close pass.
+        await _bridge.CloseAllOpenDatabasesAsync(cancellationToken);
 
         var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
@@ -1129,11 +1142,17 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
-            throw new InvalidOperationException(
+            throw new PoolOperationRejectedException(
+                PoolOperationRejection.PLAIN_IMPORT_NEEDS_UNLOCK,
                 "ImportDatabaseFromStreamAsync rejected: disk is Encrypted+Locked. " +
                 "Unlock first, or use the .eds guided import to rebind the disk to " +
                 "a different credential.");
         }
+
+        // atomicReplaceFile frees the target's current SAH at commit time;
+        // an open handle would keep serving its pages. The worker closes
+        // the DB itself — this keeps the C# open-set mirror in step.
+        await _bridge.CloseDatabaseAsync(databaseName, cancellationToken);
 
         var sessionId = NextSessionId();
         SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);

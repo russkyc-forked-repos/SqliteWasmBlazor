@@ -700,6 +700,15 @@ async function importDatabasesFromSessionHandler(
     // Pass 2 — wipe the pool, then commit. Only reached once the whole
     // envelope has validated; the wipe stays the documented destructive
     // contract of a *successful* import, not of a malformed file.
+    //
+    // Close every cached DB before unlinking: an open OFile captures its
+    // SAH at xOpen time, so a handle that survives the unlink keeps
+    // reading and writing a slot the pool has already handed back to the
+    // free list — and the very next writeFileSlice can hand that slot to
+    // another file.
+    for (const dbName of [...openDatabases.keys()]) {
+        await closeDatabase(dbName);
+    }
     const existing = poolUtil.listDatabases();
     for (const name of existing) {
         try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
@@ -791,6 +800,11 @@ async function importDatabaseFromSessionHandler(
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
+    // The commit promotes a temp slot over dbName via atomicReplaceFile,
+    // which frees dbName's current SAH. An OFile still holding that SAH
+    // would keep serving stale pages — and write into a slot the pool can
+    // re-allocate to the next file. Close first; C# reopens on demand.
+    await closeDatabase(dbName);
     if (hasGlobalKey()) {
         const globalKey = snapshotGlobalKey()!;
         try {

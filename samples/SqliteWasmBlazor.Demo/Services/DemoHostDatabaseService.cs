@@ -5,18 +5,23 @@ using SqliteWasmBlazor.Models;
 namespace SqliteWasmBlazor.Demo.Services;
 
 /// <summary>
-/// Demo-side <see cref="IHostDatabaseService"/> — the single
-/// "reset everything" entry point for the Demo. Three callsites route
-/// through here (Crypto.UI's <c>DatabaseErrorAlert</c> for boot-failure
-/// recovery, the encryption page's Reset button via
-/// <c>EncryptionModel.Reset</c>, and the Administration page's
-/// <c>ResetDatabaseAsync</c>). All three want the same end state: disk
-/// back to Plain, user signed out, every consumer DbContext re-migrated,
-/// boot status promoted to READY.
+/// Demo-side <see cref="IHostDatabaseService"/> — the single place that
+/// knows which databases the Demo owns and how to bring their schema up
+/// to date. Two entry points:
+/// <list type="bullet">
+///   <item><see cref="ResetAsync"/> — "reset everything": disk back to
+///   Plain, user signed out, schema re-created, boot status READY.
+///   Reached from Crypto.UI's <c>DatabaseErrorAlert</c>, the encryption
+///   page's Reset button, and the Administration page.</item>
+///   <item><see cref="MigrateAsync"/> — the non-destructive half, run
+///   after every import so the freshly landed bytes get their pending
+///   migrations and an owned database the import omitted is re-created
+///   before the next query hits it.</item>
+/// </list>
 ///
 /// <para>
-/// Sequence — minimal manual orchestration; the auth signout falls out
-/// of the existing reactive cascade so this service stays focused on
+/// Reset sequence — minimal manual orchestration; the auth signout falls
+/// out of the existing reactive cascade so this service stays focused on
 /// what only the host knows (its DbContexts):
 /// <list type="number">
 ///   <item><see cref="IEncryptedSqliteWasmDatabaseService.ResetPoolAsync"/> —
@@ -27,17 +32,16 @@ namespace SqliteWasmBlazor.Demo.Services;
 ///         the handler reads the now-empty manifest and full-signs-out
 ///         (PublicKey=null + CredentialId=null) without manual wiring
 ///         here.</item>
-///   <item><c>MigrateAsync</c> per registered DbContext — re-creates
-///         the schema on the now-empty Plain disk. This is the only
-///         step that requires host-specific knowledge.</item>
-///   <item><see cref="IDbInitializationReporter.Report"/>(<see cref="DbInitState.READY"/>) —
-///         dismisses any boot-failure alert.</item>
+///   <item><see cref="MigrateAsync"/> — re-creates the schema on the
+///         now-empty Plain disk and reports
+///         <see cref="DbInitState.READY"/>.</item>
 /// </list>
 /// </para>
 ///
 /// <para>
-/// Adding a new DbContext to the Demo: inject the new factory and add
-/// one <c>MigrateAsync</c> call here. All three Reset callsites pick
+/// Adding a new DbContext to the Demo: inject the new factory, add one
+/// <c>MigrateAsync</c> call, and add its file name to
+/// <see cref="OwnedDatabases"/>. Every Reset, import and panel row picks
 /// it up automatically — no per-callsite enumeration.
 /// </para>
 /// </summary>
@@ -62,6 +66,12 @@ public sealed class DemoHostDatabaseService : IHostDatabaseService
 
     public bool IsAvailable => true;
 
+    /// <summary>
+    /// The two databases <c>Program.cs</c> wires a <c>DbContext</c> to.
+    /// Anything else in the pool is storage the Demo doesn't read.
+    /// </summary>
+    public IReadOnlyList<string> OwnedDatabases { get; } = ["TodoDb.db", "NotesDb.db"];
+
     public async ValueTask ResetAsync(CancellationToken cancellationToken = default)
     {
         // Scorched-earth disk wipe. PRF cache clear cascades through
@@ -70,7 +80,15 @@ public sealed class DemoHostDatabaseService : IHostDatabaseService
         // PublicKey AND CredentialId). No manual Auth.SignOut here.
         await _session.ResetPoolAsync(cancellationToken);
 
-        // Re-migrate every consumer DbContext. The host-specific step.
+        // Re-create the schema on the now-empty pool.
+        await MigrateAsync(cancellationToken);
+    }
+
+    public async ValueTask MigrateAsync(CancellationToken cancellationToken = default)
+    {
+        // Re-migrate every consumer DbContext. The host-specific step:
+        // MigrateAsync creates the database when it is missing and applies
+        // pending migrations when an import brought in an older schema.
         await using (var todoCtx = await _todoFactory.CreateDbContextAsync(cancellationToken))
         {
             await todoCtx.Database.MigrateAsync(cancellationToken);

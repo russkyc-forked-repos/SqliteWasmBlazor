@@ -9,7 +9,6 @@
   <data name="Page_Subtitle" xml:space="preserve"><value>Every database this app stores in your browser, under one passkey-derived key. Sign in to unlock; encrypt them all or remove the encryption in one step.</value></data>
 
   <data name="Card_DatabasesTitle" xml:space="preserve"><value>Encrypted databases</value></data>
-  <data name="Card_ExportsTitle" xml:space="preserve"><value>Export &amp; import</value></data>
   <data name="Card_ResetTitle" xml:space="preserve"><value>Full reset</value></data>
   <data name="Hint_ExportIntermediateScreen" xml:space="preserve"><value>Installed on a Home Screen, this app has no downloads folder: a finished export arrives on an intermediate screen instead of being saved. That screen is the export — open the share menu on it and choose "Save to Files".</value></data>
 
@@ -36,7 +35,6 @@
   <data name="Field_RecipientKey_Help" xml:space="preserve"><value>Paste the recipient's armored PFA PUBLIC KEY block. The block carries both the recipient's X25519 public key (32 bytes) and their WebAuthn credentialId — the guided import on the recipient side uses the credentialId to drive WebAuthn directly to the matching passkey. The export uses ECIES (X25519 + AES-256-GCM) to wrap a fresh per-export key; only the holder of the matching private key can unwrap. No secrets cross between sender and recipient.</value></data>
 
   <data name="Confirm_ImportPool" xml:space="preserve"><value>This replaces every database currently stored with the ones in the file, and binds them to the passkey that file was made with. Your current passkey will no longer unlock them. Continue?</value></data>
-  <data name="Hint_ImportOnLocked" xml:space="preserve"><value>Or import a full encrypted backup (.eds) to replace all databases and bind them to the passkey that backup was made with — useful for restoring a backup made with a different passkey (e.g. a YubiKey).</value></data>
   <data name="Confirm_Reset" xml:space="preserve"><value>This removes every database this app has stored in your browser and signs you out. Your computer's files are not affected. Continue?</value></data>
   <data name="Confirm_ResetEncrypted" xml:space="preserve"><value>This removes every database this app has stored in your browser, discards the encryption key and signs you out. Encrypted content is permanently unrecoverable without a backup. Your computer's files are not affected. Continue?</value></data>
 
@@ -52,21 +50,14 @@
   <data name="Status_SingleDbExported" xml:space="preserve"><value>Exported {0} as {1}.</value></data>
   <data name="Status_DbsExported" xml:space="preserve"><value>Exported {0} databases as {1}.</value></data>
   <data name="Status_DbsImported" xml:space="preserve"><value>Imported {0}; every database has been replaced with the file's contents.</value></data>
-  <data name="Lbl_SelectDatabasesToExport" xml:space="preserve"><value>Databases to export</value></data>
-  <data name="Hint_ExportShapes" xml:space="preserve"><value>Pick one and you get that database as a plain .db file any SQLite tool opens. Pick several and you get one .dbs file — the selected databases together, restored as a set on import.</value></data>
+  <data name="Hint_ExportShapes" xml:space="preserve"><value>Pick one database and you get it as a plain .db file any SQLite tool opens. Pick several and you get one .dbs file — those databases together, restored as a set.</value></data>
   <data name="Btn_ExportPoolBackup" xml:space="preserve"><value>Back up all databases (encrypted)</value></data>
   <data name="Btn_ExportPoolForRecipient" xml:space="preserve"><value>Export all databases for a recipient</value></data>
   <data name="Btn_ExportDatabases" xml:space="preserve"><value>Export selected databases</value></data>
   <data name="Btn_ImportDatabases" xml:space="preserve"><value>Import databases</value></data>
-  <data name="Btn_ImportFile" xml:space="preserve"><value>Import a database file (.db, .dbs, or .eds)</value></data>
-  <data name="Hint_ImportFileKinds" xml:space="preserve"><value>.db — a single database, added or replaced by name. .dbs — several databases in one file, replacing everything currently stored. .eds — all databases, encrypted, together with their passkey binding.</value></data>
   <data name="Hint_ImportFileSize" xml:space="preserve"><value>All file types are streamed in chunks; no size limit.</value></data>
-  <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>This replaces any existing database with the same name.</value></data>
-  <data name="Lbl_ImportTargetName" xml:space="preserve"><value>Import into database</value></data>
-  <data name="Btn_ImportDatabase" xml:space="preserve"><value>Import database</value></data>
+  <data name="Confirm_ImportSingleDatabase" xml:space="preserve"><value>Everything {0} currently holds is replaced by the contents of {1}. Its content is gone unless you exported it first. Continue?</value></data>
   <data name="Btn_Import" xml:space="preserve"><value>Import</value></data>
-  <data name="Hint_ImportTargetName" xml:space="preserve"><value>An existing name replaces that database; a new name creates one. Prefilled from the file name with the export timestamp removed.</value></data>
-  <data name="Lbl_ExistingDatabases" xml:space="preserve"><value>Already stored: {0}</value></data>
   <data name="Btn_DeleteDatabase" xml:space="preserve"><value>Delete database</value></data>
   <data name="Confirm_DeleteDatabase" xml:space="preserve"><value>Delete {0} from this browser? Its contents are gone unless you exported it first.</value></data>
   <data name="Status_DatabaseDeleted" xml:space="preserve"><value>Deleted {0}.</value></data>
@@ -80,4 +71,29 @@
   <data name="Error_PastedKey_WrongLength" xml:space="preserve"><value>Pasted public key must be 32 bytes; got {0} bytes.</value></data>
   <data name="Error_PastedKey_NoCredentialId" xml:space="preserve"><value>Pasted identity is missing the WebAuthn credentialId. Ask the recipient to copy their armored identity from the Encryption page (a freshly armored block carries the credentialId automatically).</value></data>
   <data name="Error_ImportEnvelopeHasNoCredentialId" xml:space="preserve"><value>Picked envelope has no credentialId hint — it was produced by an older export path. Re-export from a current build.</value></data>
+  <data name="Card_DatabaseListTitle" xml:space="preserve"><value>Databases</value></data>
+  <data name="Hint_DatabaseRows" xml:space="preserve"><value>One row per database. Tick the ones to export, use the upload button to replace a single database from a .db file, and the last button to empty it. Nothing on a row touches any other database.</value></data>
+  <data name="Pill_NotCreated" xml:space="preserve"><value>not created yet</value></data>
+  <data name="Pill_Unused" xml:space="preserve"><value>not used by this app</value></data>
+  <data name="Btn_ImportIntoDatabase" xml:space="preserve"><value>Replace {0} from a .db file</value></data>
+  <data name="Btn_ClearDatabase" xml:space="preserve"><value>Empty database</value></data>
+  <data name="Confirm_ClearDatabase" xml:space="preserve"><value>Empty {0}? Everything in it is gone unless you exported it first. This app needs the database, so it comes back empty rather than disappearing.</value></data>
+  <data name="Confirm_ImportSingleDatabase_Unlocked" xml:space="preserve"><value>Everything {0} currently holds is replaced by the contents of {1}. Its content is gone unless you exported it first. Encryption stays in place under your current passkey — the imported data is encrypted as it is written. Continue?</value></data>
+  <data name="Status_DatabaseCleared" xml:space="preserve"><value>Emptied {0}.</value></data>
+
+  <data name="Card_BackupTitle" xml:space="preserve"><value>Back up &amp; share</value></data>
+  <data name="Hint_BackupCard" xml:space="preserve"><value>An .eds file holds every database, still encrypted, together with the passkey it belongs to. Back one up for yourself, or make one for someone else — only the passkey it was made for can open it.</value></data>
+
+  <data name="Card_ReplaceAllTitle" xml:space="preserve"><value>Replace everything</value></data>
+  <data name="Hint_ReplaceAllWarning" xml:space="preserve"><value>Both file types here replace every database stored in this browser. Export what you want to keep first — the file is only read once it has been checked, so a damaged file leaves your data untouched, but a good one does replace it.</value></data>
+  <data name="Hint_ReplaceAllKinds" xml:space="preserve"><value>.dbs — several databases in one file; encryption and passkey stay as they are. .eds — an encrypted backup; it brings its own passkey, so you are signed out and signed back in as whoever the backup was made for.</value></data>
+  <data name="Hint_ReplaceAllKinds_Locked" xml:space="preserve"><value>Locked, only an encrypted backup (.eds) can be read: it brings its own passkey. Sign in above to unlock if you meant to import a .dbs file or a single database.</value></data>
+  <data name="Confirm_ImportPool_Unlocked" xml:space="preserve"><value>This replaces every database currently stored with the ones in the file, and binds them to the passkey that file was made with. You are signed out first, and your current passkey will no longer unlock anything. Continue?</value></data>
+  <data name="Error_UnsupportedImportFile" xml:space="preserve"><value>{0} is not a file this can read here. Pick a .dbs or .eds file, or use a row's upload button for a single .db file.</value></data>
+
+  <data name="Error_Rejected_EnterNeedsPlain" xml:space="preserve"><value>These databases are already encrypted.</value></data>
+  <data name="Error_Rejected_LeaveNeedsUnlock" xml:space="preserve"><value>Sign in to unlock before removing the encryption.</value></data>
+  <data name="Error_Rejected_ExportNeedsUnlock" xml:space="preserve"><value>Sign in to unlock before exporting — locked databases cannot be read.</value></data>
+  <data name="Error_Rejected_ImportNeedsUnlock" xml:space="preserve"><value>Sign in to unlock before importing. An encrypted backup (.eds) is the one file that can be imported while locked.</value></data>
+  <data name="Error_Rejected_GuidedImportNeedsLock" xml:space="preserve"><value>The current session has to end before a backup with a different passkey can be imported. Lock, then import again.</value></data>
 </root>
