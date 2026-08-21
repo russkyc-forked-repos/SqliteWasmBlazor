@@ -414,8 +414,8 @@
                 return;
             }
 
-            var diskState = await Session.GetStateAsync();
-            if (!diskState.Encrypted)
+            var poolState = await Session.GetStateAsync();
+            if (!poolState.Encrypted)
             {
                 // Plain disk → first time (or post-Wipe). Run the full
                 // Plain → Encrypted transition: encrypts every existing DB
@@ -424,8 +424,8 @@
                 // sign-ins can check the wrong-passkey early-out.
                 await Session.EnterEncryptedAsync(ck, derivedCredentialId);
             }
-            else if (!string.IsNullOrEmpty(diskState.Hint) &&
-                     !string.Equals(diskState.Hint, derivedCredentialId, StringComparison.Ordinal))
+            else if (!string.IsNullOrEmpty(poolState.Hint) &&
+                     !string.Equals(poolState.Hint, derivedCredentialId, StringComparison.Ordinal))
             {
                 // Manifest-driven wrong-passkey early-out. Disk's manifest
                 // says it's owned by a different credential — refuse here

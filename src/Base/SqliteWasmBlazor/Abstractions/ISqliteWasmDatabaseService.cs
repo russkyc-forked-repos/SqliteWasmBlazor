@@ -166,8 +166,8 @@ public interface ISqliteWasmDatabaseService
     /// in-memory exports).
     ///
     /// <para>
-    /// With the Crypto plane loaded the worker is state-aware: Plain disks
-    /// download verbatim pages; Encrypted+Unlocked disks decrypt slot-by-
+    /// With the Crypto plane loaded the worker is state-aware: Plain pools
+    /// download verbatim pages; Encrypted+Unlocked pools decrypt slot-by-
     /// slot to plain pages; Encrypted+Locked throws. On the plain plane
     /// the file downloads verbatim. The worker closes the DB before
     /// exporting for a consistent snapshot — caller must re-open afterwards.

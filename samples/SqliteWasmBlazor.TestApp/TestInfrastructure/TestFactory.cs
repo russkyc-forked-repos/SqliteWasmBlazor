@@ -102,7 +102,7 @@ internal class TestFactory
                     var prfService = services.GetService(typeof(IPrfService)) as IPrfService;
                     if (prfService is not null)
                     {
-                        var guidedCrossKey = new DiskImportGuidedCrossKeyStreamingTest(
+                        var guidedCrossKey = new PoolImportGuidedCrossKeyStreamingTest(
                             prfFactory, databaseService, provider, prfService, session);
                         _entries.Add(new TestEntry(
                             "VFS Encryption", guidedCrossKey.Name, () => guidedCrossKey.RunAsync()));

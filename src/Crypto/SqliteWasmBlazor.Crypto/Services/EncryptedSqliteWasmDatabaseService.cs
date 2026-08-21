@@ -211,10 +211,10 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             return (state, null);
         }
 
-        DiskManifestBody decoded;
+        PoolManifestBody decoded;
         try
         {
-            decoded = MessagePackSerializer.Deserialize<DiskManifestBody>(body);
+            decoded = MessagePackSerializer.Deserialize<PoolManifestBody>(body);
         }
         catch (MessagePackSerializationException)
         {
@@ -241,7 +241,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "credentialId must be non-empty when writing the disk manifest.",
                 nameof(credentialId));
         }
-        var body = new DiskManifestBody
+        var body = new PoolManifestBody
         {
             CredentialId = credentialId,
             PublicKeyFingerprint = string.Empty,
@@ -1274,7 +1274,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 }
 
 [MessagePackObject(AllowPrivate = true)]
-internal sealed class DiskManifestBody
+internal sealed class PoolManifestBody
 {
     [Key(0)]
     public string? CredentialId { get; set; }

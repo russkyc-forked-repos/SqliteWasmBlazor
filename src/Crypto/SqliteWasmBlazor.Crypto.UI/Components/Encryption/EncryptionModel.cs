@@ -160,7 +160,7 @@ public partial class EncryptionModel : ObservableModel
     private bool CanImportPool() => IsPlain || IsLocked;
 
     // Plain export needs at least one DB selected and a disk state that can
-    // produce plain pages. Plain disks emit verbatim; Encrypted+Unlocked
+    // produce plain pages. Plain pools emit verbatim; Encrypted+Unlocked
     // decrypts on read. Locked has no key to decrypt with — refuse.
     private bool CanExportDatabases() =>
         (IsPlain || IsUnlocked) && SelectedDatabases.Count > 0;
@@ -297,7 +297,7 @@ public partial class EncryptionModel : ObservableModel
     /// Unified plain-export command. One picked DB → vanilla <c>.db</c>
     /// download (filename = <c>{stem}-{stamp}.db</c>); multiple DBs →
     /// streaming <c>.dbs</c> envelope (filename =
-    /// <c>databases-{stamp}.dbs</c>). Plain disks emit verbatim;
+    /// <c>databases-{stamp}.dbs</c>). Plain pools emit verbatim;
     /// Encrypted+Unlocked decrypts each file slot-by-slot so downloads are
     /// vanilla SQLite any tool can open. The service primitive
     /// (<c>ExportDatabasesToDownloadAsync</c>) handles single-vs-multi
@@ -447,7 +447,7 @@ public partial class EncryptionModel : ObservableModel
     /// Single-DB plain-import command. Streams the picked <c>.db</c> file
     /// into <see cref="SingleDatabaseImport.DatabaseName"/>, creating that
     /// pool entry or replacing it wholesale. The JS-side BlobSession keeps
-    /// the C# managed heap bounded regardless of file size. Plain disks
+    /// the C# managed heap bounded regardless of file size. Plain pools
     /// write plain pages; Encrypted+Unlocked rekey-on-writes under
     /// <c>globalKey</c>; Encrypted+Locked is refused (the <c>.eds</c>
     /// guided import is the rebind-to-new-credential path;

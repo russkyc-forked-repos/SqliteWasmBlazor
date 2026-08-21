@@ -113,7 +113,7 @@ public static class TestRegistry
         "Synthetic_PrfSeed_DecryptInPlace_PreservesRowsAsPlain",
         "SingleDb_StreamingImport_PlainAndEncryptedRoundTrip",
         "Plain_DbsEnvelope_StreamingImport_RoundTrip",
-        "DiskImport_GuidedCrossKey_StreamingRoundTrip",
+        "PoolImport_GuidedCrossKey_StreamingRoundTrip",
     ];
 
     /// <summary>

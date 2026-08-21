@@ -103,8 +103,8 @@ await host.Services.InitializeSqliteWasmAsync();
 // interactive use across F5 sees Encrypted and we leave the disk alone.
 {
     var session = host.Services.GetRequiredService<IEncryptedSqliteWasmDatabaseService>();
-    var diskState = await session.GetStateAsync();
-    if (!diskState.Encrypted)
+    var poolState = await session.GetStateAsync();
+    if (!poolState.Encrypted)
     {
         using var scope = host.Services.CreateScope();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TodoDbContext>>();
@@ -120,7 +120,7 @@ await host.Services.InitializeSqliteWasmAsync();
     else
     {
         Console.WriteLine(
-            $"[TestApp] Disk is encrypted (manifest credentialId hint: '{diskState.Hint}'); " +
+            $"[TestApp] Pool is encrypted (manifest credentialId hint: '{poolState.Hint}'); " +
             "preserving content across reload — Authenticate to unlock.");
     }
 }

@@ -73,14 +73,14 @@ public partial class AuthenticationModel
 
     // Manifest → panel state. CredentialId is the disk's binding, not a
     // "last used credential" cache, so it is read from the manifest rather
-    // than remembered; DiskEncrypted decides whether register is on offer at
+    // than remembered; PoolEncrypted decides whether register is on offer at
     // all. Only called while no session is active — an active session owns
     // CredentialId (it may be a plain disk's in-memory credential, which the
     // manifest knows nothing about until EnterEncrypted writes it).
     private async ValueTask RefreshPoolStateAsync()
     {
-        var diskState = await Session.GetStateAsync();
-        DiskEncrypted = diskState.Encrypted;
-        CredentialId = diskState.Hint;
+        var poolState = await Session.GetStateAsync();
+        PoolEncrypted = poolState.Encrypted;
+        CredentialId = poolState.Hint;
     }
 }

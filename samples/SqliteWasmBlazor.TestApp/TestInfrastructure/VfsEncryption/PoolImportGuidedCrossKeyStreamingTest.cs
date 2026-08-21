@@ -10,7 +10,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 /// path (<see cref="IEncryptedSqliteWasmDatabaseService.ImportPoolGuidedFromStreamAsync"/>)
 /// that powers "share / back-up to a passkey, then import on the recipient
 /// side". Closes the browser-E2E coverage gap left when commit c239c23
-/// deleted the old <c>byte[]</c> <c>DiskImportGuidedCrossKeyTest</c> without
+/// deleted the old <c>byte[]</c> <c>PoolImportGuidedCrossKeyTest</c> without
 /// a streaming replacement.
 ///
 /// <para>
@@ -43,7 +43,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 /// rather than through any residue of the wiped source pool.
 /// </para>
 /// </summary>
-internal sealed class DiskImportGuidedCrossKeyStreamingTest
+internal sealed class PoolImportGuidedCrossKeyStreamingTest
 {
     private const int RowCount = 12;
 
@@ -53,9 +53,9 @@ internal sealed class DiskImportGuidedCrossKeyStreamingTest
     private readonly IPrfService _prfService;
     private readonly IEncryptedSqliteWasmDatabaseService _session;
 
-    public string Name => "DiskImport_GuidedCrossKey_StreamingRoundTrip";
+    public string Name => "PoolImport_GuidedCrossKey_StreamingRoundTrip";
 
-    public DiskImportGuidedCrossKeyStreamingTest(
+    public PoolImportGuidedCrossKeyStreamingTest(
         IDbContextFactory<PrfVfsTestContext> factory,
         ISqliteWasmDatabaseService databaseService,
         ICryptoProvider cryptoProvider,

@@ -40,7 +40,7 @@ public partial class AuthenticationModel : ObservableModel
     // encrypted disk is bound to exactly one credential, so it offers sign-in
     // only — a second passkey derives a different PRF key and could never
     // unlock it. A plain disk offers sign-in and register side by side.
-    public partial bool DiskEncrypted { get; set; }
+    public partial bool PoolEncrypted { get; set; }
 
     public partial string? RegisterDisplayName { get; set; }
 
@@ -61,7 +61,7 @@ public partial class AuthenticationModel : ObservableModel
 
     // An encrypted disk unlocks with the credential its manifest names and
     // no other, so registering is not an option there.
-    private bool CanRegister() => IsPrfSupported == true && !DiskEncrypted;
+    private bool CanRegister() => IsPrfSupported == true && !PoolEncrypted;
 
     // One ceremony per click. A hint (encrypted disk) targets the bound
     // credential; no hint (plain disk) opens the platform's discoverable
@@ -130,7 +130,7 @@ public partial class AuthenticationModel : ObservableModel
         await RefreshPoolStateAsync();
     }
 
-    // Full sign-out. CredentialId and DiskEncrypted come straight back from
+    // Full sign-out. CredentialId and PoolEncrypted come straight back from
     // the manifest, so an encrypted disk keeps its binding (sign-in targets
     // the bound credential) while a plain disk drops to the discoverable
     // picker with register alongside it.
@@ -152,11 +152,11 @@ public partial class AuthenticationModel : ObservableModel
     // VFS key. Does NOT write the manifest — that's EnterEncrypted's job.
     private async ValueTask<bool> ApplySessionAsync(string credentialId, string publicKeyBase64)
     {
-        var diskState = await Session.GetStateAsync();
-        DiskEncrypted = diskState.Encrypted;
-        var diskHint = diskState.Hint;
-        if (!string.IsNullOrEmpty(diskHint) &&
-            !string.Equals(diskHint, credentialId, StringComparison.Ordinal))
+        var poolState = await Session.GetStateAsync();
+        PoolEncrypted = poolState.Encrypted;
+        var poolHint = poolState.Hint;
+        if (!string.IsNullOrEmpty(poolHint) &&
+            !string.Equals(poolHint, credentialId, StringComparison.Ordinal))
         {
             PrfService.ClearKeys();
             // Expose the rejected pubkey for the user to copy — useful for
@@ -196,7 +196,7 @@ public partial class AuthenticationModel : ObservableModel
         PublicKey = publicKeyBase64;
         // The envelope only restores onto an encrypted disk, so the manifest
         // read the next sign-out does would say the same thing.
-        DiskEncrypted = true;
+        PoolEncrypted = true;
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
     }

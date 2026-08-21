@@ -121,9 +121,9 @@ public partial class DatabaseEncryption
 
     private async Task HandleDbsFileAsync(IBrowserFile file)
     {
-        // Multi-DB envelope replaces the entire pool. On Unlocked disks
+        // Multi-DB envelope replaces the entire pool. On an Unlocked pool
         // the worker rekey-on-writes each entry under globalKey; on Plain
-        // disks it writes plain pages. CanImportDatabases gates Locked
+        // pools it writes plain pages. CanImportDatabases gates Locked
         // out (no key to encrypt under).
         var messageKey = Model.IsUnlocked
             ? "Confirm_ImportDatabases_Unlocked"
