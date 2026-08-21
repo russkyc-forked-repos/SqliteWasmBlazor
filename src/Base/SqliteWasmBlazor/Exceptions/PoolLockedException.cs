@@ -34,8 +34,16 @@ namespace SqliteWasmBlazor;
 /// </summary>
 public sealed class PoolLockedException : InvalidOperationException
 {
+    /// <summary>
+    /// Creates the exception for a bridge operation that was reached while
+    /// the pool was locked.
+    /// </summary>
+    /// <param name="operation">
+    /// The operation that reached the bridge, named in the message so the
+    /// offending call site is identifiable from the log alone.
+    /// </param>
     public PoolLockedException(string operation)
-        : base($"Encrypted VFS disk is locked — '{operation}' reached the bridge without an unlock. " +
+        : base($"Encrypted pool is locked — '{operation}' reached the bridge without an unlock. " +
                $"Consumer code likely touched DbContext outside <AuthorizeView Policy=\"DatabaseOpen\">. " +
                $"Move DB-touching work into a path gated by DbStateModel.State == READY (e.g. a model-side " +
                $"OnDbStateChangedAsync internal observer that self-guards before each EF call). " +

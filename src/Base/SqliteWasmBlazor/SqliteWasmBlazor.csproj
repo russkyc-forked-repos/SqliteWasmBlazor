@@ -34,6 +34,14 @@
     <PackageOutputPath>$(MSBuildThisFileDirectory)../../../.nuget</PackageOutputPath>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>$(NoWarn);NU5118</NoWarn>
+  
+    <!-- Every public member here is documented. CS1591 is suppressed
+         solution-wide in Directory.Build.props while Crypto and Crypto.UI
+         catch up; this project has caught up, so it opts back in and an
+         undocumented public member fails the build rather than sliding by.
+         See ToDo/PublicApiDocs.md. -->
+    <NoWarn>$(NoWarn.Replace('CS1591',''))</NoWarn>
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>

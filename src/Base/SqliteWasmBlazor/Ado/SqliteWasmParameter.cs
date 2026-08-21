@@ -17,16 +17,25 @@ public sealed class SqliteWasmParameter : DbParameter
     private DbType _dbType = DbType.Object;
     private string _sourceColumn = string.Empty;
 
+    /// <summary>Creates an empty parameter.</summary>
     public SqliteWasmParameter()
     {
     }
 
+    /// <summary>Creates a named parameter carrying a value.</summary>
+    /// <param name="parameterName">Parameter name as it appears in the SQL.</param>
+    /// <param name="value">Value to bind. <c>null</c> binds SQL NULL.</param>
     public SqliteWasmParameter(string parameterName, object? value)
     {
         _parameterName = parameterName;
         _value = value;
     }
 
+    /// <summary>
+    /// Creates a named parameter with a declared type but no value yet.
+    /// </summary>
+    /// <param name="parameterName">Parameter name as it appears in the SQL.</param>
+    /// <param name="dbType">Declared type of the value to be bound.</param>
     public SqliteWasmParameter(string parameterName, DbType dbType)
     {
         _parameterName = parameterName;
@@ -113,6 +122,13 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
         return _parameters.Count - 1;
     }
 
+    /// <summary>
+    /// Creates a parameter, appends it, and returns it — the shorthand for
+    /// the common bind-a-value case.
+    /// </summary>
+    /// <param name="parameterName">Parameter name as it appears in the SQL.</param>
+    /// <param name="value">Value to bind. <c>null</c> binds SQL NULL.</param>
+    /// <returns>The parameter that was added.</returns>
     public SqliteWasmParameter Add(string parameterName, object? value)
     {
         var parameter = new SqliteWasmParameter(parameterName, value);

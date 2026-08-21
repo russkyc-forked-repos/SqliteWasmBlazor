@@ -17,6 +17,7 @@ public sealed class SqliteWasmCommand : DbCommand
     private string _commandText = string.Empty;
     private readonly SqliteWasmParameterCollection _parameters;
 
+    /// <summary>Creates a command with no text and an empty parameter collection.</summary>
     public SqliteWasmCommand()
     {
         _parameters = new SqliteWasmParameterCollection();
@@ -45,6 +46,11 @@ public sealed class SqliteWasmCommand : DbCommand
     /// <inheritdoc />
     protected override DbConnection? DbConnection { get; set; }
 
+    /// <summary>
+    /// The connection this command runs on, typed rather than as
+    /// <see cref="DbConnection"/>. Shadows the base member; assigning either
+    /// one sets the same underlying connection.
+    /// </summary>
     public new SqliteWasmConnection? Connection
     {
         get => (SqliteWasmConnection?)DbConnection;
@@ -54,6 +60,12 @@ public sealed class SqliteWasmCommand : DbCommand
     /// <inheritdoc />
     protected override DbParameterCollection DbParameterCollection => _parameters;
 
+    /// <summary>
+    /// The command's parameters, typed rather than as
+    /// <see cref="DbParameterCollection"/> so the
+    /// <c>Add(name, value)</c> overload is reachable without a cast. Shadows
+    /// the base member and returns the same collection.
+    /// </summary>
     public new SqliteWasmParameterCollection Parameters => _parameters;
 
     /// <inheritdoc />

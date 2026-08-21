@@ -11,6 +11,11 @@ namespace SqliteWasmBlazor;
 /// </summary>
 public sealed class SqliteWasmOptions : SqliteWasmAssetOptions
 {
+    /// <summary>
+    /// Creates the options with <c>AssetRoot</c> pointing at this package's
+    /// static web assets. Override it only for a host that serves them from
+    /// somewhere else, such as a browser-extension build.
+    /// </summary>
     public SqliteWasmOptions()
     {
         AssetRoot = "_content/SqliteWasmBlazor/";

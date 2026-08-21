@@ -152,6 +152,18 @@ public sealed class SqliteWasmDataReader : DbDataReader
         throw new InvalidCastException($"Column {ordinal} is not a DateTime. Actual type: {value.GetType().Name}");
     }
 
+    /// <summary>
+    /// Reads a column as <see cref="DateTimeOffset"/>. Not an override —
+    /// <see cref="DbDataReader"/> has no such method, and SQLite has no
+    /// native type for it. Accepts a stored <see cref="DateTimeOffset"/>, a
+    /// <see cref="DateTime"/>, or TEXT, which is how the value is normally
+    /// stored; TEXT is parsed as universal time, matching
+    /// Microsoft.Data.Sqlite.
+    /// </summary>
+    /// <param name="ordinal">Zero-based column index.</param>
+    /// <exception cref="InvalidCastException">
+    /// The column holds none of those forms.
+    /// </exception>
     public DateTimeOffset GetDateTimeOffset(int ordinal)
     {
         var value = GetValue(ordinal);
@@ -172,6 +184,17 @@ public sealed class SqliteWasmDataReader : DbDataReader
         throw new InvalidCastException($"Column {ordinal} is not a DateTimeOffset or DateTime. Actual type: {value.GetType().Name}");
     }
 
+    /// <summary>
+    /// Reads a column as <see cref="TimeSpan"/>. Not an override —
+    /// <see cref="DbDataReader"/> has no such method. A numeric column is
+    /// read as <b>days</b>, not milliseconds, which is what
+    /// Microsoft.Data.Sqlite does and the one detail worth checking if a
+    /// duration comes back wrong by a large factor.
+    /// </summary>
+    /// <param name="ordinal">Zero-based column index.</param>
+    /// <exception cref="InvalidCastException">
+    /// The column holds a form that cannot be read as a duration.
+    /// </exception>
     public TimeSpan GetTimeSpan(int ordinal)
     {
         var value = GetValue(ordinal);
