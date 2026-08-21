@@ -158,18 +158,20 @@ lemma whose premise carries file variables still descends the pending-op
 chain no matter how goals are ranked. Keep key-timeline lemmas free of file
 variables rather than trying to rank the file goals away.
 
-### Running the gate on macOS
+### Why verify.sh proves in batches
 
-`verify.sh` passes one `--prove=<lemma>` per lemma in a single invocation.
-At ~30 lemmas that argument list overflows the 255-byte filename limit and
-tamarin dies with `openFile: invalid argument (File name too long)` — which
-is not a proof failure. A bare `--prove` instead shares one proof search
-across all lemmas and exhausts a 16 GB heap. Prove in batches of ~6.
+`verify.sh` used to pass one `--prove=<lemma>` per lemma in a single
+invocation. At ~30 lemmas that argument list overflows the 255-byte filename
+limit and tamarin dies with `openFile: invalid argument (File name too
+long)` — which reads like a crash and is not a proof failure. A bare
+`--prove` instead shares one proof search across all lemmas and exhausts a
+16 GB heap on `vfs-inplace-lifecycle`. The script now proves in batches of
+6; override with `TAMARIN_BATCH`.
 
-When batching, note that each batch's `summary of summaries` lists **every**
-lemma in the theory; the ones not selected in that batch read `analysis
-incomplete`. Filter to the batch's own selection or the result reads as a
-mass failure when it is nothing of the kind.
+One trap if you batch by hand: every batch's `summary of summaries` lists
+**every** lemma in the theory, and the ones that batch did not select read
+`analysis incomplete`. Filter to the batch's own selection, or a completely
+green run reads as a mass failure.
 
 Provenance of the two non-obvious ingredients:
 
