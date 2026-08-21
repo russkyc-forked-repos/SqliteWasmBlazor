@@ -134,7 +134,7 @@ public partial class AuthenticationModel : ObservableModel
     // the manifest, so an encrypted disk keeps its binding (sign-in targets
     // the bound credential) while a plain disk drops to the discoverable
     // picker with register alongside it.
-    public async ValueTask SignOutAsync()
+    internal async ValueTask SignOutAsync()
     {
         PrfService.ClearKeys();
         PublicKey = null;
@@ -176,7 +176,7 @@ public partial class AuthenticationModel : ObservableModel
         return true;
     }
 
-    public void DismissWrongPasskey()
+    internal void DismissWrongPasskey()
     {
         WrongPasskeyPublicKey = null;
         WrongPasskeyCredentialId = null;
