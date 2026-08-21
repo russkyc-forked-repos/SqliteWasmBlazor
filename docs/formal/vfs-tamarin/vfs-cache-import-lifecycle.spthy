@@ -2,12 +2,12 @@ theory VfsCacheImportLifecycle
 begin
 
 /*
- * Disk-level model for key-mgmt-v2 PRF cache expiry and whole-disk import.
+ * Pool-level model for key-mgmt-v2 PRF cache expiry and whole-pool import.
  *
  * Implementation references:
  *   src/Crypto/SqliteWasmBlazor.Crypto/Services/PrfService.cs
  *   src/Crypto/SqliteWasmBlazor.Crypto/Services/SecureKeyCache.cs
- *   src/Crypto/SqliteWasmBlazor.Crypto.UI/Services/EncryptedDiskLifecycle.cs
+ *   src/Crypto/SqliteWasmBlazor.Crypto.UI/Services/EncryptedPoolLifecycle.cs
  *   src/Crypto/SqliteWasmBlazor.Crypto/Services/EncryptedSqliteWasmDatabaseService.cs
  *   src/Base/SqliteWasmBlazor/Services/SqliteWasmWorkerBridge.cs
  *   src/Base/SqliteWasmBlazor/TypeScript/worker/sqlite-worker.ts
@@ -18,31 +18,31 @@ begin
  *     SESSION/TIMED cache entries are modeled as persistent facts; NONE is
  *     modeled as one-shot linear facts consumed by the first VFS-key use.
  *   - The VFS key is derived from the cached seed and installed as the
- *     worker-wide globalKey only while the disk is Encrypted+Unlocked.
- *   - A public unlock is accepted only after the disk manifest MAC verifies
+ *     worker-wide globalKey only while the pool is Encrypted+Unlocked.
+ *   - A public unlock is accepted only after the pool manifest MAC verifies
  *     under the installed globalKey. Failed verification clears globalKey and
- *     leaves the disk Encrypted+Locked.
+ *     leaves the pool Encrypted+Locked.
  *   - Expiry of the seed cache while unlocked clears globalKey and leaves the
- *     disk Encrypted+Locked with the passkey hint preserved.
- *   - Whole-disk import validates the ENTIRE source on a read-only pass
+ *     pool Encrypted+Locked with the passkey hint preserved.
+ *   - Whole-pool import validates the ENTIRE source on a read-only pass
  *     before deleting the existing pool (`PoolWiped`). Plain sources
  *     (.zip / .dbs) get a full structural walk including per-file SQLite
  *     magic; cipher envelopes (.eds) require ECIES unwrap + AEAD
  *     verification of every slot of every file under K_wrap. Plain imports
  *     are accepted on Plain, Encrypted+Locked, and Encrypted+Unlocked
- *     disks; Locked breaks encryption and ends Plain, Unlocked re-encrypts
+ *     pools; Locked breaks encryption and ends Plain, Unlocked re-encrypts
  *     and stays Encrypted+Unlocked. Guided cipher imports from Plain/Locked
- *     bind the disk to the imported credential. A tampered / truncated /
+ *     bind the pool to the imported credential. A tampered / truncated /
  *     crafted source fails the validation pass and is rejected with the
- *     disk state unchanged — rejection can never trigger the wipe.
+ *     pool state unchanged — rejection can never trigger the wipe.
  *
  * State encoding (2026-06-12 rework):
- *   Disk tri-state, hint presence, and the worker key slot are encoded as
+ *   Pool tri-state, hint presence, and the worker key slot are encoded as
  *   EVENT + CLAIM + RESTRICTION ("latest event before the claim must
  *   match") instead of pass-through linear facts — the token encoding sent
  *   Tamarin's precomputation into divergence for any exists-trace lemma
  *   (see vfs-inplace-lifecycle.spthy for the same rework and rationale).
- *   `DiskState` doubles as the lemma label and the disk-state event family.
+ *   `PoolState` doubles as the lemma label and the pool-state event family.
  *   !KeyBind is a persistent variable binder only; currency of the claimed
  *   key is enforced by the restriction, never by fact consumption.
  *
@@ -59,12 +59,12 @@ begin
 // State events, claims, and restrictions.
 // ---------------------------------------------------------------------------
 
-restriction disk_state_claims_match_latest:
+restriction pool_state_claims_match_latest:
     "All Device s #t.
-        ClaimDiskState(Device, s) @ #t
+        ClaimPoolState(Device, s) @ #t
         ==> Ex #u.
-              DiskState(Device, s) @ #u & #u < #t
-            & not (Ex s2 #v. DiskState(Device, s2) @ #v & #u < #v & #v < #t)"
+              PoolState(Device, s) @ #u & #u < #t
+            & not (Ex s2 #v. PoolState(Device, s2) @ #v & #u < #v & #v < #t)"
 
 restriction key_state_claims_match_latest:
     "All Device status key #t.
@@ -82,11 +82,11 @@ restriction hint_claims_match_latest:
             & not (Ex p2 #v. HintEv(Device, p2) @ #v & #u < #v & #v < #t)"
 
 // ---------------------------------------------------------------------------
-// Disk, cache, manifest-hint, and worker key initial states.
+// Pool, cache, manifest-hint, and worker key initial states.
 //
 // !SeedCache(Device, Seed) models a live SecureKeyCache prf-seed:{salt}
 // at the instant a transition uses it. It is persistent here; the expiry
-// rules model the observable security effect (globalKey cleared + disk
+// rules model the observable security effect (globalKey cleared + pool
 // locked). !JsCache(Device) models JS prf-keys:{salt} — session-lifetime
 // under every strategy (the JS-side non-extractable handles + X25519 priv
 // buffer are what makes the ceremony's own cached ops work, so NONE does
@@ -94,17 +94,17 @@ restriction hint_claims_match_latest:
 // *C# seed* one-shot entry as a LINEAR fact consumed on first use.
 // ---------------------------------------------------------------------------
 
-rule InitPlainDisk:
+rule InitPlainPool:
     [ ]
-  --[ DiskState($Device, 'plain')
+  --[ PoolState($Device, 'plain')
     , KeyState($Device, 'empty', 'none')
     , HintEv($Device, 'absent')
     ]->
     [ ]
 
-rule InitEncryptedLockedDisk:
+rule InitEncryptedLockedPool:
     [ ]
-  --[ DiskState($Device, 'encryptedLocked')
+  --[ PoolState($Device, 'encryptedLocked')
     , HintPresent($Device)
     , KeyState($Device, 'empty', 'none')
     , HintEv($Device, 'present')
@@ -142,15 +142,15 @@ rule EnterEncrypted:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ClaimKeyState($Device, 'empty', 'none')
     , VfsKeyDerived($Device, seed, ~k)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , HintWritten($Device)
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     , HintEv($Device, 'present')
     ]->
@@ -161,16 +161,16 @@ rule EnterEncryptedNone:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ClaimKeyState($Device, 'empty', 'none')
     , VfsKeyDerived($Device, seed, ~k)
     , SeedConsumed($Device, seed)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , HintWritten($Device)
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     , HintEv($Device, 'present')
     ]->
@@ -181,15 +181,15 @@ rule UnlockFromCachedSeed:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'empty', 'none')
     , UnlockAccepted($Device)
     , VfsKeyDerived($Device, seed, ~k)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , ManifestMacVerified($Device, ~k)
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     ]->
     [ !KeyBind($Device, ~k) ]
@@ -199,16 +199,16 @@ rule UnlockFromCachedSeedNone:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'empty', 'none')
     , UnlockAccepted($Device)
     , VfsKeyDerived($Device, seed, ~k)
     , SeedConsumed($Device, seed)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , ManifestMacVerified($Device, ~k)
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     ]->
     [ !KeyBind($Device, ~k) ]
@@ -222,7 +222,7 @@ rule RejectUnlockBadManifestMac:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'empty', 'none')
     , VfsKeyDerived($Device, seed, ~k)
@@ -230,7 +230,7 @@ rule RejectUnlockBadManifestMac:
     , ManifestMacRejected($Device, ~k)
     , GlobalKeyCleared($Device, ~k)
     , UnlockRejected($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolState($Device, 'encryptedLocked')
     ]->
     [ ]
 
@@ -239,7 +239,7 @@ rule RejectUnlockBadManifestMacNone:
     , !JsCache($Device)
     , Fr(~k)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'empty', 'none')
     , VfsKeyDerived($Device, seed, ~k)
@@ -248,18 +248,18 @@ rule RejectUnlockBadManifestMacNone:
     , ManifestMacRejected($Device, ~k)
     , GlobalKeyCleared($Device, ~k)
     , UnlockRejected($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolState($Device, 'encryptedLocked')
     ]->
     [ ]
 
-rule LockDisk:
+rule LockPool:
     [ !KeyBind($Device, k) ]
-  --[ ClaimDiskState($Device, 'encryptedUnlocked')
+  --[ ClaimPoolState($Device, 'encryptedUnlocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'held', k)
     , GlobalKeyCleared($Device, k)
-    , DiskLocked($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolLocked($Device)
+    , PoolState($Device, 'encryptedLocked')
     , KeyState($Device, 'empty', 'none')
     ]->
     [ ]
@@ -269,15 +269,15 @@ rule CacheExpiresWhileUnlocked:
     , !SeedCache($Device, seed)
     , !JsCache($Device)
     ]
-  --[ ClaimDiskState($Device, 'encryptedUnlocked')
+  --[ ClaimPoolState($Device, 'encryptedUnlocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'held', k)
     , SeedExpired($Device, seed)
     , CacheExpiredWhileUnlocked($Device, seed)
     , JsBundleExpired($Device)
     , GlobalKeyCleared($Device, k)
-    , DiskLocked($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolLocked($Device)
+    , PoolState($Device, 'encryptedLocked')
     , HintPresent($Device)
     , KeyState($Device, 'empty', 'none')
     ]->
@@ -287,63 +287,63 @@ rule CacheExpiresWhileLocked:
     [ !SeedCache($Device, seed)
     , !JsCache($Device)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , SeedExpired($Device, seed)
     , JsBundleExpired($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolState($Device, 'encryptedLocked')
     , HintPresent($Device)
     ]->
     [ ]
 
 // ---------------------------------------------------------------------------
-// Whole-disk import: validate-then-wipe accepts.
+// Whole-pool import: validate-then-wipe accepts.
 // ---------------------------------------------------------------------------
 
 rule ImportPlainZipOnPlain:
     [ ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ImportSourceState($Device, 'plain')
     , PlainImportPreflightOk($Device)
     , PoolWiped($Device)
     , ImportAccepted($Device, 'plain', 'plain')
-    , DiskState($Device, 'plain')
+    , PoolState($Device, 'plain')
     ]->
     [ ]
 
 rule ImportPlainZipOnUnlocked:
     [ !KeyBind($Device, k) ]
-  --[ ClaimDiskState($Device, 'encryptedUnlocked')
+  --[ ClaimPoolState($Device, 'encryptedUnlocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'held', k)
     , ImportSourceState($Device, 'encryptedUnlocked')
     , PlainImportPreflightOk($Device)
     , PoolWiped($Device)
     , ImportAccepted($Device, 'encryptedUnlocked', 'plain')
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     ]->
     [ ]
 
 rule ImportPlainZipOnLockedBreaksEncryption:
     [ ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ImportSourceState($Device, 'encryptedLocked')
     , PlainImportPreflightOk($Device)
     , PoolWiped($Device)
     , EncryptionBrokenByPlainImport($Device)
     , ImportAccepted($Device, 'encryptedLocked', 'plain')
-    , DiskState($Device, 'plain')
+    , PoolState($Device, 'plain')
     , HintEv($Device, 'absent')
     ]->
     [ ]
 
 rule RejectCipherEnvelopeOnPlainUnguided:
     [ ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ImportSourceState($Device, 'plain')
     , ImportRejected($Device, 'plain', 'cipher', 'wrongKey')
-    , DiskState($Device, 'plain')
+    , PoolState($Device, 'plain')
     ]->
     [ ]
 
@@ -351,14 +351,14 @@ rule ImportCipherEnvelopeOnUnlocked:
     [ !KeyBind($Device, k)
     , Fr(~wrap)
     ]
-  --[ ClaimDiskState($Device, 'encryptedUnlocked')
+  --[ ClaimPoolState($Device, 'encryptedUnlocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'held', k)
     , ImportSourceState($Device, 'encryptedUnlocked')
     , EncryptedImportPreflightOk($Device, ~wrap)
     , PoolWiped($Device)
     , ImportAccepted($Device, 'encryptedUnlocked', 'cipher')
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     ]->
     [ ]
 
@@ -368,11 +368,11 @@ rule ImportCipherEnvelopeGuidedOnPlain:
     , Fr(~k)
     , Fr(~wrap)
     ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ClaimKeyState($Device, 'empty', 'none')
     , ImportSourceState($Device, 'plain')
     , VfsKeyDerived($Device, seed, ~k)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , EncryptedImportPreflightOk($Device, ~wrap)
     , PoolWiped($Device)
@@ -380,7 +380,7 @@ rule ImportCipherEnvelopeGuidedOnPlain:
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
     , ImportAccepted($Device, 'plain', 'cipher')
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     , HintEv($Device, 'present')
     ]->
@@ -392,12 +392,12 @@ rule ImportCipherEnvelopeGuidedOnLocked:
     , Fr(~k)
     , Fr(~wrap)
     ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'empty', 'none')
     , ImportSourceState($Device, 'encryptedLocked')
     , VfsKeyDerived($Device, seed, ~k)
-    , DiskEncrypted($Device)
+    , PoolEncrypted($Device)
     , GlobalKeyInstalled($Device, ~k)
     , EncryptedImportPreflightOk($Device, ~wrap)
     , PoolWiped($Device)
@@ -405,48 +405,48 @@ rule ImportCipherEnvelopeGuidedOnLocked:
     , ManifestMacWritten($Device, ~k)
     , ManifestMacVerified($Device, ~k)
     , ImportAccepted($Device, 'encryptedLocked', 'cipher')
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     , KeyState($Device, 'held', ~k)
     ]->
     [ !KeyBind($Device, ~k) ]
 
 // A tampered / truncated / crafted source fails the read-only validation
-// pass and is rejected with the disk untouched. The implementation
+// pass and is rejected with the pool untouched. The implementation
 // validates the ENTIRE source before the destructive wipe (.eds: every
 // slot of every file AEAD-verified under K_wrap; .zip/.dbs: full
 // structural walk incl. per-file SQLite magic), so rejection happens
-// strictly pre-wipe: disk state, hint, and (when unlocked) globalKey all
+// strictly pre-wipe: pool state, hint, and (when unlocked) globalKey all
 // survive. $Kind ranges over the source kinds ('plain' / 'cipher') —
 // the invariant is kind-independent. One rule per reachable source state.
 
 rule RejectInvalidEnvelopeOnPlain:
     [ ]
-  --[ ClaimDiskState($Device, 'plain')
+  --[ ClaimPoolState($Device, 'plain')
     , ImportSourceState($Device, 'plain')
     , ImportRejected($Device, 'plain', $Kind, 'invalidEnvelope')
-    , DiskState($Device, 'plain')
+    , PoolState($Device, 'plain')
     ]->
     [ ]
 
 rule RejectInvalidEnvelopeOnUnlocked:
     [ !KeyBind($Device, k) ]
-  --[ ClaimDiskState($Device, 'encryptedUnlocked')
+  --[ ClaimPoolState($Device, 'encryptedUnlocked')
     , ClaimHint($Device, 'present')
     , ClaimKeyState($Device, 'held', k)
     , ImportSourceState($Device, 'encryptedUnlocked')
     , ImportRejected($Device, 'encryptedUnlocked', $Kind, 'invalidEnvelope')
-    , DiskState($Device, 'encryptedUnlocked')
+    , PoolState($Device, 'encryptedUnlocked')
     ]->
     [ ]
 
 rule RejectInvalidEnvelopeOnLocked:
     [ ]
-  --[ ClaimDiskState($Device, 'encryptedLocked')
+  --[ ClaimPoolState($Device, 'encryptedLocked')
     , ClaimHint($Device, 'present')
     , ImportSourceState($Device, 'encryptedLocked')
     , ImportRejected($Device, 'encryptedLocked', $Kind, 'invalidEnvelope')
     , HintPresent($Device)
-    , DiskState($Device, 'encryptedLocked')
+    , PoolState($Device, 'encryptedLocked')
     ]->
     [ ]
 
@@ -454,11 +454,11 @@ rule RejectInvalidEnvelopeOnLocked:
 // Lemmas.
 // ---------------------------------------------------------------------------
 
-lemma hint_write_is_after_disk_encryption:
+lemma hint_write_is_after_pool_encryption:
     "All Device #t.
         HintWritten(Device) @ #t
-        ==> DiskEncrypted(Device) @ #t
-          & DiskState(Device, 'encryptedUnlocked') @ #t"
+        ==> PoolEncrypted(Device) @ #t
+          & PoolState(Device, 'encryptedUnlocked') @ #t"
 
 lemma unlock_requires_seed_cache:
     "All Device #t.
@@ -478,7 +478,7 @@ lemma rejected_unlock_clears_global_key:
         UnlockRejected(Device) @ #t
         ==> Ex k. ManifestMacRejected(Device, k) @ #t
             & GlobalKeyCleared(Device, k) @ #t
-            & DiskState(Device, 'encryptedLocked') @ #t"
+            & PoolState(Device, 'encryptedLocked') @ #t"
 
 // NONE's hardening is C#-seed-local: SeedConsumed fires at every
 // transition that ingests SeedCacheOnce, but the JS bundle stays
@@ -496,8 +496,8 @@ lemma cache_expiry_locks_and_clears_global_key:
         CacheExpiredWhileUnlocked(Device, seed) @ #t
         ==> Ex k.
               GlobalKeyCleared(Device, k) @ #t
-            & DiskLocked(Device) @ #t
-            & DiskState(Device, 'encryptedLocked') @ #t"
+            & PoolLocked(Device) @ #t
+            & PoolState(Device, 'encryptedLocked') @ #t"
 
 lemma cache_expiry_preserves_hint:
     "All Device seed #t.
@@ -513,14 +513,14 @@ lemma unlocked_plain_zip_import_stays_encrypted:
     "All Device #t.
         ImportAccepted(Device, 'encryptedUnlocked', 'plain') @ #t
         ==> ImportSourceState(Device, 'encryptedUnlocked') @ #t
-          & DiskState(Device, 'encryptedUnlocked') @ #t"
+          & PoolState(Device, 'encryptedUnlocked') @ #t"
 
 lemma locked_plain_zip_import_breaks_to_plain:
     "All Device #t.
         ImportAccepted(Device, 'encryptedLocked', 'plain') @ #t
         ==> ImportSourceState(Device, 'encryptedLocked') @ #t
           & EncryptionBrokenByPlainImport(Device) @ #t
-          & DiskState(Device, 'plain') @ #t"
+          & PoolState(Device, 'plain') @ #t"
 
 lemma cipher_import_accept_requires_preflight:
     "All Device State #t.
@@ -530,18 +530,18 @@ lemma cipher_import_accept_requires_preflight:
 lemma guided_cipher_import_from_plain_ends_unlocked:
     "All Device #t.
         ImportAccepted(Device, 'plain', 'cipher') @ #t
-        ==> DiskState(Device, 'encryptedUnlocked') @ #t"
+        ==> PoolState(Device, 'encryptedUnlocked') @ #t"
 
 lemma guided_cipher_import_from_locked_ends_unlocked:
     "All Device #t.
         ImportAccepted(Device, 'encryptedLocked', 'cipher') @ #t
-        ==> DiskState(Device, 'encryptedUnlocked') @ #t"
+        ==> PoolState(Device, 'encryptedUnlocked') @ #t"
 
-lemma plain_disk_rejects_cipher_import:
+lemma plain_pool_rejects_cipher_import:
     "All Device #t.
         ImportRejected(Device, 'plain', 'cipher', 'wrongKey') @ #t
         ==> ImportSourceState(Device, 'plain') @ #t
-          & DiskState(Device, 'plain') @ #t"
+          & PoolState(Device, 'plain') @ #t"
 
 // Wipe-after-validate: the destructive pool wipe fires only inside an
 // import whose ENTIRE source already passed the read-only validation
@@ -552,13 +552,13 @@ lemma pool_wipe_requires_validated_source:
         ==> PlainImportPreflightOk(Device) @ #t
           | (Ex k. EncryptedImportPreflightOk(Device, k) @ #t)"
 
-// A rejected import is observationally a no-op on the disk: the state
+// A rejected import is observationally a no-op on the pool: the state
 // the import found is the state it leaves.
-lemma rejected_import_preserves_disk_state:
+lemma rejected_import_preserves_pool_state:
     "All Device State Kind #t.
         ImportRejected(Device, State, Kind, 'invalidEnvelope') @ #t
         ==> ImportSourceState(Device, State) @ #t
-          & DiskState(Device, State) @ #t"
+          & PoolState(Device, State) @ #t"
 
 // Rejection and the wipe are mutually exclusive events — a malformed
 // source can never trigger the destructive path.

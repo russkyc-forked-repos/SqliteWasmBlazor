@@ -2,7 +2,7 @@
 
 This folder contains Tamarin models for the PRF-keyed VFS implementation in
 `src/Crypto/SqliteWasmBlazor.Crypto/TypeScript/worker/vfs-prf`, its in-place
-conversion wrapper, and the disk-level PRF cache/import lifecycle.
+conversion wrapper, and the pool-level PRF cache/import lifecycle.
 
 ## Files
 
@@ -15,16 +15,16 @@ conversion wrapper, and the disk-level PRF cache/import lifecycle.
   lemma's plain-export escape clause load-bearing.
 - `vfs-inplace-lifecycle.spthy` models the operational wrapper around export
   and in-place conversion: source-shape preconditions, worker global-key
-  lifecycle, temp/backup replacement, rollback, and disk-level
+  lifecycle, temp/backup replacement, rollback, and pool-level
   decrypt-to-plain key purge. The worker's single global-key slot is one
   linear token per device (unique-init restriction), so the temporal lemmas
   genuinely exercise the install/clear state machine rather than re-reading
   labels off the rule that fired.
 - `vfs-cache-import-lifecycle.spthy` models PRF seed / JS key-cache expiry,
   `KeyCacheStrategy.NONE` one-shot consumption, manifest-MAC-verified unlock,
-  lock-on-expiry, deferred manifest persistence, and whole-disk import
+  lock-on-expiry, deferred manifest persistence, and whole-pool import
   wipe-after-validate (full-source validation gating the destructive pool
-  wipe; invalid sources rejected with disk state preserved).
+  wipe; invalid sources rejected with pool state preserved).
 
 ## Scope
 
@@ -45,11 +45,11 @@ The model covers the encrypted at-rest channel:
   see `vfs-cache-import-lifecycle.spthy` for the rule shape and the
   `crypto-vfs.md` "NONE" note for the runtime rationale),
 - manifest MAC verification before unlock acceptance,
-- whole-disk plain (.zip / .dbs) and cipher-envelope (.eds) import
-  acceptance/rejection by current disk state, per-file content kind, and
+- whole-pool plain (.zip / .dbs) and cipher-envelope (.eds) import
+  acceptance/rejection by current pool state, per-file content kind, and
   pre-destructive validation: the pool wipe (`PoolWiped`) fires only after
   the entire source has validated read-only, and a tampered / truncated /
-  crafted source is rejected with disk state, hint, and globalKey intact.
+  crafted source is rejected with pool state, hint, and globalKey intact.
 
 Plain VFS mode and rekey-to-plain are represented as events, not confidentiality
 claims. The implementation returns plain bytes to the trusted caller in those
@@ -91,7 +91,7 @@ Expected `vfs-inplace-lifecycle.spthy` summary:
 - `export_plain_requires_encrypted_global_key`
 - `export_rekey_requires_encrypted_global_key`
 - `decrypt_in_place_requires_encrypted_global_key`
-- `decrypt_success_keeps_global_key_until_disk_leave`
+- `decrypt_success_keeps_global_key_until_pool_leave`
 - `decrypt_failure_keeps_global_key`
 - `leave_encrypted_clears_global_key`
 - `replacement_failure_restores_original`
@@ -108,15 +108,16 @@ Expected `vfs-inplace-lifecycle.spthy` summary:
   `empty_event_is_init_or_clear`, `key_installed_once`,
   `key_event_rooted_at_init` (reuse invariants — placement before/after
   matters, see in-file comments)
-- `pending_*` (3) — the strong per-key forms (nested-quantifier
-  no-live-key pair, decrypt no-clear half); stated, NOT verified, skipped
-  by verify.sh. Their inductive descent diverges under all built-in
-  heuristics, use_induction, budget bounding, and the deprioFiles tactic;
-  a hand-guided interactive proof is the known remaining route.
+- Use-after-clear (verified): `no_claim_held_after_clear` — no rule may
+  claim a held key after that key was cleared — carried by
+  `cleared_key_never_held_again` and `clear_requires_install [reuse]`.
+  Stated over `ClaimKeyState` so it covers all seven rules that claim a
+  held key, and so its proof carries no file variables; the decrypt-only
+  phrasing does, and diverges down the `PendingDecryptOp` chain.
 
 Expected `vfs-cache-import-lifecycle.spthy` summary:
 
-- `hint_write_is_after_disk_encryption`
+- `hint_write_is_after_pool_encryption`
 - `unlock_requires_seed_cache`
 - `accepted_unlock_requires_manifest_mac_verified`
 - `rejected_unlock_clears_global_key`
@@ -129,22 +130,46 @@ Expected `vfs-cache-import-lifecycle.spthy` summary:
 - `cipher_import_accept_requires_preflight`
 - `guided_cipher_import_from_plain_ends_unlocked`
 - `guided_cipher_import_from_locked_ends_unlocked`
-- `plain_disk_rejects_cipher_import`
+- `plain_pool_rejects_cipher_import`
 - `pool_wipe_requires_validated_source`
-- `rejected_import_preserves_disk_state`
+- `rejected_import_preserves_pool_state`
 - `rejected_import_never_wipes`
 - `sanity_unlock_accept_reachable` … `sanity_pool_wipe_reachable` (11 exists-trace)
 
 ## Verification status
 
-**ALL GREEN** — Tamarin 1.12.0 + maude 3.5.1, 2026-06-13, full
-`verify.sh` + `mutation-check.sh` gate in ~65 s on a 4-CPU / 21 GB box
-(heap cap 10G): 72 lemmas verified (vfs 14, inplace-lifecycle 30,
-cache-import-lifecycle 28), 3/3 mutations falsified. 3 `pending_*`
-statements remain open by design (see above). The temporal lemmas use the
-in-theory `deprioFiles` tactic where annotated — file-state claim goals
-are irrelevant to the key-timeline arguments and deprioritizing them is
-the difference between 12-step proofs and non-termination.
+**ALL GREEN** — Tamarin 1.12.0, 2026-08-21: **74 lemmas verified**
+(vfs 14, inplace-lifecycle 32, cache-import-lifecycle 28). **No
+`pending_*` statements remain** — see `PENDING-PROOF-PLAN.md` for how all
+three were resolved.
+
+The gate was red from 2026-06-30 to 2026-08-21. `76d3a34`, a commit about
+a WAL checkpoint fix in the worker, dropped the `pending_` prefix from
+`decrypt_no_clear_before_use` without weakening it; `verify.sh` skips
+`pending_*`, so that rename alone put an unprovable phrasing into the gate.
+It is now replaced by `no_claim_held_after_clear`, which is stronger.
+
+The temporal lemmas use the in-theory `deprioFiles` tactic where annotated —
+file-state claim goals are irrelevant to the key-timeline arguments and
+deprioritizing them is the difference between 12-step proofs and
+non-termination. Note the limit of that tactic: it matches `FileState|FileVer`
+and **not** the linear `PendingDecryptOp` / `PendingEncryptOp` facts, so a
+lemma whose premise carries file variables still descends the pending-op
+chain no matter how goals are ranked. Keep key-timeline lemmas free of file
+variables rather than trying to rank the file goals away.
+
+### Running the gate on macOS
+
+`verify.sh` passes one `--prove=<lemma>` per lemma in a single invocation.
+At ~30 lemmas that argument list overflows the 255-byte filename limit and
+tamarin dies with `openFile: invalid argument (File name too long)` — which
+is not a proof failure. A bare `--prove` instead shares one proof search
+across all lemmas and exhausts a 16 GB heap. Prove in batches of ~6.
+
+When batching, note that each batch's `summary of summaries` lists **every**
+lemma in the theory; the ones not selected in that batch read `analysis
+incomplete`. Filter to the batch's own selection or the result reads as a
+mass failure when it is nothing of the kind.
 
 Provenance of the two non-obvious ingredients:
 
@@ -158,8 +183,7 @@ Provenance of the two non-obvious ingredients:
   rule set — i.e. the historical `verified` stamps never required the
   prover to construct a single execution trace.
 
-Open: the 4 `pending_*` temporal key-state lemmas in
-`vfs-inplace-lifecycle.spthy` (each proves in <100 steps assuming the
-reuse invariants, but the closing induction diverges under all built-in
-heuristics; needs a goal-ranking oracle). They are stated, documented,
-and excluded from the gate.
+Open: nothing. The temporal key-state lemmas that were excluded from the
+gate are all resolved — two replaced by provable weaker forms in `76d3a34`,
+the third by the file-free `no_claim_held_after_clear`, which is stronger
+than the statement it replaces.
