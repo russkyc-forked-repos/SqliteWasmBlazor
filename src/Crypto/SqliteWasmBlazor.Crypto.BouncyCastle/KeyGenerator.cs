@@ -10,7 +10,7 @@ namespace SqliteWasmBlazor.Crypto.BouncyCastle;
 /// Key derivation utilities for PRF-based key generation.
 /// Two callers only — both inside <see cref="BouncyCastleCryptoProvider"/>:
 /// <see cref="HkdfDeriveKey"/> backs every ECIES / wrap-key derivation,
-/// <see cref="DeriveDualKeyPair"/> backs <see cref="ICryptoProvider.DeriveDualKeyPairAsync"/>.
+/// <see cref="DeriveDualKeyPair"/> backs <see cref="Abstractions.ICryptoProvider.DeriveDualKeyPairAsync"/>.
 /// </summary>
 public static class KeyGenerator
 {

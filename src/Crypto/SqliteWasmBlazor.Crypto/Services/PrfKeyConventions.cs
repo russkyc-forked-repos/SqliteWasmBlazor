@@ -4,7 +4,7 @@ namespace SqliteWasmBlazor.Crypto.Services;
 /// Single source of truth for the JS-side key cache identifier shared by
 /// <see cref="PrfService"/> (which writes the entry via
 /// <c>ICryptoProvider.StoreKeysAsync</c>) and the consumers that read it
-/// (<see cref="SigningService"/>).
+/// (<c>SigningService</c>).
 ///
 /// <para>
 /// JS-side <c>keyCache</c> stores the derived Ed25519 + AES keys as

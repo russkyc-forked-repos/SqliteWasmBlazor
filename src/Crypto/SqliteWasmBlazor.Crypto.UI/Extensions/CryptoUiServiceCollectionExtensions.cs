@@ -13,7 +13,7 @@ namespace SqliteWasmBlazor.Crypto.UI;
 /// surface (encrypted VFS via PRF, boot-status, session re-auth) call
 /// <see cref="AddCryptoUI"/>; hosts that also need delta-sync / contacts /
 /// invitations / push call
-/// <see cref="UI.CryptoSyncUiServiceCollectionExtensions.AddCryptoSyncUI"/>
+/// <c>CryptoSyncUiServiceCollectionExtensions.AddCryptoSyncUI</c>
 /// in <c>SqliteWasmBlazor.CryptoSync.UI</c>, which calls
 /// <see cref="AddCryptoUI"/> first.
 ///

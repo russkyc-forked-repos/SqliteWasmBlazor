@@ -27,7 +27,7 @@ public interface IPrfService
     /// <c>SHA256(UTF-8(Salt))</c>. Equal to what the JS PRF layer passes to
     /// the authenticator's <c>prf.eval.first</c> field (and to
     /// <c>fido_assert_set_hmac_salt()</c> for libfido2 consumers). Carrying
-    /// these bytes inside an <see cref="EncryptedPoolEnvelope.PrfSalt"/> makes
+    /// these bytes inside an <c>EncryptedPoolEnvelope.PrfSalt</c> makes
     /// the envelope self-describing for cross-app share + emergency-recovery
     /// decrypt: the receiver can invoke the authenticator's HMAC-Secret
     /// extension without knowing the sender's <see cref="PrfOptions.Salt"/>

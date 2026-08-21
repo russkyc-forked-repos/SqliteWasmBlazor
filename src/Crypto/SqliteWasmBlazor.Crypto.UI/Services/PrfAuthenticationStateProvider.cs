@@ -19,7 +19,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Services;
 ///
 /// <para>
 /// <b>Why one-way push, not event subscription.</b> The provider is a
-/// terminal Blazor seam — <see cref="NotifyAuthenticationStateChanged"/>
+/// terminal Blazor seam — <see cref="AuthenticationStateProvider.NotifyAuthenticationStateChanged"/>
 /// is the framework's pre-defined notify channel and there's no model
 /// upstream of it. Subscribing to <see cref="DbStateModel"/> events
 /// here would either need an explicit R3 subscription (forbidden in
@@ -63,7 +63,7 @@ internal sealed class PrfAuthenticationStateProvider : AuthenticationStateProvid
     /// <summary>
     /// Pushes the latest credential id + X25519 pubkey snapshot from
     /// <see cref="Components.Authentication.AuthenticationModel"/> and
-    /// fires <see cref="NotifyAuthenticationStateChanged"/>. Called from
+    /// fires <see cref="AuthenticationStateProvider.NotifyAuthenticationStateChanged"/>. Called from
     /// the model's <c>PushAuthState</c> trigger method.
     /// </summary>
     public void UpdateAuthenticationState(string? credentialId, string? publicKey)
@@ -75,7 +75,7 @@ internal sealed class PrfAuthenticationStateProvider : AuthenticationStateProvid
 
     /// <summary>
     /// Pushes the latest boot DB state from <see cref="DbStateModel"/>
-    /// and fires <see cref="NotifyAuthenticationStateChanged"/> so every
+    /// and fires <see cref="AuthenticationStateProvider.NotifyAuthenticationStateChanged"/> so every
     /// <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> in the tree
     /// re-evaluates. Called from the model's <c>PushDbStateClaim</c>
     /// trigger method.

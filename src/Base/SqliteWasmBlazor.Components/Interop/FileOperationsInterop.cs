@@ -18,7 +18,7 @@ public static partial class FileOperationsInterop
     /// Initialize the file operations module.
     /// Must be called in Program.cs before WebAssemblyHostBuilder.Build().
     /// </summary>
-    /// <param name="configure">Optional options callback. Override <see cref="SqliteWasmComponentsOptions.AssetRoot"/>
+    /// <param name="configure">Optional options callback. Override <see cref="SqliteWasmBlazor.Hosting.SqliteWasmAssetOptions.AssetRoot"/>
     /// for browser-extension builds.</param>
     public static async Task InitializeAsync(Action<SqliteWasmComponentsOptions>? configure = null)
     {

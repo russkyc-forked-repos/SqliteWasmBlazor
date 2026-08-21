@@ -5,7 +5,7 @@ namespace SqliteWasmBlazor.Crypto.Configuration;
 
 /// <summary>
 /// Configuration for SqliteWasmBlazor.Crypto JavaScript asset resolution. Registered via
-/// <see cref="ServiceCollectionExtensions.AddSqliteWasmBlazorCrypto"/>.
+/// <c>ServiceCollectionExtensions.AddSqliteWasmBlazorCrypto</c> (either overload).
 /// </summary>
 public sealed class SqliteWasmBlazorCryptoOptions : SqliteWasmAssetOptions
 {

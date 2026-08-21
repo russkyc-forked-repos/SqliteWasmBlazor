@@ -84,7 +84,7 @@ public sealed record GenericInitFailure(string DatabaseName, Exception Exception
 /// <summary>
 /// Boot detected the OPFS lock marker — the VFS contains ciphertext databases
 /// but no global key is installed in the worker. The cure is
-/// <see cref="IEncryptedSqliteWasmDatabaseService.UnlockAsync"/> once the user has supplied
+/// <c>IEncryptedSqliteWasmDatabaseService.UnlockAsync</c> once the user has supplied
 /// valid credentials. Maps to <see cref="DbInitState.ENCRYPTED_LOCKED"/>.
 /// </summary>
 /// <param name="DatabaseName">Database the boot was attempting to open.</param>

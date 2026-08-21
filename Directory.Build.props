@@ -15,6 +15,23 @@
          MSBuild bits (Workspaces.MSBuild 5.0.0 wants Workspaces.Common = 5.0.0,
          we resolve 5.3.0 via GeneratorRunner). 5.3.0 is API-compatible with
          5.0.0 for our use, so the resolution is intentional. -->
-    <NoWarn>$(NoWarn);WASM0001;WASM0060;WASM0062;CA1416;NU1608</NoWarn>
+    <!-- CS1591: publicly visible member has no XML doc comment. Suppressed
+         because not every public member is documented yet; the generated XML
+         still carries the ones that are. The other doc diagnostics stay ON —
+         CS1574 (cref resolves to nothing), CS1573 (documented method with an
+         undocumented parameter), CS1734 (paramref names no such parameter),
+         CS0419 (cref ambiguous between overloads). Those mean a doc comment
+         is wrong, which is worse than one being absent. -->
+    <NoWarn>$(NoWarn);WASM0001;WASM0060;WASM0062;CA1416;NU1608;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Produce the XML doc file. Two reasons, and the first is the one that
+         reaches users: without it the published packages ship a bare .dll and
+         consumers get no IntelliSense on any of this API. The second is that
+         a <see cref> pointing at nothing is invisible unless docs are being
+         generated, so links rot silently through renames. Set here rather
+         than per-project so that stays true in samples and tests too. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 </Project>

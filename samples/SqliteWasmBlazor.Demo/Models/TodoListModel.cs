@@ -53,7 +53,7 @@ public enum SearchDisplayMode
 ///
 /// <para>
 /// <b>Search debounce.</b> Each keystroke fires the reload signal so an
-/// in-flight FTS5 query is cancelled (<see cref="MudTable"/> passes the
+/// in-flight FTS5 query is cancelled (<see cref="MudTable{T}"/> passes the
 /// caller's <see cref="CancellationToken"/> through). The cancel-on-
 /// retrigger comes for free from the table's debouncer + SQLite query
 /// cancellation; we don't add an explicit timer here. If load latency

@@ -12,8 +12,8 @@ public interface ISessionAuthenticator
     /// <summary>
     /// Run the host's re-authentication flow (typically a WebAuthn
     /// assertion that re-derives the PRF-bound session key). The popover
-    /// closes on successful return; exceptions surface through
-    /// <see cref="IErrorModel"/> if registered.
+    /// closes on successful return; exceptions surface through the popover's
+    /// command error formatter.
     /// </summary>
     ValueTask ReAuthenticateAsync(CancellationToken cancellationToken = default);
 

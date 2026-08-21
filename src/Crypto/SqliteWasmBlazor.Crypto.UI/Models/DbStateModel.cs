@@ -43,7 +43,7 @@ namespace SqliteWasmBlazor.Crypto.UI;
 /// </para>
 ///
 /// <para>
-/// <b>Side-effect bridge to <see cref="PrfAuthenticationStateProvider"/>.</b>
+/// <b>Side-effect bridge to <see cref="Services.PrfAuthenticationStateProvider"/>.</b>
 /// State changes need to flip <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c>
 /// (Blazor's auth-state cascade is the only way to re-evaluate that gate),
 /// so the <c>State</c> setter fires an <see cref="ObservableTriggerAttribute"/>
@@ -85,7 +85,7 @@ public partial class DbStateModel
 
     /// <summary>
     /// Mirrors the latest <see cref="State"/> into
-    /// <see cref="PrfAuthenticationStateProvider"/> so
+    /// <see cref="Services.PrfAuthenticationStateProvider"/> so
     /// <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> re-evaluates.
     /// One-way — the provider holds the value as a private field; no
     /// reverse dependency.

@@ -27,12 +27,17 @@ public interface IPrfAuthenticator
     /// PRF output. <paramref name="displayName"/> is shown in the platform's
     /// credential UI.
     /// </summary>
-    /// <param name="excludeCredentialIds">
-    /// Credential ids the disk is already bound to. An authenticator holding one of
-    /// them refuses the ceremony instead of minting a duplicate passkey that would
-    /// derive a different PRF key and never unlock the disk. Empty means "no
-    /// restriction" — the normal case for a plaintext disk with no passkey yet.
+    /// <param name="displayName">
+    /// Name shown in the authenticator's credential UI. Null lets the platform
+    /// pick its own default.
     /// </param>
+    /// <param name="excludeCredentialIds">
+    /// Credential ids the pool is already bound to. An authenticator holding one of
+    /// them refuses the ceremony instead of minting a duplicate passkey that would
+    /// derive a different PRF key and never unlock the pool. Empty means "no
+    /// restriction" — the normal case for an unencrypted pool with no passkey yet.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the pending ceremony.</param>
     ValueTask<PrfRegistrationResult> RegisterAsync(
         string? displayName,
         IReadOnlyList<string> excludeCredentialIds,

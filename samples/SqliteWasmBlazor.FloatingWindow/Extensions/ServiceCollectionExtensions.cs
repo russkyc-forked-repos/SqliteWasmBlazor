@@ -9,7 +9,7 @@ public static class ServiceCollectionExtensions
     /// Adds the FloatingWindow services to the service collection.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="configure">Optional options callback. Override <see cref="FloatingWindowOptions.AssetRoot"/>
+    /// <param name="configure">Optional options callback. Override <see cref="SqliteWasmBlazor.Hosting.SqliteWasmAssetOptions.AssetRoot"/>
     /// for browser-extension builds.</param>
     public static IServiceCollection AddFloatingWindow(
         this IServiceCollection services,

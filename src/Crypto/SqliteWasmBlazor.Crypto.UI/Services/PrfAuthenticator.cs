@@ -38,7 +38,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Services;
 /// <b>Never OperationCanceledException.</b> RxBlazorV2 discards those as
 /// switch-cancellation before the command error formatter runs, so routing a
 /// dismissed prompt or a rejected authenticator PIN through one leaves the user
-/// with no feedback whatsoever. Only <paramref name="cancellationToken"/>-driven
+/// with no feedback whatsoever. Only <c>cancellationToken</c>-driven
 /// teardown may raise it, which is exactly the case that should stay silent.
 /// </para>
 /// </summary>

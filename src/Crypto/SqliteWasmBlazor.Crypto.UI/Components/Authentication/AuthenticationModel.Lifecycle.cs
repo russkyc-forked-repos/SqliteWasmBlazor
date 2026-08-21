@@ -6,7 +6,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Authentication;
 /// <summary>
 /// Reactive model behind <see cref="AuthenticationPanel"/>: the
 /// <c>NotAuthorized</c>-branch panel for sign-in / register with a passkey.
-/// Sole writer to <see cref="PrfAuthenticationStateProvider"/> for the auth-
+/// Sole writer to <see cref="Services.PrfAuthenticationStateProvider"/> for the auth-
 /// panel flow.
 ///
 /// <para>The panel has exactly two shapes, and the disk picks which one:
@@ -19,7 +19,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Authentication;
 ///
 /// <para><see cref="RefreshPoolStateAsync"/> is the single manifest read
 /// behind that: it runs on context-ready, on TTL expiry
-/// (<see cref="IPrfService.KeyExpired"/> filtered on the seed key →
+/// (<see cref="SqliteWasmBlazor.Crypto.Services.IPrfService.KeyExpired"/> filtered on the seed key →
 /// <see cref="OnSessionExpiredAsync"/>), and on
 /// <see cref="ClearKeysAsync"/> / <see cref="SignOutAsync"/> — every route
 /// by which the panel becomes visible again. Disk reset therefore drops
@@ -29,7 +29,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Authentication;
 ///
 /// <para><see cref="CredentialId"/> + <see cref="PublicKey"/> each fire
 /// <see cref="PushAuthState"/>, which is the single point that updates
-/// <see cref="PrfAuthenticationStateProvider"/>.</para>
+/// <see cref="Services.PrfAuthenticationStateProvider"/>.</para>
 /// </summary>
 public partial class AuthenticationModel
 {

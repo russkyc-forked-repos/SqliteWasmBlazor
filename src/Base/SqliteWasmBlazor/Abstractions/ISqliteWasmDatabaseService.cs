@@ -48,7 +48,7 @@ public enum PoolImportResult
 ///
 /// <para>
 /// <b>Audience.</b> Anyone using SQLite-on-OPFS — encryption-aware apps
-/// (which also use <see cref="IEncryptedSqliteWasmDatabaseService"/>) and
+/// (which also use <c>IEncryptedSqliteWasmDatabaseService</c>) and
 /// pure plain apps. Per-DB <c>.db</c> bytes from
 /// <see cref="ExportDatabaseAsync"/> open in <c>sqlite3</c>; multi-DB
 /// transfers go through the streaming <c>.dbs</c> envelope on the
@@ -59,7 +59,7 @@ public enum PoolImportResult
 /// <para>
 /// <b>What this is NOT.</b> The encryption lifecycle (Enter/Leave/Lock/
 /// Unlock/Reset, ExportPool envelope, ImportPool envelope) lives on
-/// <see cref="IEncryptedSqliteWasmDatabaseService"/>. The CryptoSync
+/// <c>IEncryptedSqliteWasmDatabaseService</c>. The CryptoSync
 /// delta-bulk surface (DeltaExport/DeltaImport/DeltaRotate) lives on
 /// <c>ICryptoSyncDeltaService</c> in the CryptoSync package. Both are
 /// separately registered; consumers who don't need them never see them.

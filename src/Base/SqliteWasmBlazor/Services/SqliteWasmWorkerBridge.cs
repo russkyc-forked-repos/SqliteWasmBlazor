@@ -52,9 +52,9 @@ internal sealed class SqlQueryResult
 /// SQL execution, and the JSImport/JSExport boundary. Concern-specific
 /// surface lives in sibling partials:
 /// <list type="bullet">
-///   <item><see cref="SetEncryptionKeyAsync"/> et al. — <c>.Encryption.cs</c></item>
+///   <item><c>SetEncryptionKeyAsync</c> et al. — <c>.Encryption.cs</c></item>
 ///   <item><see cref="ImportDatabaseAsync"/> et al. — <c>.Persistence.cs</c></item>
-///   <item><see cref="DeltaExportAsync"/> et al. — <c>.Delta.cs</c></item>
+///   <item><c>DeltaExportAsync</c> et al. — <c>.Delta.cs</c></item>
 /// </list>
 /// </summary>
 internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseService
@@ -106,7 +106,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// <summary>
     /// True when the encrypted VFS disk is in the locked state — i.e. the
     /// disk holds ciphertext but no <c>globalKey</c> is installed. Set by
-    /// <see cref="EncryptedSqliteWasmDatabaseService"/> at boot probe and on every Lock /
+    /// <c>EncryptedSqliteWasmDatabaseService</c> at boot probe and on every Lock /
     /// Unlock / Enter / Leave / Reset transition; consulted by every
     /// DB-touching bridge method to refuse operations cleanly with
     /// <see cref="PoolLockedException"/> instead of letting them reach
@@ -116,7 +116,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
 
     /// <summary>
     /// Update the disk-locked flag. Production callers always go through
-    /// <see cref="EncryptedSqliteWasmDatabaseService"/>, which is the single source of
+    /// <c>EncryptedSqliteWasmDatabaseService</c>, which is the single source of
     /// truth for VFS state. Idempotent.
     /// </summary>
     internal void SetPoolLocked(bool locked) => _poolLocked = locked;
@@ -195,7 +195,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
 
     /// <summary>
     /// Open a database connection in the worker. Single-key model: the
-    /// worker uses the global key set via <see cref="SetEncryptionKeyAsync"/>;
+    /// worker uses the global key set via <c>SetEncryptionKeyAsync</c>;
     /// open never carries a key envelope itself.
     /// </summary>
     /// <param name="database">Database file name inside the SAHPool.</param>

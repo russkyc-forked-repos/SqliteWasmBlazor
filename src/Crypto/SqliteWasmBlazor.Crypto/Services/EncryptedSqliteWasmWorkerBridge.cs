@@ -177,6 +177,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     /// HMAC under the currently-installed globalKey and compares. Pre-unlock
     /// callers (auth-flow fast-fail) leave it false and rely on the body bytes
     /// alone.</param>
+    /// <param name="cancellationToken">Cancels the worker round-trip.</param>
     internal async Task<(string state, byte[]? body, int? schemaVersion)>
         ReadPoolManifestAsync(bool verifyMac, CancellationToken cancellationToken = default)
     {

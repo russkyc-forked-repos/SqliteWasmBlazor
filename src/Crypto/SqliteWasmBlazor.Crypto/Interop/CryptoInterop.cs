@@ -19,8 +19,8 @@ internal static partial class CryptoInterop
     private static string? _assetRoot;
 
     /// <summary>
-    /// Records the resolved <see cref="SqliteWasmBlazorCryptoOptions.BaseHref"/> and
-    /// <see cref="SqliteWasmBlazorCryptoOptions.AssetRoot"/> used to locate the JS module.
+    /// Records the resolved <see cref="Hosting.SqliteWasmAssetOptions.BaseHref"/> and
+    /// <see cref="Hosting.SqliteWasmAssetOptions.AssetRoot"/> used to locate the JS module.
     /// First call wins (services share a single <c>IOptions&lt;SqliteWasmBlazorCryptoOptions&gt;</c>);
     /// subsequent calls are no-ops.
     /// </summary>
