@@ -219,15 +219,15 @@
                                                    OnClick="@context.OpenFilePickerAsync"/>
                                 </CustomContent>
                             </MudFileUpload>
+                            @* Owned rows are emptied, not removed — the app
+                               opens them by connection string, so they come
+                               back empty. A broom says that; a trash can says
+                               the row disappears, which only happens for an
+                               entry nothing reads. *@
                             <MudIconButtonAsyncRxOf T="string"
                                                     Command="@Model.DeleteDatabase"
                                                     Parameter="@row.Name"
                                                     ConfirmExecutionAsync="@(() => ConfirmClearDatabaseAsync(row))"
-                                                    @* Owned rows are emptied, not removed — the app
-                                                       opens them by connection string, so they come
-                                                       back empty. A broom says that; a trash can
-                                                       says the row disappears, which only happens
-                                                       for an entry nothing reads. *@
                                                     Icon="@(row.Owned ? Icons.Material.Filled.CleaningServices : Icons.Material.Filled.Delete)"
                                                     Color="Color.Error"
                                                     Disabled="@(!row.Present)"
