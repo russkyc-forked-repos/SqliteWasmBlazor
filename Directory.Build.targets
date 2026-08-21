@@ -1,0 +1,49 @@
+<Project>
+
+  <!--
+    Prune the generated XML doc down to the externally visible API before it
+    reaches the output directory, and therefore before a no-build `dotnet pack`
+    picks it up.
+
+    Why this exists, and why it is not a compiler switch: the C# compiler emits
+    a <member> entry for anything carrying a /// comment, whatever its
+    accessibility, and offers no way to filter. Measured on SqliteWasmBlazor,
+    103 of 206 entries documented internal types. Consumers never see those in
+    IntelliSense, so shipping them is inert weight that also publishes internal
+    design notes.
+
+    Source keeps its /// comments on internal types — that is what gives the
+    team IntelliSense inside the solution. Only the shipped artifact is
+    filtered. See tools/XmlDocPruner.
+
+    The tool is invoked rather than written as an inline RoslynCodeTaskFactory
+    task: reading assembly metadata needs System.Reflection.Metadata, and
+    giving that factory path-based references makes it drop its implicit
+    corlib, so the snippet stops compiling. A normal project has none of that
+    problem.
+  -->
+
+  <PropertyGroup>
+    <XmlDocPrunerProject>$(MSBuildThisFileDirectory)tools/XmlDocPruner/XmlDocPruner.csproj</XmlDocPrunerProject>
+    <XmlDocPrunerDll>$(MSBuildThisFileDirectory)tools/XmlDocPruner/bin/Release/net10.0/XmlDocPruner.dll</XmlDocPrunerDll>
+  </PropertyGroup>
+
+  <Target Name="PruneXmlDocToPublicApi"
+          AfterTargets="CoreCompile"
+          Condition="'$(GenerateDocumentationFile)' == 'true'
+                     and '$(IsPackable)' != 'false'
+                     and '$(DocumentationFile)' != ''
+                     and '$(MSBuildProjectName)' != 'XmlDocPruner'
+                     and '$(DisableXmlDocPrune)' != 'true'">
+
+    <!-- First build in a clean tree bootstraps the tool. Later builds skip. -->
+    <Exec Condition="!Exists('$(XmlDocPrunerDll)')"
+          Command="dotnet build &quot;$(XmlDocPrunerProject)&quot; -c Release --nologo -v q"
+          StandardOutputImportance="low" />
+
+    <Exec Command="dotnet &quot;$(XmlDocPrunerDll)&quot; &quot;@(IntermediateAssembly->'%(FullPath)')&quot; &quot;$(DocumentationFile)&quot;"
+          Condition="Exists('$(XmlDocPrunerDll)')"
+          StandardOutputImportance="normal" />
+  </Target>
+
+</Project>
