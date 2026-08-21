@@ -33,16 +33,20 @@ public sealed class SqliteWasmParameter : DbParameter
         _dbType = dbType;
     }
 
+    /// <inheritdoc />
     public override DbType DbType
     {
         get => _dbType;
         set => _dbType = value;
     }
 
+    /// <inheritdoc />
     public override ParameterDirection Direction { get; set; } = ParameterDirection.Input;
 
+    /// <inheritdoc />
     public override bool IsNullable { get; set; }
 
+    /// <inheritdoc />
     [AllowNull]
     public override string ParameterName
     {
@@ -50,8 +54,10 @@ public sealed class SqliteWasmParameter : DbParameter
         set => _parameterName = value ?? string.Empty;
     }
 
+    /// <inheritdoc />
     public override int Size { get; set; }
 
+    /// <inheritdoc />
     [AllowNull]
     public override string SourceColumn
     {
@@ -59,14 +65,17 @@ public sealed class SqliteWasmParameter : DbParameter
         set => _sourceColumn = value ?? string.Empty;
     }
 
+    /// <inheritdoc />
     public override bool SourceColumnNullMapping { get; set; }
 
+    /// <inheritdoc />
     public override object? Value
     {
         get => _value;
         set => _value = value;
     }
 
+    /// <inheritdoc />
     public override void ResetDbType()
     {
         _dbType = DbType.Object;
@@ -86,10 +95,13 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
 
     private readonly List<SqliteWasmParameter> _parameters = [];
 
+    /// <inheritdoc />
     public override int Count => _parameters.Count;
 
+    /// <inheritdoc />
     public override object SyncRoot => ((System.Collections.ICollection)_parameters).SyncRoot;
 
+    /// <inheritdoc />
     public override int Add(object value)
     {
         if (value is not SqliteWasmParameter parameter)
@@ -108,6 +120,7 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
         return parameter;
     }
 
+    /// <inheritdoc />
     public override void AddRange(Array values)
     {
         foreach (var value in values)
@@ -116,56 +129,67 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
         }
     }
 
+    /// <inheritdoc />
     public override void Clear()
     {
         _parameters.Clear();
     }
 
+    /// <inheritdoc />
     public override bool Contains(object value)
     {
         return _parameters.Contains((SqliteWasmParameter)value);
     }
 
+    /// <inheritdoc />
     public override bool Contains(string value)
     {
         return _parameters.Any(p => p.ParameterName == value);
     }
 
+    /// <inheritdoc />
     public override void CopyTo(Array array, int index)
     {
         ((System.Collections.ICollection)_parameters).CopyTo(array, index);
     }
 
+    /// <inheritdoc />
     public override System.Collections.IEnumerator GetEnumerator()
     {
         return ((System.Collections.IEnumerable)_parameters).GetEnumerator();
     }
 
+    /// <inheritdoc />
     public override int IndexOf(object value)
     {
         return _parameters.IndexOf((SqliteWasmParameter)value);
     }
 
+    /// <inheritdoc />
     public override int IndexOf(string parameterName)
     {
         return _parameters.FindIndex(p => p.ParameterName == parameterName);
     }
 
+    /// <inheritdoc />
     public override void Insert(int index, object value)
     {
         _parameters.Insert(index, (SqliteWasmParameter)value);
     }
 
+    /// <inheritdoc />
     public override void Remove(object value)
     {
         _parameters.Remove((SqliteWasmParameter)value);
     }
 
+    /// <inheritdoc />
     public override void RemoveAt(int index)
     {
         _parameters.RemoveAt(index);
     }
 
+    /// <inheritdoc />
     public override void RemoveAt(string parameterName)
     {
         var index = IndexOf(parameterName);
@@ -175,11 +199,13 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
         }
     }
 
+    /// <inheritdoc />
     protected override DbParameter GetParameter(int index)
     {
         return _parameters[index];
     }
 
+    /// <inheritdoc />
     protected override DbParameter GetParameter(string parameterName)
     {
         var index = IndexOf(parameterName);
@@ -190,11 +216,13 @@ public sealed class SqliteWasmParameterCollection : DbParameterCollection
         return _parameters[index];
     }
 
+    /// <inheritdoc />
     protected override void SetParameter(int index, DbParameter value)
     {
         _parameters[index] = (SqliteWasmParameter)value;
     }
 
+    /// <inheritdoc />
     protected override void SetParameter(string parameterName, DbParameter value)
     {
         var index = IndexOf(parameterName);

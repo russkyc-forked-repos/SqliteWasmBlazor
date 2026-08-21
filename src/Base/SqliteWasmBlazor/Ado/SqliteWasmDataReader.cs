@@ -20,6 +20,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         _result = result;
     }
 
+    /// <inheritdoc />
     public override T GetFieldValue<T>(int ordinal)
     {
         // Special handling for DateTimeOffset since there's no GetDateTimeOffset() in DbDataReader
@@ -38,32 +39,42 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return base.GetFieldValue<T>(ordinal);
     }
 
+    /// <inheritdoc />
     public override int Depth => 0;
 
+    /// <inheritdoc />
     public override int FieldCount => _result.ColumnNames.Count;
 
+    /// <inheritdoc />
     public override bool HasRows => _result.Rows.Length > 0;
 
+    /// <inheritdoc />
     public override bool IsClosed => _isClosed;
 
+    /// <inheritdoc />
     public override int RecordsAffected => _result.RowsAffected;
 
+    /// <inheritdoc />
     public override object this[int ordinal] => GetValue(ordinal);
 
+    /// <inheritdoc />
     public override object this[string name] => GetValue(GetOrdinal(name));
 
+    /// <inheritdoc />
     public override bool GetBoolean(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToBoolean(value);
     }
 
+    /// <inheritdoc />
     public override byte GetByte(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToByte(value);
     }
 
+    /// <inheritdoc />
     public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
     {
         var value = GetValue(ordinal);
@@ -88,6 +99,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return bytesToCopy;
     }
 
+    /// <inheritdoc />
     public override char GetChar(int ordinal)
     {
         var value = GetValue(ordinal);
@@ -105,6 +117,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return Convert.ToChar(value);
     }
 
+    /// <inheritdoc />
     public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
         var value = GetString(ordinal);
@@ -118,11 +131,13 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return charsToCopy;
     }
 
+    /// <inheritdoc />
     public override string GetDataTypeName(int ordinal)
     {
         return _result.ColumnTypes[ordinal];
     }
 
+    /// <inheritdoc />
     public override DateTime GetDateTime(int ordinal)
     {
         var value = GetValue(ordinal);
@@ -184,6 +199,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         throw new InvalidCastException($"Column {ordinal} is not a TimeSpan. Actual type: {value.GetType().Name}");
     }
 
+    /// <inheritdoc />
     public override decimal GetDecimal(int ordinal)
     {
         var value = GetValue(ordinal);
@@ -194,12 +210,14 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return Convert.ToDecimal(value);
     }
 
+    /// <inheritdoc />
     public override double GetDouble(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToDouble(value);
     }
 
+    /// <inheritdoc />
     public override Type GetFieldType(int ordinal)
     {
         if (_currentRowIndex < 0 || _currentRowIndex >= _result.Rows.Length)
@@ -212,12 +230,14 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return value?.GetType() ?? typeof(object);
     }
 
+    /// <inheritdoc />
     public override float GetFloat(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToSingle(value);
     }
 
+    /// <inheritdoc />
     public override Guid GetGuid(int ordinal)
     {
         var value = GetValue(ordinal);
@@ -241,24 +261,28 @@ public sealed class SqliteWasmDataReader : DbDataReader
         throw new InvalidCastException($"Column {ordinal} is not a Guid. Actual type: {value.GetType().Name}");
     }
 
+    /// <inheritdoc />
     public override short GetInt16(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToInt16(value);
     }
 
+    /// <inheritdoc />
     public override int GetInt32(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToInt32(value);
     }
 
+    /// <inheritdoc />
     public override long GetInt64(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToInt64(value);
     }
 
+    /// <inheritdoc />
     public override string GetName(int ordinal)
     {
         if (ordinal < 0 || ordinal >= _result.ColumnNames.Count)
@@ -268,6 +292,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return _result.ColumnNames[ordinal];
     }
 
+    /// <inheritdoc />
     public override int GetOrdinal(string name)
     {
         var index = _result.ColumnNames.IndexOf(name);
@@ -278,12 +303,14 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return index;
     }
 
+    /// <inheritdoc />
     public override string GetString(int ordinal)
     {
         var value = GetValue(ordinal);
         return Convert.ToString(value) ?? string.Empty;
     }
 
+    /// <inheritdoc />
     public override object GetValue(int ordinal)
     {
         if (_currentRowIndex < 0 || _currentRowIndex >= _result.Rows.Length)
@@ -306,6 +333,7 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return value;
     }
 
+    /// <inheritdoc />
     public override int GetValues(object[] values)
     {
         if (_currentRowIndex < 0 || _currentRowIndex >= _result.Rows.Length)
@@ -321,18 +349,21 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return count;
     }
 
+    /// <inheritdoc />
     public override bool IsDBNull(int ordinal)
     {
         var value = GetValue(ordinal);
         return value is DBNull;
     }
 
+    /// <inheritdoc />
     public override bool NextResult()
     {
         // SQLite doesn't support multiple result sets
         return false;
     }
 
+    /// <inheritdoc />
     public override bool Read()
     {
         if (_isClosed)
@@ -344,16 +375,19 @@ public sealed class SqliteWasmDataReader : DbDataReader
         return _currentRowIndex < _result.Rows.Length;
     }
 
+    /// <inheritdoc />
     public override IEnumerator GetEnumerator()
     {
         return new DbEnumerator(this, closeReader: false);
     }
 
+    /// <inheritdoc />
     public override void Close()
     {
         _isClosed = true;
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing)

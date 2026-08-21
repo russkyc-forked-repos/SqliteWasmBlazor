@@ -37,6 +37,7 @@ public sealed class SqliteWasmConnection : DbConnection
         }
     }
 
+    /// <inheritdoc />
     [AllowNull]
     public override string ConnectionString
     {
@@ -44,12 +45,16 @@ public sealed class SqliteWasmConnection : DbConnection
         set => _connectionString = value ?? string.Empty;
     }
 
+    /// <inheritdoc />
     public override string Database => GetDatabaseName();
 
+    /// <inheritdoc />
     public override string DataSource => GetDatabaseName();
 
+    /// <inheritdoc />
     public override string ServerVersion => "3.47.0"; // sqlite-wasm version
 
+    /// <inheritdoc />
     public override ConnectionState State =>
         _state == ConnectionState.Open && !_bridge.IsDatabaseOpen(Database)
             ? ConnectionState.Closed
@@ -77,6 +82,7 @@ public sealed class SqliteWasmConnection : DbConnection
         return ":memory:";
     }
 
+    /// <inheritdoc />
     public override void Open()
     {
         // EF Core's EnsureCreatedAsync may call synchronous Open() in some paths
@@ -92,6 +98,7 @@ public sealed class SqliteWasmConnection : DbConnection
         _ = OpenAsync(CancellationToken.None);
     }
 
+    /// <inheritdoc />
     public override async Task OpenAsync(CancellationToken cancellationToken)
     {
         // Check both C# state AND worker state to detect stale connections
@@ -123,6 +130,7 @@ public sealed class SqliteWasmConnection : DbConnection
         }
     }
 
+    /// <inheritdoc />
     public override void Close()
     {
         // IMPORTANT: Do NOT close the worker-side database connection here!
@@ -142,6 +150,7 @@ public sealed class SqliteWasmConnection : DbConnection
         _state = ConnectionState.Closed;
     }
 
+    /// <inheritdoc />
     public override Task CloseAsync()
     {
         // See Close() for explanation - we don't close the worker-side connection
@@ -149,6 +158,7 @@ public sealed class SqliteWasmConnection : DbConnection
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     protected override DbCommand CreateDbCommand()
     {
         return new SqliteWasmCommand
@@ -157,12 +167,14 @@ public sealed class SqliteWasmConnection : DbConnection
         };
     }
 
+    /// <inheritdoc />
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
     {
         throw new NotSupportedException(
             "Synchronous transactions are not supported in WebAssembly. Use BeginTransactionAsync instead.");
     }
 
+    /// <inheritdoc />
     protected override async ValueTask<DbTransaction> BeginDbTransactionAsync(
         IsolationLevel isolationLevel,
         CancellationToken cancellationToken)
@@ -185,11 +197,13 @@ public sealed class SqliteWasmConnection : DbConnection
         }
     }
 
+    /// <inheritdoc />
     public override void ChangeDatabase(string databaseName)
     {
         throw new NotSupportedException("Changing database is not supported.");
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing)

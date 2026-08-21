@@ -31,10 +31,13 @@ public sealed class SqliteWasmTransaction : DbTransaction
         return transaction;
     }
 
+    /// <inheritdoc />
     public override IsolationLevel IsolationLevel => _isolationLevel;
 
+    /// <inheritdoc />
     protected override DbConnection DbConnection => _connection;
 
+    /// <inheritdoc />
     public override void Commit()
     {
         if (_completed)
@@ -47,6 +50,7 @@ public sealed class SqliteWasmTransaction : DbTransaction
         _connection.ClearCurrentTransaction(this);
     }
 
+    /// <inheritdoc />
     public override void Rollback()
     {
         if (_completed)
@@ -59,6 +63,7 @@ public sealed class SqliteWasmTransaction : DbTransaction
         _connection.ClearCurrentTransaction(this);
     }
 
+    /// <inheritdoc />
     public override async Task CommitAsync(CancellationToken cancellationToken = default)
     {
         if (_completed)
@@ -71,6 +76,7 @@ public sealed class SqliteWasmTransaction : DbTransaction
         _connection.ClearCurrentTransaction(this);
     }
 
+    /// <inheritdoc />
     public override async Task RollbackAsync(CancellationToken cancellationToken = default)
     {
         if (_completed)
@@ -83,6 +89,7 @@ public sealed class SqliteWasmTransaction : DbTransaction
         _connection.ClearCurrentTransaction(this);
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing && !_completed)

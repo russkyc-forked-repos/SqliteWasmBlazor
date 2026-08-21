@@ -22,6 +22,7 @@ public sealed class SqliteWasmCommand : DbCommand
         _parameters = new SqliteWasmParameterCollection();
     }
 
+    /// <inheritdoc />
     [AllowNull]
     public override string CommandText
     {
@@ -29,14 +30,19 @@ public sealed class SqliteWasmCommand : DbCommand
         set => _commandText = value ?? string.Empty;
     }
 
+    /// <inheritdoc />
     public override int CommandTimeout { get; set; } = 30;
 
+    /// <inheritdoc />
     public override CommandType CommandType { get; set; } = CommandType.Text;
 
+    /// <inheritdoc />
     public override bool DesignTimeVisible { get; set; }
 
+    /// <inheritdoc />
     public override UpdateRowSource UpdatedRowSource { get; set; }
 
+    /// <inheritdoc />
     protected override DbConnection? DbConnection { get; set; }
 
     public new SqliteWasmConnection? Connection
@@ -45,17 +51,21 @@ public sealed class SqliteWasmCommand : DbCommand
         set => DbConnection = value;
     }
 
+    /// <inheritdoc />
     protected override DbParameterCollection DbParameterCollection => _parameters;
 
     public new SqliteWasmParameterCollection Parameters => _parameters;
 
+    /// <inheritdoc />
     protected override DbTransaction? DbTransaction { get; set; }
 
+    /// <inheritdoc />
     public override void Cancel()
     {
         // sqlite-wasm doesn't support cancellation in same way
     }
 
+    /// <inheritdoc />
     public override int ExecuteNonQuery()
     {
         // Synchronous execution not supported in WebAssembly
@@ -64,6 +74,7 @@ public sealed class SqliteWasmCommand : DbCommand
         return 0;
     }
     
+    /// <inheritdoc />
     public override async Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
     {
         ValidateConnection();
@@ -86,6 +97,7 @@ public sealed class SqliteWasmCommand : DbCommand
         return result.RowsAffected;
     }
 
+    /// <inheritdoc />
     public override object? ExecuteScalar()
     {
         // Synchronous execution not supported in WebAssembly
@@ -93,6 +105,7 @@ public sealed class SqliteWasmCommand : DbCommand
         return null;
     }
 
+    /// <inheritdoc />
     public override async Task<object?> ExecuteScalarAsync(CancellationToken cancellationToken)
     {
         ValidateConnection();
@@ -114,6 +127,7 @@ public sealed class SqliteWasmCommand : DbCommand
         return null;
     }
 
+    /// <inheritdoc />
     protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
     {
         // Synchronous execution not supported in WebAssembly
@@ -122,6 +136,7 @@ public sealed class SqliteWasmCommand : DbCommand
         return new SqliteWasmDataReader(result);
     }
 
+    /// <inheritdoc />
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(
         CommandBehavior behavior,
         CancellationToken cancellationToken)
@@ -140,11 +155,13 @@ public sealed class SqliteWasmCommand : DbCommand
         return new SqliteWasmDataReader(result);
     }
 
+    /// <inheritdoc />
     public override void Prepare()
     {
         // No-op: sqlite-wasm handles preparation automatically
     }
 
+    /// <inheritdoc />
     protected override DbParameter CreateDbParameter()
     {
         return new SqliteWasmParameter();
@@ -198,6 +215,7 @@ public sealed class SqliteWasmCommand : DbCommand
             $"[SqliteWasmCommand] Parameters: {string.Join(", ", _parameters.GetParameterValues().Select((v, i) => $"${i}={v}"))}");
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing)
