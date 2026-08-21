@@ -459,10 +459,36 @@ lemma key_installed_once [reuse]:
  *     descent that remains open in the pending lemmas.
  */
 
-lemma clear_requires_install:
+lemma clear_requires_install [reuse]:
     "All Device k #c.
         GlobalKeyCleared(Device, k) @ #c
         ==> Ex #i. GlobalKeyInstalled(Device, k) @ #i & #i < #c"
+
+lemma cleared_key_never_held_again [reuse]:
+    "All Device k #c #u.
+        GlobalKeyCleared(Device, k) @ #c
+      & KeyState(Device, 'held', k) @ #u
+        ==> #u < #c"
+
+// No operation that needs the global key can run after that key was cleared:
+// the use-after-clear property, and the far end of the key's life from
+// decrypt_key_installed_before_use.
+//
+// Stated over ClaimKeyState rather than over one accepting rule, for two
+// reasons. It is stronger — it covers all seven rules that claim a held key
+// (both Clear rules, ExportPlain, ExportRekey, and Begin/Commit/Rollback
+// DecryptInPlace) where a per-rule form covers one. And it carries no file
+// variables, so the proof cannot descend PendingDecryptOp ->
+// BeginDecryptInPlace -> the file-state claim; a decrypt-only phrasing does
+// carry them, and diverges (measured: >10 min under deprioFiles, under a
+// tactic that also deprioritises the pending ops, and with the key-side
+// lemmas below available as reuse). This form closes in 12 steps.
+lemma no_claim_held_after_clear [reuse]:
+    "All Device k #c #t.
+        GlobalKeyCleared(Device, k) @ #c
+      & ClaimKeyState(Device, 'held', k) @ #t
+      & #c < #t
+        ==> F"
 
 lemma decrypt_key_installed_before_use:
     "All Device path cipher_blob plain_blob k_old #t.
@@ -499,14 +525,5 @@ lemma key_event_rooted_at_init [use_induction, reuse]:
     "All Device s k #c.
         KeyState(Device, s, k) @ #c
         ==> Ex #r. DeviceInitialized(Device) @ #r & ( #r < #c | #r = #c )"
-
-
-
-lemma decrypt_no_clear_before_use [heuristic={deprioFiles}]:
-    "All Device path cipher_blob plain_blob k_old #t #c.
-        DecryptInPlaceAccepted(Device, path, cipher_blob, plain_blob, k_old) @ #t
-      & GlobalKeyCleared(Device, k_old) @ #c
-      & #c < #t
-        ==> F"
 
 end
