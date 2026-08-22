@@ -231,6 +231,82 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     }
 
     /// <summary>
+    /// Open an import session in the worker. The picked file is pushed in
+    /// chunk by chunk from there — nothing about it is ever assembled on
+    /// the main thread, which is what a Blob part list did and what WebKit
+    /// holds in process memory until the pool's access handles die under it.
+    ///
+    /// <para>
+    /// <paramref name="sink"/> says where the chunks land.
+    /// <c>"database"</c> writes them straight into the pool's temp slot for
+    /// <paramref name="databaseName"/> (rekeyed on the way in when the pool
+    /// is encrypted), which <see cref="ImportSessionCloseAsync"/> promotes —
+    /// one pass, no copy of the file anywhere.
+    /// <c>"staging"</c> writes them into an OPFS staging file the worker
+    /// re-streams per pass, for the envelope imports that validate in one
+    /// pass and commit in another.
+    /// </para>
+    /// </summary>
+    /// <param name="sessionId">Caller-allocated id; must be unique and closed by Discard.</param>
+    /// <param name="sink"><c>"database"</c> or <c>"staging"</c>.</param>
+    /// <param name="databaseName">Target database, for a database sink.</param>
+    /// <param name="size">Declared source length in bytes, for a database sink.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    internal async Task ImportSessionOpenAsync(
+        int sessionId,
+        string sink,
+        string? databaseName,
+        long size,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new
+        {
+            type = "importSessionOpen", sessionId, sink, database = databaseName, size,
+        };
+        await _bridge.SendRequestAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Push one chunk into an open import session. The buffer is transferred
+    /// to the worker, so the main thread keeps nothing; awaiting the call is
+    /// the flow control — the next chunk is read only once this one is on
+    /// disk.
+    /// </summary>
+    internal async Task ImportSessionAppendAsync(
+        int sessionId,
+        Memory<byte> chunk,
+        CancellationToken cancellationToken = default)
+    {
+        await _bridge.PostBinaryAsync(
+            new { type = "importSessionAppend", sessionId }, chunk, cancellationToken);
+    }
+
+    /// <summary>
+    /// End the source. A database session commits here — its temp slot is
+    /// promoted over the database. A staging session only closes the write
+    /// side; what happens to the envelope is the pass that reads it back.
+    /// </summary>
+    internal async Task ImportSessionCloseAsync(
+        int sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new { type = "importSessionClose", sessionId };
+        await _bridge.SendRequestAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drop the session and anything it staged. Idempotent — call it from a
+    /// finally-block whether the import committed, failed, or never started.
+    /// </summary>
+    internal async Task ImportSessionDiscardAsync(
+        int sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new { type = "importSessionDiscard", sessionId };
+        await _bridge.SendRequestAsync(request, cancellationToken);
+    }
+
+    /// <summary>
     /// Put <paramref name="sourceName"/> in <paramref name="targetName"/>'s
     /// place — the target's pool slot is freed and the source's slot takes
     /// over its name, in one metadata update. No bytes are copied and no

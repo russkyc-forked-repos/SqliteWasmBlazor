@@ -111,8 +111,8 @@ public partial class EncryptionModel : ObservableModel
     // itself, because "Lock first, then import" is a step the user should
     // not have to discover from an error. Caller (page partial) owns the
     // destructive confirmation dialog; parameter is the picked file itself —
-    // the model streams it into the JS-side BlobSession one ArrayPool chunk
-    // at a time so C# managed heap stays bounded regardless of envelope size.
+    // the model streams it into the worker one ArrayPool chunk at a time so
+    // no heap holds more than a chunk regardless of envelope size.
     [ObservableCommand(nameof(ImportPoolCmdAsync), null, nameof(FormatOperationError))]
     public partial IObservableCommandAsync<IBrowserFile> ImportPool { get; }
 
@@ -366,9 +366,9 @@ public partial class EncryptionModel : ObservableModel
     /// <summary>
     /// Guided import — collapses the recipient ritual (Lock → Reset →
     /// EnterEncrypted → ImportPool) into one orchestrated call. The picked
-    /// file's stream is shipped to the JS-side BlobSession one ArrayPool
-    /// chunk at a time; the worker re-streams it for AEAD preflight +
-    /// per-slot rekey commit. C# managed heap peak stays at one chunk (~1 MB).
+    /// file's stream is pushed into the worker one ArrayPool chunk at a
+    /// time, staged there, and re-streamed for AEAD preflight + per-slot
+    /// rekey commit. Heap peak stays at one chunk (~1 MB) on both sides.
     ///
     /// Flow: peek envelope header (first ~4 KB only) → read CredentialIdHint
     /// → end the current session if one is open → drive WebAuthn pinned to
@@ -454,7 +454,7 @@ public partial class EncryptionModel : ObservableModel
             // Re-open the file's stream for the chunked import — the peek
             // stream above was consumed for 4 KB; IBrowserFile yields a
             // fresh stream per OpenReadStream call. The service streams
-            // the full body into the JS-side BlobSession one ArrayPool
+            // the full body into the worker's import session one ArrayPool
             // chunk at a time, then drives preflight + commit.
             await using var importStream = file.OpenReadStream(
                 maxAllowedSize: file.Size, cancellationToken);
@@ -492,8 +492,8 @@ public partial class EncryptionModel : ObservableModel
     /// <summary>
     /// Single-DB plain-import command. Streams the picked <c>.db</c> file
     /// into <see cref="SingleDatabaseImport.DatabaseName"/>, replacing that
-    /// database wholesale. The JS-side BlobSession keeps the C# managed heap
-    /// bounded regardless of file size. Plain pools write plain pages;
+    /// database wholesale. The chunks go straight into the worker, so no
+    /// heap holds more than one of them regardless of file size. Plain pools write plain pages;
     /// Encrypted+Unlocked rekey-on-writes under <c>globalKey</c>;
     /// Encrypted+Locked is refused (the <c>.eds</c> guided import is the
     /// rebind-to-new-credential path; <see cref="CanImportDatabases"/> gates

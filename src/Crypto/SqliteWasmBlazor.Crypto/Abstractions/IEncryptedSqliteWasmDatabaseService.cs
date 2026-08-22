@@ -213,7 +213,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// (Reset → EnterEncrypted → ImportPool) into one atomic call. The
     /// envelope arrives as a <see cref="Stream"/> (typically
     /// <c>IBrowserFile.OpenReadStream(file.Size)</c>) and is shipped to a
-    /// JS-side BlobSession one ArrayPool chunk at a time. C# managed heap
+    /// worker's import session one ArrayPool chunk at a time. C# managed heap
     /// peak stays at one chunk (~1 MB) regardless of envelope size; the
     /// JS Blob parts list is browser-managed (Safari disk-backs above
     /// ~50 MB).
@@ -293,7 +293,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     ///
     /// <para>
     /// C# managed-heap peak: one ArrayPool chunk (~1 MB). The envelope is
-    /// streamed into a JS-side BlobSession chunk by chunk; the worker
+    /// streamed into the worker's import session chunk by chunk; the worker
     /// reads via <c>blob.stream()</c> + the streaming MessagePack decoder.
     /// </para>
     /// <para>
@@ -326,7 +326,7 @@ public interface IEncryptedSqliteWasmDatabaseService
     /// <para>
     /// C# managed-heap peak: one ArrayPool chunk (~1 MB) regardless of file
     /// size. The source <paramref name="stream"/> is shipped into the
-    /// JS-side BlobSession one chunk at a time; the worker reads it via
+    /// worker's import session one chunk at a time; the worker reads it via
     /// <c>blob.stream()</c> and writes a temp SAH slot then atomic-promotes
     /// to <paramref name="databaseName"/>. Existing same-name DB is
     /// replaced.

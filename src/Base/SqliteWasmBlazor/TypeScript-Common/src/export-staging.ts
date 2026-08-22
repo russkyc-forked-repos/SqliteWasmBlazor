@@ -1,12 +1,13 @@
 // export-staging.ts
 //
-// OPFS staging for streamed exports. The worker writes export bytes into a
-// staging file through a synchronous access handle — the same primitive the
-// import path uses for rekey-on-write — and the bridge lifts the finished
-// file as a File object for delivery. A File backed by an OPFS entry is
-// disk-backed in every engine; Blobs constructed from ArrayBuffers are held
-// in process memory by WebKit, which is what OOM-killed iPhone Safari on
-// large encrypted exports.
+// OPFS staging for streamed transfers. The worker writes bytes into a staging
+// file through a synchronous access handle and reads them back as a File
+// object — for an export the bridge lifts that File for delivery, for a
+// two-pass import the worker re-streams it per pass. A File backed by an
+// OPFS entry is disk-backed in every engine; Blobs constructed from
+// ArrayBuffers are held in process memory by WebKit, which is what
+// OOM-killed iPhone Safari on large encrypted exports — and, until the
+// import path was pushed into the worker, on large imports too.
 //
 // Lifecycle: staging files live in EXPORT_STAGING_DIR at the OPFS root,
 // outside the SAHPool's /databases tree. A staging file must not be deleted
@@ -39,8 +40,23 @@ async function stagingDir(create: boolean): Promise<FileSystemDirectoryHandle> {
 }
 
 export async function openExportStaging(): Promise<ExportStagingFile> {
+    return openStagingFile('export');
+}
+
+/**
+ * Staging file for an import the C# side pushes in chunk by chunk. Same
+ * primitive, other direction: the envelope lands here first so the
+ * two-pass flows (`.dbs`, `.eds`) can read it twice without the whole
+ * thing ever being a Blob in main-thread memory. Single-pass imports do
+ * not come through here — they go straight into the pool's temp slot.
+ */
+export async function openImportStaging(): Promise<ExportStagingFile> {
+    return openStagingFile('import');
+}
+
+async function openStagingFile(prefix: string): Promise<ExportStagingFile> {
     const dir = await stagingDir(true);
-    const name = `export-${Date.now()}-${stagingSerial++}.bin`;
+    const name = `${prefix}-${Date.now()}-${stagingSerial++}.bin`;
     const fileHandle = await dir.getFileHandle(name, { create: true });
     const sah = await fileHandle.createSyncAccessHandle();
     sah.truncate(0);
@@ -87,6 +103,17 @@ export async function openExportStaging(): Promise<ExportStagingFile> {
             }
         },
     };
+}
+
+/**
+ * Lift a finished staging file as a File, for a reader inside the worker.
+ * Only valid after {@link ExportStagingFile.finish} — the access handle
+ * holds the write side exclusively until then.
+ */
+export async function readStagingFile(name: string): Promise<File> {
+    const dir = await stagingDir(false);
+    const handle = await dir.getFileHandle(name);
+    return handle.getFile();
 }
 
 /**

@@ -444,64 +444,18 @@ function composeEnvelopeBlob(
 }
 
 // ---------------------------------------------------------------------------
-// BlobSession — chunked C# → JS Blob primitive (Crypto-bundle copy).
+// Chunked encrypted-disk import — C# → worker import session → worker.
 //
-// The Crypto-plane bridge bundle ships standalone; it doesn't import the
-// Base-plane bundle at runtime. So the BlobSession primitive lives in
-// both bundles, registered under the same `sqliteWasmWorker.blobSession*`
-// names, and the C# JSImport reaches whichever bundle the consumer
-// happens to have loaded. Behaviour is byte-identical to the Base-plane
-// implementation; see SqliteWasmBlazor.csproj's bridge for the canonical
-// commentary.
-// ---------------------------------------------------------------------------
-
-const blobSessions = new Map<number, BlobPart[]>();
-
-export function blobSessionOpen(sessionId: number): void {
-    if (blobSessions.has(sessionId)) {
-        throw new Error(`blobSessionOpen: sessionId ${sessionId} is already open`);
-    }
-    blobSessions.set(sessionId, []);
-}
-
-export function blobSessionAppend(
-    sessionId: number,
-    chunkView: IMemoryView,
-    isLast: boolean,
-): void {
-    const parts = blobSessions.get(sessionId);
-    if (!parts) {
-        throw new Error(`blobSessionAppend: unknown sessionId ${sessionId}`);
-    }
-    parts.push(new Blob([chunkView.slice() as Uint8Array<ArrayBuffer>]));
-    void isLast;
-}
-
-export function blobSessionDiscard(sessionId: number): void {
-    blobSessions.delete(sessionId);
-}
-
-function blobSessionPartsRef(sessionId: number): BlobPart[] {
-    const parts = blobSessions.get(sessionId);
-    if (!parts) {
-        throw new Error(`blobSessionPartsRef: no parts list for sessionId ${sessionId}`);
-    }
-    return parts;
-}
-
-// ---------------------------------------------------------------------------
-// Chunked encrypted-disk import — C# → BlobSession → worker.
+// The picked file's bytes went straight into the worker, chunk by chunk,
+// and are staged in an OPFS file there. Nothing about them passes through
+// the main thread: these entries carry only the session id, and the
+// worker lifts its own staged File per pass. Blobs built from
+// ArrayBuffers are memory-backed in WebKit, which is what closed the
+// pool's access handles mid-import on iOS when this glue composed one.
 //
-// The C# side has already streamed the picked file's bytes into the
-// JS-side BlobSession via the Base-plane chunked-push primitive (one
-// ArrayPool chunk at a time). This glue builds a virtual-concat Blob from
-// those parts and hands it to the worker's import-streamed.ts handlers
-// via the streamHandler protocol.
-//
-// Two-pass: same parts list is rebuilt into a fresh Blob for preflight,
-// then again for commit (Blob.stream() is one-shot per Blob, so we mint
-// a new view between passes). The parts stay live in `blobSessions`
-// until C# calls BlobSessionDiscard in its finally-block.
+// Two-pass: preflight authenticates the envelope before the caller wipes
+// anything, commit rewrites it under the new key. Each pass streams the
+// staged file afresh; the session stays open until C# discards it.
 // ---------------------------------------------------------------------------
 
 /** JSImport entry — preflight: AEAD-verify slot 0 of every file under K_wrap. */
@@ -571,12 +525,12 @@ export function exportDatabasesToDownload(
 }
 
 /**
- * JSImport entry — multi-DB plain import. Composes the BlobSession parts
- * into a Blob, posts to the worker's <c>importDatabasesFromSession</c>
- * handler, which writes each envelope file via the chunked SAH path
- * (Plain: verbatim; Encrypted+Unlocked: rekey-on-write). It wipes the pool
- * first unless <c>keepExisting</c> says C# has parked the previous content
- * itself and will restore or drop it after inspecting the import.
+ * JSImport entry — multi-DB plain import. Points the worker at the `.dbs`
+ * envelope staged under <paramref name="sessionId"/>; the worker writes
+ * each file in it via the chunked SAH path (Plain: verbatim;
+ * Encrypted+Unlocked: rekey-on-write). It wipes the pool first unless
+ * <c>keepExisting</c> says C# has parked the previous content itself and
+ * will restore or drop it after inspecting the import.
  */
 export function importDatabasesFromSession(
     sessionId: number,
@@ -585,8 +539,6 @@ export function importDatabasesFromSession(
     if (!worker) {
         return Promise.reject(new Error('Worker not initialized'));
     }
-    const parts = blobSessionPartsRef(sessionId);
-    const blob = new Blob(parts);
     const streamId = nextStreamId--;
     return new Promise((resolve, reject) => {
         streamHandlers.set(streamId, {
@@ -601,8 +553,7 @@ export function importDatabasesFromSession(
         });
         worker!.postMessage({
             streamId,
-            data: { type: 'importDatabasesFromSession', keepExisting },
-            blob,
+            data: { type: 'importDatabasesFromSession', sessionId, keepExisting },
         });
     });
 }
@@ -651,41 +602,6 @@ export function exportDatabaseToDownload(
     });
 }
 
-/**
- * JSImport entry — single-DB plain import. Streams a single picked .db file
- * from the BlobSession to the worker; the worker dispatches by hasGlobalKey()
- * (Encrypted+Unlocked rekeys on write, Plain writes verbatim). The Encrypted+
- * Locked case is the C# caller's responsibility — the model gates the button.
- */
-export function importDatabaseFromSession(
-    sessionId: number,
-    dbName: string,
-): Promise<number> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
-    const parts = blobSessionPartsRef(sessionId);
-    const blob = new Blob(parts);
-    const streamId = nextStreamId--;
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(result) {
-                streamHandlers.delete(streamId);
-                resolve(typeof result === 'number' ? result : 0);
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
-        });
-        worker!.postMessage({
-            streamId,
-            data: { type: 'importDatabaseFromSession', database: dbName },
-            blob,
-        });
-    });
-}
-
 function _sendImportPoolStreamSession(
     type: 'importPoolStreamPreflight' | 'importPoolStreamCommit',
     sessionId: number,
@@ -694,8 +610,6 @@ function _sendImportPoolStreamSession(
     if (!worker) {
         return Promise.reject(new Error('Worker not initialized'));
     }
-    const parts = blobSessionPartsRef(sessionId);
-    const blob = new Blob(parts);
     const kWrap = kWrapView.slice();
     const streamId = nextStreamId--;
     return new Promise((resolve, reject) => {
@@ -716,8 +630,7 @@ function _sendImportPoolStreamSession(
         worker!.postMessage(
             {
                 streamId,
-                data: { type },
-                blob,
+                data: { type, sessionId },
                 binaryPayload: kWrap.buffer,
             },
             [kWrap.buffer],
@@ -739,12 +652,8 @@ export { downloadStagedExport };
     exportPoolToBytesSession,
     readExportBytes,
     discardExportBytes,
-    blobSessionOpen,
-    blobSessionAppend,
-    blobSessionDiscard,
     importPoolStreamPreflightFromSession,
     importPoolStreamCommitFromSession,
-    importDatabaseFromSession,
     importDatabasesFromSession,
     exportDatabaseToDownload,
     exportDatabasesToDownload,

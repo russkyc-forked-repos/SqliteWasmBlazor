@@ -36,10 +36,17 @@ import {
 import {
     importPoolStreamPreflight,
     importPoolStreamCommit,
-    importDatabaseFromBlob,
+    createDatabaseImportSink,
     assertImportFileCount,
+    type DatabaseImportSink,
 } from './vfs-prf/import-streamed';
-import {openExportStaging, sweepExportStaging} from '@sqlitewasmblazor/worker-common';
+import {
+    openExportStaging,
+    openImportStaging,
+    readStagingFile,
+    sweepExportStaging,
+    type ExportStagingFile,
+} from '@sqlitewasmblazor/worker-common';
 import {
     BufferedStreamReader,
     readArrayHeader,
@@ -280,13 +287,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
             streamId: number;
             data: { type: string };
             binaryPayload?: ArrayBuffer;
-            blob?: Blob;
         };
         await handleStreamingRequest(
             streamMsg.streamId,
             streamMsg.data,
             streamMsg.binaryPayload,
-            streamMsg.blob,
         );
         return;
     }
@@ -350,7 +355,6 @@ async function handleStreamingRequest(
     streamId: number,
     data: { type: string },
     binaryPayload?: ArrayBuffer,
-    blob?: Blob,
 ): Promise<void> {
     try {
         switch (data.type) {
@@ -364,29 +368,21 @@ async function handleStreamingRequest(
                 if (!binaryPayload) {
                     throw new Error('importPoolStreamPreflight requires binaryPayload (raw K_wrap)');
                 }
-                if (!(blob instanceof Blob)) {
-                    throw new Error('importPoolStreamPreflight requires a Blob');
-                }
-                await importPoolStreamPreflightHandler(streamId, blob, new Uint8Array(binaryPayload));
+                await importPoolStreamPreflightHandler(
+                    streamId,
+                    await stagedSessionFile(
+                        requireSessionId(data), 'importPoolStreamPreflight'),
+                    new Uint8Array(binaryPayload));
                 return;
             case 'importPoolStreamCommit':
                 if (!binaryPayload) {
                     throw new Error('importPoolStreamCommit requires binaryPayload (raw K_wrap)');
                 }
-                if (!(blob instanceof Blob)) {
-                    throw new Error('importPoolStreamCommit requires a Blob');
-                }
-                await importPoolStreamCommitHandler(streamId, blob, new Uint8Array(binaryPayload));
-                return;
-            case 'importDatabaseFromSession':
-                if (!(blob instanceof Blob)) {
-                    throw new Error('importDatabaseFromSession requires a Blob');
-                }
-                if (typeof (data as any).database !== 'string') {
-                    throw new Error('importDatabaseFromSession requires data.database');
-                }
-                await importDatabaseFromSessionHandler(
-                    streamId, blob, (data as any).database as string);
+                await importPoolStreamCommitHandler(
+                    streamId,
+                    await stagedSessionFile(
+                        requireSessionId(data), 'importPoolStreamCommit'),
+                    new Uint8Array(binaryPayload));
                 return;
             case 'exportDatabaseToStaging':
                 if (typeof (data as any).database !== 'string') {
@@ -403,11 +399,11 @@ async function handleStreamingRequest(
                     streamId, (data as any).databases as string[]);
                 return;
             case 'importDatabasesFromSession':
-                if (!(blob instanceof Blob)) {
-                    throw new Error('importDatabasesFromSession requires a Blob');
-                }
                 await importDatabasesFromSessionHandler(
-                    streamId, blob, (data as any).keepExisting === true);
+                    streamId,
+                    await stagedSessionFile(
+                        requireSessionId(data), 'importDatabasesFromSession'),
+                    (data as any).keepExisting === true);
                 return;
             default:
                 throw new Error(`Unknown streaming request type: ${data.type}`);
@@ -707,7 +703,7 @@ async function exportDatabasesToStagingHandler(
  *
  * State dispatch matches the single-DB import: Plain writes plain;
  * Encrypted+Unlocked rekey-on-writes; Encrypted+Locked is refused by
- * the C# caller before opening the BlobSession.
+ * the C# caller before opening the import session.
  */
 async function importDatabasesFromSessionHandler(
     streamId: number,
@@ -855,42 +851,198 @@ async function importDatabasesFromSessionHandler(
 }
 
 /**
- * Streaming single-DB plain-import handler. Dispatch by hasGlobalKey():
- * Encrypted+Unlocked → rekey-on-write under globalKey;
- * Plain disk → write plain pages verbatim.
- * Encrypted+Locked is the caller's responsibility (C# refuses before
- * opening the BlobSession).
+ * Import sessions — the one way a file the user picked reaches this worker.
  *
- * JS heap peak: ~1 MB (one slot batch) regardless of file size.
+ * C# opens a session, pushes the file one chunk at a time (awaiting each,
+ * so at most one chunk is in flight), then closes it. Nothing accumulates
+ * on the main thread: every chunk is a transferred ArrayBuffer that lands
+ * on disk here and is wiped. That is the whole point of the design —
+ * WebKit holds a Blob built from ArrayBuffers in process memory, and a
+ * large import built that way is what closed the pool's access handles
+ * mid-write on iOS.
+ *
+ * Two sinks, because two shapes of import need different things:
+ *
+ *   database → one plain `.db` going into one database. Single pass, so
+ *              the chunks go straight into the pool's temp slot (rekeyed
+ *              on the way in when the pool is encrypted) and no copy of
+ *              the file exists anywhere.
+ *   staging  → a `.dbs` or `.eds` envelope, which is validated in one
+ *              pass and committed in another. It lands in an OPFS staging
+ *              file the worker re-streams per pass.
  */
-async function importDatabaseFromSessionHandler(
-    streamId: number,
-    blob: Blob,
-    dbName: string,
-): Promise<void> {
+type ImportSession =
+    | {
+    kind: 'database';
+    dbName: string;
+    sink: DatabaseImportSink;
+    // Snapshot of globalKey taken at open: the session outlives the call
+    // that started it, and the registry's key can be cleared mid-import by
+    // a lock. Wiped when the session ends, whichever way it ends.
+    globalKey: Uint8Array | undefined;
+}
+    | { kind: 'staging'; staging: ExportStagingFile; finished: boolean };
+
+const importSessions = new Map<number, ImportSession>();
+
+/** The session id a streaming import request must carry. */
+function requireSessionId(data: { type: string }): number {
+    const sessionId = (data as any).sessionId;
+    if (typeof sessionId !== 'number') {
+        throw new Error(`${data.type} requires data.sessionId`);
+    }
+    return sessionId;
+}
+
+function takeImportSession(sessionId: number, what: string): ImportSession {
+    const session = importSessions.get(sessionId);
+    if (!session) {
+        throw new Error(`${what}: no open import session ${sessionId}`);
+    }
+    return session;
+}
+
+/**
+ * The staged envelope of a session, as a File the import passes can
+ * stream. Each pass lifts its own File — a stream is one-shot, the OPFS
+ * entry behind it is not.
+ */
+async function stagedSessionFile(sessionId: number, what: string): Promise<File> {
+    const session = takeImportSession(sessionId, what);
+    if (session.kind !== 'staging') {
+        throw new Error(`${what}: session ${sessionId} is not a staging session`);
+    }
+    if (!session.finished) {
+        throw new Error(`${what}: session ${sessionId} is still open for writing`);
+    }
+    return readStagingFile(session.staging.name);
+}
+
+/**
+ * Open an import session. A database session closes the target first: its
+ * commit promotes a temp slot over the database via atomicReplaceFile,
+ * and an OFile still holding the old SAH would keep serving stale pages —
+ * and write into a slot the pool can hand to the next file. C# reopens on
+ * demand.
+ */
+async function importSessionOpen(
+    sessionId: number,
+    sink: string,
+    dbName: string | undefined,
+    size: number | undefined,
+) {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
-    // The commit promotes a temp slot over dbName via atomicReplaceFile,
-    // which frees dbName's current SAH. An OFile still holding that SAH
-    // would keep serving stale pages — and write into a slot the pool can
-    // re-allocate to the next file. Close first; C# reopens on demand.
+    if (importSessions.has(sessionId)) {
+        throw new Error(`importSessionOpen: session ${sessionId} is already open`);
+    }
+
+    if (sink === 'staging') {
+        importSessions.set(sessionId, {
+            kind: 'staging',
+            staging: await openImportStaging(),
+            finished: false,
+        });
+        return {rowsAffected: 0};
+    }
+
+    if (sink !== 'database') {
+        throw new Error(`importSessionOpen: unknown sink '${sink}'`);
+    }
+    if (typeof dbName !== 'string' || dbName.length === 0) {
+        throw new Error('importSessionOpen: a database sink needs data.database');
+    }
+    if (typeof size !== 'number') {
+        throw new Error('importSessionOpen: a database sink needs data.size');
+    }
+
     await closeDatabase(dbName);
-    if (hasGlobalKey()) {
-        const globalKey = snapshotGlobalKey()!;
-        try {
-            await importDatabaseFromBlob(
-                blob, dbName, poolUtil,
-                globalKey,
-                (chunk, dbPath, slotIndexBase, key) =>
-                    rekeySlots(chunk, dbPath, undefined, key, slotIndexBase));
-        } finally {
+    const globalKey = hasGlobalKey() ? snapshotGlobalKey()! : undefined;
+    try {
+        importSessions.set(sessionId, {
+            kind: 'database',
+            dbName,
+            globalKey,
+            sink: createDatabaseImportSink(
+                dbName, size, poolUtil, globalKey,
+                globalKey === undefined
+                    ? undefined
+                    : (chunk, dbPath, slotIndexBase, key) =>
+                        rekeySlots(chunk, dbPath, undefined, key, slotIndexBase)),
+        });
+    } catch (err) {
+        if (globalKey !== undefined) {
             clearBytes(globalKey);
         }
-    } else {
-        await importDatabaseFromBlob(blob, dbName, poolUtil, undefined, undefined);
+        throw err;
     }
-    self.postMessage({streamId, streamDone: true, result: 0});
+    return {rowsAffected: 0};
+}
+
+/**
+ * Take one chunk. The incoming buffer was transferred, so this worker owns
+ * it; it is wiped once written because a plain `.db` chunk is plaintext
+ * pages and a `.dbs`/`.eds` chunk can be either.
+ */
+function importSessionAppend(sessionId: number, chunk: Uint8Array) {
+    const session = takeImportSession(sessionId, 'importSessionAppend');
+    try {
+        if (session.kind === 'database') {
+            session.sink.append(chunk);
+        } else {
+            session.staging.write(chunk);
+        }
+    } finally {
+        clearBytes(chunk);
+    }
+    return {rowsAffected: 0};
+}
+
+/**
+ * End the source. A database session promotes its temp slot here — that
+ * is the import. A staging session only closes the write handle; what
+ * happens to the envelope is the pass that reads it back.
+ */
+function importSessionClose(sessionId: number) {
+    const session = takeImportSession(sessionId, 'importSessionClose');
+    if (session.kind === 'staging') {
+        session.staging.finish();
+        session.finished = true;
+        return {rowsAffected: 0};
+    }
+    try {
+        session.sink.commit();
+    } finally {
+        if (session.globalKey !== undefined) {
+            clearBytes(session.globalKey);
+            session.globalKey = undefined;
+        }
+    }
+    logger.info(MODULE_NAME, `✓ Imported ${session.dbName}`);
+    return {rowsAffected: 0};
+}
+
+/**
+ * Drop a session and everything it staged. Idempotent — C# calls it from
+ * a finally-block whether the import committed, failed, or never started.
+ */
+async function importSessionDiscard(sessionId: number) {
+    const session = importSessions.get(sessionId);
+    if (!session) {
+        return {rowsAffected: 0};
+    }
+    importSessions.delete(sessionId);
+    if (session.kind === 'database') {
+        session.sink.abort();
+        if (session.globalKey !== undefined) {
+            clearBytes(session.globalKey);
+            session.globalKey = undefined;
+        }
+    } else {
+        await session.staging.abort();
+    }
+    return {rowsAffected: 0};
 }
 
 /**
@@ -1040,6 +1192,26 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
 
         case 'replaceDb':
             return await replaceDatabase(database!, (data as any).targetName);
+
+        case 'importSessionOpen':
+            return await importSessionOpen(
+                (data as any).sessionId,
+                (data as any).sink,
+                database,
+                (data as any).size);
+
+        case 'importSessionAppend':
+            if (!binaryPayload) {
+                throw new Error('importSessionAppend requires binaryPayload');
+            }
+            return importSessionAppend(
+                (data as any).sessionId, new Uint8Array(binaryPayload));
+
+        case 'importSessionClose':
+            return importSessionClose((data as any).sessionId);
+
+        case 'importSessionDiscard':
+            return await importSessionDiscard((data as any).sessionId);
 
         case 'importDb':
             if (!binaryPayload) {

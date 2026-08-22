@@ -97,6 +97,13 @@ interface PoolUtilLike {
 }
 
 const PLAIN_SLOT_SIZE = 4096;
+
+/**
+ * Plain pages per write batch. 256 × 4096 B = 1 MB in, ~1.03 MB out once
+ * encrypted — both well under the per-op JS heap budget on mobile Safari.
+ */
+const CHUNK_SLOTS = 256;
+
 const SQLITE_MAGIC_HEADER = Uint8Array.from([
     0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66,  // "SQLite f"
     0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,  // "ormat 3\0"
@@ -115,44 +122,63 @@ function hasSqliteMagic(bytes: Uint8Array): boolean {
 }
 
 /**
- * Stream a single plain .db file from a Blob into the SAH pool. State-
- * aware dispatch by <paramref name="globalKey"/>:
+ * Sink for a single plain .db file pushed in from C#, chunk by chunk.
+ *
+ * The bytes never exist anywhere in one piece: each chunk arrives as a
+ * transferred ArrayBuffer, is written into the pool's temp slot, and is
+ * wiped. Peak worker memory is one slot batch plus one incoming chunk —
+ * about 2 MB whatever the file's size. Backpressure is the round trip
+ * itself: C# awaits each append, so a chunk is on the wire only once the
+ * one before it is on disk.
+ *
+ * State-aware dispatch by <paramref name="globalKey"/>:
  *
  *   undefined → write plain pages verbatim (sources from a SQLite tool
  *               or another SqliteWasmBlazor instance on a Plain disk)
- *   Uint8Array → rekey each chunk to encrypted slots under globalKey,
- *               write to the SAH at the encrypted offset. After commit
- *               the file is slot-format ciphertext under globalKey
- *               (same shape as importDatabasePlain's whole-buffer path
- *               but with no byte[] resident in the worker).
+ *   Uint8Array → rekey each batch to encrypted slots under globalKey and
+ *               write at the encrypted offset. After commit the file is
+ *               slot-format ciphertext under globalKey.
  *
- * Either way the on-disk file goes through temp slot + atomicReplaceFile,
- * so a mid-loop failure leaves the existing dbName untouched.
+ * Either way the bytes land in a temp slot that only becomes the database
+ * at {@link DatabaseImportSink.commit}, so an import that fails or is
+ * abandoned part-way leaves dbName exactly as it was.
  *
- * SQLite magic check on the first chunk's first 16 bytes guards against
- * a corrupt source whose length divides by 4096 by coincidence.
+ * SQLite magic check on the first 16 bytes guards against a source whose
+ * length divides by 4096 by coincidence.
  */
-export async function importDatabaseFromBlob(
-    blob: Blob,
+export interface DatabaseImportSink {
+    /** Take the next chunk of the source file. Any length. */
+    append(bytes: Uint8Array): void;
+
+    /** Promote the temp slot over the database. Refuses a short source. */
+    commit(): void;
+
+    /** Drop the temp slot. Idempotent; safe after commit. */
+    abort(): void;
+}
+
+export function createDatabaseImportSink(
     dbName: string,
+    plainSize: number,
     poolUtil: PoolUtilLike,
     globalKey: Uint8Array | undefined,
     rekeyFn: ((chunk: Uint8Array, dbPath: string, slotIndexBase: number, key: Uint8Array) => Uint8Array) | undefined,
-): Promise<void> {
-    if (blob.size === 0 || blob.size % PLAIN_SLOT_SIZE !== 0) {
+): DatabaseImportSink {
+    if (plainSize === 0 || plainSize % PLAIN_SLOT_SIZE !== 0) {
         throw new Error(
-            `importDatabaseFromBlob: ${dbName} length ${blob.size} is not a non-zero ` +
+            `importDatabase: ${dbName} length ${plainSize} is not a non-zero ` +
             `multiple of the plain page size ${PLAIN_SLOT_SIZE}.`);
     }
     if (globalKey !== undefined && rekeyFn === undefined) {
         throw new Error(
-            `importDatabaseFromBlob: globalKey supplied but no rekey fn — caller bug.`);
+            `importDatabase: globalKey supplied but no rekey fn — caller bug.`);
     }
 
     const dbPath = `/databases/${dbName}`;
     const tempPath = `${dbPath}${SINGLE_IMPORT_TMP_SUFFIX}`;
-    const totalSlots = blob.size / PLAIN_SLOT_SIZE;
 
+    // A temp slot from an attempt that never finished. unlink is a no-op on
+    // a missing path; anything found here is unreachable by definition.
     if (poolUtil.getFileNames().includes(tempPath)) {
         try {
             poolUtil.unlink(tempPath);
@@ -160,56 +186,103 @@ export async function importDatabaseFromBlob(
         }
     }
 
-    const CHUNK_SLOTS = 256;
-    const PHYSICAL_SLOT_SIZE = 4124;
-    const reader = new BufferedStreamReader(blob.stream().getReader());
+    // Batch buffer — a whole slot batch is rekeyed and written at once, so
+    // chunk boundaries from C# need not line up with slot boundaries.
+    const batch = new Uint8Array(CHUNK_SLOTS * PLAIN_SLOT_SIZE);
+    let batchLen = 0;
+    let slotBase = 0;
+    let received = 0;
+    let committed = false;
 
-    try {
-        for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
-            const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
-            const plainBytes = slotCount * PLAIN_SLOT_SIZE;
-            const plainChunk = await reader.read(plainBytes);
-
-            // SQLite magic check on the first chunk's first 16 bytes.
-            if (slotBase === 0 && !hasSqliteMagic(plainChunk)) {
-                clearBytes(plainChunk);
-                throw new Error(
-                    `importDatabaseFromBlob: ${dbName} does not start with the SQLite ` +
-                    `magic header — refusing to import a non-plain source.`);
-            }
-
-            if (globalKey === undefined) {
-                // Plain target — write verbatim at the plain offset.
-                poolUtil.writeFileSlice(tempPath, slotBase * PLAIN_SLOT_SIZE, plainChunk);
-                clearBytes(plainChunk);
-            } else {
-                // Encrypted target — rekey then write at the encrypted offset.
-                let encryptedChunk: Uint8Array | null = null;
-                try {
-                    encryptedChunk = rekeyFn!(plainChunk, dbPath, slotBase, globalKey);
-                    poolUtil.writeFileSlice(
-                        tempPath,
-                        slotBase * PHYSICAL_SLOT_SIZE,
-                        encryptedChunk!);
-                } finally {
-                    clearBytes(plainChunk);
-                    if (encryptedChunk !== null) {
-                        clearBytes(encryptedChunk);
-                    }
+    function flushBatch(): void {
+        if (batchLen === 0) {
+            return;
+        }
+        if (batchLen % PLAIN_SLOT_SIZE !== 0) {
+            throw new Error(
+                `importDatabase: ${dbName} batch of ${batchLen} bytes is not a ` +
+                `multiple of the plain page size ${PLAIN_SLOT_SIZE}.`);
+        }
+        const plainChunk = batch.subarray(0, batchLen);
+        // First bytes of the file, whatever the chunking was. Nothing has
+        // been written yet, so a source that is not a plain SQLite file is
+        // refused before it costs a slot.
+        if (slotBase === 0 && !hasSqliteMagic(plainChunk)) {
+            clearBytes(plainChunk);
+            throw new Error(
+                `importDatabase: ${dbName} does not start with the SQLite ` +
+                `magic header — refusing to import a non-plain source.`);
+        }
+        if (globalKey === undefined) {
+            poolUtil.writeFileSlice(tempPath, slotBase * PLAIN_SLOT_SIZE, plainChunk);
+        } else {
+            let encryptedChunk: Uint8Array | null = null;
+            try {
+                encryptedChunk = rekeyFn!(plainChunk, dbPath, slotBase, globalKey);
+                poolUtil.writeFileSlice(
+                    tempPath, slotBase * PHYSICAL_SLOT_SIZE, encryptedChunk);
+            } finally {
+                if (encryptedChunk !== null) {
+                    clearBytes(encryptedChunk);
                 }
             }
         }
-
-        poolUtil.atomicReplaceFile(tempPath, dbPath);
-    } catch (err) {
-        try {
-            poolUtil.unlink(tempPath);
-        } catch { /* best-effort */
-        }
-        throw err;
-    } finally {
-        reader.releaseLock();
+        slotBase += batchLen / PLAIN_SLOT_SIZE;
+        // Plaintext pages — wipe before the buffer is reused.
+        clearBytes(plainChunk);
+        batchLen = 0;
     }
+
+    return {
+        append(bytes: Uint8Array): void {
+            if (committed) {
+                throw new Error(`importDatabase: append after commit for ${dbName}.`);
+            }
+            if (received + bytes.length > plainSize) {
+                throw new Error(
+                    `importDatabase: ${dbName} source is longer than the declared ` +
+                    `${plainSize} bytes.`);
+            }
+            received += bytes.length;
+
+            let offset = 0;
+            while (offset < bytes.length) {
+                const take = Math.min(batch.length - batchLen, bytes.length - offset);
+                batch.set(bytes.subarray(offset, offset + take), batchLen);
+                batchLen += take;
+                offset += take;
+                if (batchLen === batch.length) {
+                    flushBatch();
+                }
+            }
+        },
+
+        commit(): void {
+            if (committed) {
+                throw new Error(`importDatabase: commit twice for ${dbName}.`);
+            }
+            if (received !== plainSize) {
+                throw new Error(
+                    `importDatabase: ${dbName} source ended at ${received} of ` +
+                    `${plainSize} bytes; it is truncated.`);
+            }
+            flushBatch();
+            poolUtil.atomicReplaceFile(tempPath, dbPath);
+            committed = true;
+        },
+
+        abort(): void {
+            batch.fill(0);
+            batchLen = 0;
+            if (committed) {
+                return;
+            }
+            try {
+                poolUtil.unlink(tempPath);
+            } catch { /* best-effort */
+            }
+        },
+    };
 }
 
 /**

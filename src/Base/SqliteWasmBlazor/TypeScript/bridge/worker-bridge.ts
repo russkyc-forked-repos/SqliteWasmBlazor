@@ -102,81 +102,6 @@ export function sendToWorker(messageJson: string): void {
     worker.postMessage(message);
 }
 
-// ----------------------------------------------------------------------
-// BlobSession — chunked C# → JS Blob construction.
-//
-// Lets the C# side stream a large body (a picked file, a delta payload,
-// anything) into the JS layer one chunk at a time, without ever
-// materialising the whole body in WASM linear memory. The bridge holds
-// each appended chunk as a Blob part; consumer bridges added in later
-// phases (encrypted-disk import, plain DB import, etc.) compose
-// `new Blob(parts)` to feed `blob.stream()` to the worker — the Blob is
-// a virtual concatenation, so per-part disk-backing on Safari keeps JS
-// heap bounded regardless of total session size.
-//
-// Identity is C#-owned: the caller allocates `sessionId` from its
-// existing request-id counter and is solely responsible for the Open →
-// Append × N → consumer-call → Discard sequence. JS holds nothing across
-// session boundaries.
-// ----------------------------------------------------------------------
-
-/**
- * Open buffers, keyed by C#-issued session id. Lifetime: caller-owned;
- * dropped explicitly via {@link blobSessionDiscard} (or implicitly by a
- * consumer bridge that consumes-and-clears in one step).
- */
-const blobSessions = new Map<number, BlobPart[]>();
-
-/** Allocate a fresh session's part list. Throws on duplicate id. */
-export function blobSessionOpen(sessionId: number): void {
-    if (blobSessions.has(sessionId)) {
-        throw new Error(`blobSessionOpen: sessionId ${sessionId} is already open`);
-    }
-    blobSessions.set(sessionId, []);
-}
-
-/**
- * Append <paramref name="chunkView"/> to the session's part list.
- *
- * The chunk is detached into a fresh `Uint8Array` via `.slice()` and wrapped
- * in a `Blob` part — at part sizes above ~50 MB Safari swaps the parts out
- * of JS heap automatically. <paramref name="isLast"/> is informational
- * (forwarded to the debug log when enabled); the consumer bridge knows
- * when its own end-of-stream condition is met.
- */
-export function blobSessionAppend(
-    sessionId: number,
-    chunkView: IMemoryView,
-    isLast: boolean,
-): void {
-    const parts = blobSessions.get(sessionId);
-    if (!parts) {
-        throw new Error(`blobSessionAppend: unknown sessionId ${sessionId}`);
-    }
-    parts.push(new Blob([chunkView.slice() as Uint8Array<ArrayBuffer>]));
-    void isLast; // reserved for future flow-control / observability
-}
-
-/** Idempotent drop. Safe to call from a finally-block. */
-export function blobSessionDiscard(sessionId: number): void {
-    blobSessions.delete(sessionId);
-}
-
-/**
- * Internal helper for same-module consumer bridges (encrypted-disk import,
- * plain DB import). Returns the live part list — caller must NOT mutate it.
- * Building `new Blob(parts)` is O(parts.length) and creates a virtual view
- * the consumer can `.stream()` (multiple times if needed for two-pass
- * preflight+commit flows).
- */
-export function blobSessionParts(sessionId: number): BlobPart[] {
-    const parts = blobSessions.get(sessionId);
-    if (!parts) {
-        throw new Error(`blobSessionParts: unknown sessionId ${sessionId}`);
-    }
-    return parts;
-}
-
 // Called from C# to send binary data to worker (import operations)
 // Optional header: small binary (nonce+key) sent alongside large payload without copying payload.
 export function sendBinaryToWorker(memoryView: IMemoryView, metadataJson: string, headerView?: IMemoryView): void {
@@ -227,9 +152,6 @@ export { downloadStagedExport };
     initializeBridge,
     sendToWorker,
     sendBinaryToWorker,
-    blobSessionOpen,
-    blobSessionAppend,
-    blobSessionDiscard,
     downloadStagedExport
 };
 

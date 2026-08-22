@@ -947,45 +947,6 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         string metadataJson,
         [JSMarshalAs<JSType.MemoryView>] Span<byte> header);
 
-    // ----- BlobSession: chunked C# → JS Blob construction -----
-    // Lets the C# side stream a large body (a picked encrypted .eds, a
-    // delta payload, anything) into the JS layer one chunk at a time
-    // without ever materialising the whole body in WASM linear memory.
-    // The JS bridge holds each chunk as a Blob part keyed by the
-    // C#-issued <paramref name="sessionId"/>; consumer bridges (added
-    // in the chunked-import phases) compose <c>new Blob(parts)</c> to
-    // feed <c>blob.stream()</c> to the worker. C# owns the lifetime —
-    // every Open must be balanced by a Discard.
-
-    /// <summary>
-    /// Allocate a fresh JS-side part list keyed by <paramref name="sessionId"/>.
-    /// Caller must use a unique id (the bridge's existing
-    /// <see cref="_nextRequestId"/> counter is the canonical source).
-    /// Throws on duplicate id.
-    /// </summary>
-    [JSImport("blobSessionOpen", "sqliteWasmWorker")]
-    internal static partial void BlobSessionOpen(int sessionId);
-
-    /// <summary>
-    /// Append <paramref name="chunk"/> as a Blob part to the open session.
-    /// The bridge `.slice()`s the MemoryView into a fresh Uint8Array and
-    /// wraps it as a `Blob`; Safari disk-backs large part lists out of JS
-    /// heap. <paramref name="isLast"/> is informational — consumer bridges
-    /// know their own end-of-stream condition.
-    /// </summary>
-    [JSImport("blobSessionAppend", "sqliteWasmWorker")]
-    internal static partial void BlobSessionAppend(
-        int sessionId,
-        [JSMarshalAs<JSType.MemoryView>] Span<byte> chunk,
-        bool isLast);
-
-    /// <summary>
-    /// Drop the JS-side part list. Idempotent; safe to call from a
-    /// finally-block whether the import completed, failed, or was
-    /// cancelled before the consumer call ever ran.
-    /// </summary>
-    [JSImport("blobSessionDiscard", "sqliteWasmWorker")]
-    internal static partial void BlobSessionDiscard(int sessionId);
 
     /// <summary>
     /// Streaming whole-disk envelope export: drives a worker-side rekey
@@ -1049,11 +1010,11 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     internal static partial void DiscardExportBytes(int sessionId);
 
     /// <summary>
-    /// Streaming disk-import — preflight. Builds a Blob from the parts
-    /// previously appended to <paramref name="sessionId"/> and posts it to
-    /// the worker, which AEAD-verifies slot 0 of each file under
-    /// <paramref name="kWrap"/>. Returns <c>PoolImportResult</c> (0=OK,
-    /// 1=WRONG_KEY). No pool mutation either way.
+    /// Streaming disk-import — preflight. Points the worker at the envelope
+    /// staged under <paramref name="sessionId"/>; it AEAD-verifies slot 0 of
+    /// each file under <paramref name="kWrap"/>. Returns
+    /// <c>PoolImportResult</c> (0=OK, 1=WRONG_KEY). No pool mutation either
+    /// way.
     /// </summary>
     [JSImport("importPoolStreamPreflightFromSession", "sqliteWasmWorker")]
     internal static partial Task<int> ImportPoolStreamPreflightFromSessionAsync(
@@ -1061,30 +1022,17 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
     /// <summary>
-    /// Streaming disk-import — commit. Worker re-streams the same parts
-    /// list (Blob.stream() is one-shot per Blob, so a fresh Blob is built
-    /// from the still-live parts), decrypts each slot under
-    /// <paramref name="kWrap"/>, re-encrypts under the worker's currently-
-    /// registered globalKey, and writes via writeFileSlice + atomicReplaceFile.
-    /// Caller MUST have run <c>WipePoolAsync</c> + <c>EnterEncryptedAsync</c>
-    /// between preflight and commit.
+    /// Streaming disk-import — commit. Worker re-streams the same staged
+    /// envelope, decrypts each slot under <paramref name="kWrap"/>,
+    /// re-encrypts under the worker's currently-registered globalKey, and
+    /// writes via writeFileSlice + atomicReplaceFile. Caller MUST have run
+    /// <c>WipePoolAsync</c> + <c>EnterEncryptedAsync</c> between preflight
+    /// and commit.
     /// </summary>
     [JSImport("importPoolStreamCommitFromSession", "sqliteWasmWorker")]
     internal static partial Task<int> ImportPoolStreamCommitFromSessionAsync(
         int sessionId,
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
-
-    /// <summary>
-    /// Stream a single plain .db file from the BlobSession into the SAH
-    /// pool. Worker dispatches by <c>hasGlobalKey()</c>: Encrypted+Unlocked
-    /// rekeys on write under the registered globalKey; Plain disk writes
-    /// the source bytes verbatim. Caller must refuse Encrypted+Locked
-    /// before opening the BlobSession (the C# service does this).
-    /// </summary>
-    [JSImport("importDatabaseFromSession", "sqliteWasmWorker")]
-    internal static partial Task<int> ImportDatabaseFromSessionAsync(
-        int sessionId,
-        string databaseName);
 
     /// <summary>
     /// Streaming single-DB export. Worker reads the SAH file in slot-batches,
@@ -1127,14 +1075,13 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         string dbNamesJson);
 
     /// <summary>
-    /// Streaming multi-DB plain import — consumes a <c>.dbs</c> envelope
-    /// that the C# side already streamed into the BlobSession via
-    /// <see cref="BlobSessionAppend"/>. Worker parses the MessagePack array
-    /// and writes each entry through the chunked SAH path (Plain: verbatim;
-    /// Encrypted+Unlocked: rekey-on-write under globalKey). Caller refuses
-    /// Encrypted+Locked.
+    /// Streaming multi-DB plain import — consumes the <c>.dbs</c> envelope
+    /// the C# side already pushed into the worker's import session. Worker
+    /// parses the MessagePack array and writes each entry through the
+    /// chunked SAH path (Plain: verbatim; Encrypted+Unlocked: rekey-on-write
+    /// under globalKey). Caller refuses Encrypted+Locked.
     /// </summary>
-    /// <param name="sessionId">BlobSession holding the envelope's parts.</param>
+    /// <param name="sessionId">Import session holding the staged envelope.</param>
     /// <param name="keepExisting">
     /// <c>false</c> wipes the pool before writing — the replace-the-pool
     /// contract. <c>true</c> leaves it alone because the caller has parked

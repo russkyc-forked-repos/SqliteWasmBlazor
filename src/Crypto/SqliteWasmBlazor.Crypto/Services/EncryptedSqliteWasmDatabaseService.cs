@@ -737,15 +737,15 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
-    /// Monotonic JS-side BlobSession id allocator. Independent of the
-    /// worker bridge's request-id counter; only needs to be unique within
-    /// the JS-side <c>blobSessions</c> Map for the duration of one
-    /// streaming import.
+    /// Monotonic import-session id allocator. Independent of the
+    /// worker bridge's request-id counter; only needs to be unique among
+    /// the worker's open import sessions for the duration of one streaming
+    /// import.
     /// </summary>
     private int _nextSessionId;
 
     /// <summary>
-    /// Allocate the next BlobSession id. Same overflow contract as the
+    /// Allocate the next import-session id. Same overflow contract as the
     /// bridge's request ids: session ids must stay positive (the JS side
     /// uses negative ids for streams), so wraparound fails loudly.
     /// </summary>
@@ -755,7 +755,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         if (id < 0)
         {
             throw new InvalidOperationException(
-                "Blob session id space exhausted (int overflow) — reload the application.");
+                "Import session id space exhausted (int overflow) — reload the application.");
         }
 
         return id;
@@ -764,7 +764,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// <summary>
     /// Streaming guided-import variant: the envelope arrives as a Stream
     /// (typically <c>IBrowserFile.OpenReadStream</c>) and is shipped to
-    /// the JS-side BlobSession one ArrayPool chunk at a time. C# managed
+    /// the worker's import session one ArrayPool chunk at a time. C# managed
     /// heap peak is one chunk (~1 MB); the JS Blob parts list is the
     /// browser's responsibility (Safari disk-backs above ~50 MB).
     ///
@@ -812,16 +812,16 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
 
         var sessionId = NextSessionId();
-        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+        await _encryptedBridge.ImportSessionOpenAsync(
+            sessionId, "staging", null, envelopeSize, cancellationToken);
 
         byte[]? wrapKey = null;
         try
         {
-            // Stream the picked file into the JS-side BlobSession one
-            // 1 MB chunk at a time. While the first chunk(s) arrive,
-            // keep a local copy of the first 4 KB — that's the envelope
-            // header that PeekEnvelopeHeader parses for the credential-id
-            // check and the ECIES wrap fields.
+            // Push the picked file into the worker one 1 MB chunk at a time.
+            // While the first chunk(s) go past, keep a local copy of the
+            // first 4 KB — that's the envelope header PeekEnvelopeHeader
+            // parses for the credential-id check and the ECIES wrap fields.
             const int chunkSize = 1 << 20;
             using var headerCopy = new MemoryStream(4096);
             var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
@@ -846,15 +846,16 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     }
 
                     totalRead += read;
-                    bool isLast = totalRead == envelopeSize;
-                    SqliteWasmWorkerBridge.BlobSessionAppend(
-                        sessionId, new Span<byte>(buf, 0, read), isLast);
+                    await _encryptedBridge.ImportSessionAppendAsync(
+                        sessionId, buf.AsMemory(0, read), cancellationToken);
                 }
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(buf, clearArray: true);
             }
+
+            await _encryptedBridge.ImportSessionCloseAsync(sessionId, cancellationToken);
 
             // Peek the envelope header from the local 4 KB copy — small
             // enough that one MessagePackReader pass on a managed array
@@ -939,9 +940,10 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             }
 
             // Idempotent on every exit — success, AEAD failure, exception.
-            // The JS-side parts list is dropped so the browser can GC the
-            // underlying Blob storage.
-            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+            // Drops the worker's staged envelope; nothing about it survives
+            // the call that needed it.
+            await _encryptedBridge.ImportSessionDiscardAsync(
+                sessionId, CancellationToken.None);
         }
     }
 
@@ -1060,7 +1062,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     ///
     /// <para>
     /// C# managed-heap peak: one ArrayPool chunk (~1 MB). The whole
-    /// envelope is streamed into a JS-side BlobSession chunk by chunk;
+    /// envelope is pushed into the worker's import session chunk by chunk;
     /// the worker reads via <c>blob.stream()</c> + the
     /// <c>BufferedStreamReader</c> MessagePack decoder.
     /// </para>
@@ -1174,35 +1176,14 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken)
     {
         var sessionId = NextSessionId();
-        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+        await _encryptedBridge.ImportSessionOpenAsync(
+            sessionId, "staging", null, envelopeSize, cancellationToken);
         try
         {
-            const int chunkSize = 1 << 20;
-            var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
-            try
-            {
-                long totalRead = 0;
-                while (totalRead < envelopeSize)
-                {
-                    var read = await envelopeStream.ReadAsync(
-                        buf.AsMemory(0, chunkSize), cancellationToken);
-                    if (read <= 0)
-                    {
-                        throw new InvalidOperationException(
-                            $"ImportDatabasesFromStreamAsync: stream ended at {totalRead} " +
-                            $"of {envelopeSize} bytes; envelope is truncated.");
-                    }
-
-                    totalRead += read;
-                    bool isLast = totalRead == envelopeSize;
-                    SqliteWasmWorkerBridge.BlobSessionAppend(
-                        sessionId, new Span<byte>(buf, 0, read), isLast);
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buf, clearArray: true);
-            }
+            await PumpIntoImportSessionAsync(
+                sessionId, envelopeStream, envelopeSize,
+                nameof(ImportDatabasesFromStreamAsync), cancellationToken);
+            await _encryptedBridge.ImportSessionCloseAsync(sessionId, cancellationToken);
 
             var result = await SqliteWasmWorkerBridge.ImportDatabasesFromSessionAsync(
                 sessionId, keepExisting);
@@ -1214,7 +1195,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
         finally
         {
-            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+            await _encryptedBridge.ImportSessionDiscardAsync(sessionId, CancellationToken.None);
         }
     }
 
@@ -1351,10 +1332,10 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     /// Unlock first; the .eds guided import is the rebind-to-new-credential
     /// path).
     ///
-    /// C# managed-heap peak: one ArrayPool chunk (~1 MB) regardless of file
-    /// size. The picked file's bytes are streamed into the JS-side
-    /// BlobSession; the worker reads them via <c>blob.stream()</c> and
-    /// writes a temp SAH slot via writeFileSlice + atomicReplaceFile.
+    /// Managed-heap peak is one ArrayPool chunk (~1 MB) whatever the file's
+    /// size, and so is every other heap on the way: the chunks are pushed
+    /// into the worker one at a time and written into a temp SAH slot that
+    /// atomicReplaceFile promotes at the end. Nothing assembles the file.
     ///
     /// <paramref name="validateImported"/> turns this into a validated
     /// import: the previous content is parked under
@@ -1444,9 +1425,9 @@ internal sealed class EncryptedSqliteWasmDatabaseService
 
     /// <summary>
     /// Ship <paramref name="stream"/> into <paramref name="targetName"/> one
-    /// ArrayPool chunk at a time via a JS-side BlobSession. The worker writes
-    /// a temp SAH slot and promotes it, so a mid-stream failure leaves
-    /// <paramref name="targetName"/> untouched.
+    /// ArrayPool chunk at a time through a worker import session. The worker
+    /// writes a temp SAH slot and promotes it on close, so a mid-stream
+    /// failure leaves <paramref name="targetName"/> untouched.
     /// </summary>
     private async Task StreamIntoDatabaseAsync(
         string targetName,
@@ -1455,48 +1436,62 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         CancellationToken cancellationToken)
     {
         var sessionId = NextSessionId();
-        SqliteWasmWorkerBridge.BlobSessionOpen(sessionId);
+        await _encryptedBridge.ImportSessionOpenAsync(
+            sessionId, "database", targetName, size, cancellationToken);
         try
         {
-            const int chunkSize = 1 << 20;
-            var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
-            try
+            await PumpIntoImportSessionAsync(
+                sessionId, stream, size, nameof(ImportDatabaseFromStreamAsync),
+                cancellationToken);
+            // Commits the temp slot over targetName. Everything the worker
+            // could refuse — short source, wrong page shape, not a SQLite
+            // file — it refused while the chunks were arriving.
+            await _encryptedBridge.ImportSessionCloseAsync(sessionId, cancellationToken);
+        }
+        finally
+        {
+            await _encryptedBridge.ImportSessionDiscardAsync(sessionId, CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// Feed <paramref name="stream"/> into an open worker import session,
+    /// one ArrayPool chunk at a time. Each append is awaited, so exactly one
+    /// chunk is in flight and neither heap holds more than that — the whole
+    /// reason the import goes through the worker rather than a main-thread
+    /// Blob.
+    /// </summary>
+    private async Task PumpIntoImportSessionAsync(
+        int sessionId,
+        Stream stream,
+        long size,
+        string what,
+        CancellationToken cancellationToken)
+    {
+        const int chunkSize = 1 << 20;
+        var buf = ArrayPool<byte>.Shared.Rent(chunkSize);
+        try
+        {
+            long totalRead = 0;
+            while (totalRead < size)
             {
-                long totalRead = 0;
-                while (totalRead < size)
+                var read = await stream.ReadAsync(
+                    buf.AsMemory(0, chunkSize), cancellationToken);
+                if (read <= 0)
                 {
-                    var read = await stream.ReadAsync(
-                        buf.AsMemory(0, chunkSize), cancellationToken);
-                    if (read <= 0)
-                    {
-                        throw new InvalidOperationException(
-                            $"ImportDatabaseFromStreamAsync: stream ended at {totalRead} " +
-                            $"of {size} bytes; source is truncated.");
-                    }
-
-                    totalRead += read;
-                    bool isLast = totalRead == size;
-                    SqliteWasmWorkerBridge.BlobSessionAppend(
-                        sessionId, new Span<byte>(buf, 0, read), isLast);
+                    throw new InvalidOperationException(
+                        $"{what}: stream ended at {totalRead} of {size} bytes; " +
+                        $"source is truncated.");
                 }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buf, clearArray: true);
-            }
 
-            var result = await SqliteWasmWorkerBridge.ImportDatabaseFromSessionAsync(
-                sessionId, targetName);
-            if (result != (int)PoolImportResult.OK)
-            {
-                throw new InvalidOperationException(
-                    $"ImportDatabaseFromStreamAsync: worker returned result={result} " +
-                    $"for '{targetName}'.");
+                totalRead += read;
+                await _encryptedBridge.ImportSessionAppendAsync(
+                    sessionId, buf.AsMemory(0, read), cancellationToken);
             }
         }
         finally
         {
-            SqliteWasmWorkerBridge.BlobSessionDiscard(sessionId);
+            ArrayPool<byte>.Shared.Return(buf, clearArray: true);
         }
     }
 
