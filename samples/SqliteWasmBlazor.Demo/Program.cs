@@ -90,11 +90,13 @@ SqliteWasmBlazor.Demo.ObservableModels.Initialize(builder.Services);
 // makes navigator.language drive panel text at boot.
 builder.Services.AddLocalization();
 
-// Demo-side recovery callback for <DatabaseErrorAlert/>: the panel hides
-// the reset button when IsAvailable=false (NullHostDatabaseService); the
-// real impl below deletes both Demo DBs and reports DbInitState.READY so
-// the alert auto-clears once the boot status is healthy again.
-builder.Services.AddScoped<IHostDatabaseService, DemoHostDatabaseService>();
+// The host seam, bound to both interfaces it satisfies: the panels resolve
+// IHostRecoveryService for the reset affordance (hidden when
+// IsAvailable=false, as NullHostRecoveryService reports), the base plane's
+// import paths resolve IHostDatabaseService for owned-database names and
+// the schema gate. The impl below deletes both Demo DBs and reports
+// DbInitState.READY so the alert auto-clears once boot is healthy again.
+builder.Services.AddHostRecoveryService<DemoHostDatabaseService>();
 
 // Required by SessionExpiredPopoverModel (registered Scoped by AddCryptoUI
 // regardless of whether the popover is mounted in MainLayout) — without

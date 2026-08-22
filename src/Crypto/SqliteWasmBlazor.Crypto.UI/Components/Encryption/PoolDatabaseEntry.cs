@@ -3,7 +3,7 @@ namespace SqliteWasmBlazor.Crypto.UI.Components.Encryption;
 /// <summary>
 /// One row of the encryption panel's database list. The list is the union
 /// of what the SAH pool currently holds and what the host declares it owns
-/// (<see cref="Services.IHostDatabaseService.OwnedDatabases"/>), so both
+/// (<see cref="IHostDatabaseService.OwnedDatabases"/>), so both
 /// kinds of surprise are visible: a database the app expects but the pool
 /// has lost, and a database sitting in the pool that nothing opens.
 /// </summary>

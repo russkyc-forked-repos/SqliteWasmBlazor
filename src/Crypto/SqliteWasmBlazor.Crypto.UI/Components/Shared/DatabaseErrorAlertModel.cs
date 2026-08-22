@@ -2,7 +2,7 @@ using Microsoft.Extensions.Localization;
 using RxBlazorV2.Interface;
 using RxBlazorV2.Model;
 using RxBlazorV2.MudBlazor.Components;
-using SqliteWasmBlazor.Crypto.UI.Services;
+using SqliteWasmBlazor.Crypto.UI.Abstractions;
 
 namespace SqliteWasmBlazor.Crypto.UI.Components.Shared;
 
@@ -20,15 +20,15 @@ public partial class DatabaseErrorAlertModel : ObservableModel
 {
     public partial DatabaseErrorAlertModel(
         DbStateModel dbState,
-        IHostDatabaseService service,
+        IHostRecoveryService service,
         StatusModel statusModel,
         IStringLocalizer<DatabaseErrorAlertModel> localizer);
 
     public partial IDbInitFailure? Failure { get; set; }
 
     /// <summary>
-    /// True when the host registered a real <see cref="IHostDatabaseService"/>
-    /// (not <see cref="NullHostDatabaseService"/>). The component hides
+    /// True when the host registered a real <see cref="IHostRecoveryService"/>
+    /// (not <see cref="NullHostRecoveryService"/>). The component hides
     /// the reset button when this is false.
     /// </summary>
     public bool CanReset => Service.IsAvailable;

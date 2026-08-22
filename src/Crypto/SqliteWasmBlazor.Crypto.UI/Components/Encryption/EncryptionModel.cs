@@ -8,6 +8,7 @@ using RxBlazorV2.MudBlazor.Components;
 using SqliteWasmBlazor.Crypto.Abstractions.Formatting;
 using SqliteWasmBlazor.Crypto.Services;
 using SqliteWasmBlazor.Crypto.UI.Components.Authentication;
+using SqliteWasmBlazor.Crypto.UI.Abstractions;
 using SqliteWasmBlazor.Crypto.UI.Services;
 
 namespace SqliteWasmBlazor.Crypto.UI.Components.Encryption;
@@ -25,7 +26,7 @@ public partial class EncryptionModel : ObservableModel
         DbStateModel dbState,
         IPrfService prfService,
         ISecureKeyCache keyCache,
-        IHostDatabaseService hostDatabaseService,
+        IHostRecoveryService hostDatabaseService,
         StatusModel statusModel,
         IStringLocalizer<EncryptionModel> localizer);
 
@@ -268,7 +269,7 @@ public partial class EncryptionModel : ObservableModel
 
     // Single host-side seam owns the full reset sequence (disk wipe + PRF
     // clear + sign-out + per-context re-migrate + boot status → READY).
-    // Hosts without recovery register NullHostDatabaseService; the call
+    // Hosts without recovery register NullHostRecoveryService; the call
     // no-ops there.
     private async Task ResetCmdAsync(CancellationToken cancellationToken)
     {

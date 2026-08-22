@@ -38,10 +38,11 @@ namespace SqliteWasmBlazor.Crypto.UI;
 ///         <see cref="Components.Authentication.AuthenticationPanel"/>.
 ///         Production impl arrives via
 ///         <see cref="AddCryptoUIPrfAuthenticator"/>.</item>
-///   <item><see cref="IHostDatabaseService"/> — boot-status
-///         recovery callback; register
-///         <see cref="NullHostDatabaseService.Instance"/> for
-///         hosts that don't ship a reset path.</item>
+///   <item><see cref="IHostRecoveryService"/> — which databases the app
+///         owns, how to migrate them, and how to recover from a broken
+///         boot. Register with <see cref="AddHostRecoveryService{THost}"/>;
+///         hosts that ship no reset path register
+///         <see cref="NullHostRecoveryService.Instance"/>.</item>
 ///   <item><see cref="Services.ISessionAuthenticator"/> — backs the
 ///         re-authenticate / dismiss flow on
 ///         <see cref="Components.Shared.SessionExpiredPopover"/>.</item>
@@ -152,6 +153,27 @@ public static class CryptoUiServiceCollectionExtensions
     public static IServiceCollection AddCryptoUIPrfAuthenticator(this IServiceCollection services)
     {
         services.AddSingleton<IPrfAuthenticator, PrfAuthenticator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <typeparamref name="THost"/> as the host seam, bound to
+    /// both interfaces it satisfies: <see cref="IHostRecoveryService"/>,
+    /// which these panels resolve for the reset affordance, and
+    /// <see cref="IHostDatabaseService"/>, which the base plane's import
+    /// paths consult for owned-database names and the schema gate. One
+    /// class, one call, one scoped instance behind both.
+    /// </summary>
+    /// <typeparam name="THost">The host's implementation.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddHostRecoveryService<THost>(
+        this IServiceCollection services)
+        where THost : class, IHostRecoveryService
+    {
+        services.AddScoped<THost>();
+        services.AddScoped<IHostRecoveryService>(sp => sp.GetRequiredService<THost>());
+        services.AddScoped<IHostDatabaseService>(sp => sp.GetRequiredService<THost>());
         return services;
     }
 }

@@ -52,6 +52,29 @@ public static class SqliteWasmServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers <typeparamref name="THost"/> as the host seam the import
+    /// paths consult — which databases this app owns, and whether what an
+    /// import brought is a valid one of them.
+    ///
+    /// <para>
+    /// One class, one call. Consumers of <c>SqliteWasmBlazor.Crypto.UI</c>
+    /// use its <c>AddHostRecoveryService</c> instead, which binds the same
+    /// instance to the recovery interface those panels resolve as well.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="THost">The host's implementation.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddHostDatabaseService<THost>(
+        this IServiceCollection services)
+        where THost : class, IHostDatabaseService
+    {
+        services.AddScoped<THost>();
+        services.AddScoped<IHostDatabaseService>(sp => sp.GetRequiredService<THost>());
+        return services;
+    }
+
+    /// <summary>
     /// Initializes the SqliteWasm worker bridge using the options configured via
     /// <see cref="AddSqliteWasm"/>. Use this method when consuming the ADO.NET provider
     /// directly without EF Core.

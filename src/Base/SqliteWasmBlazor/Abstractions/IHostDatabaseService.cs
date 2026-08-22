@@ -1,53 +1,40 @@
-namespace SqliteWasmBlazor.Crypto.UI.Services;
+// SqliteWasmBlazor - Minimal EF Core compatible provider
+// MIT License
+
+namespace SqliteWasmBlazor;
 
 /// <summary>
 /// Host-supplied seam for the two things the library cannot know: which
-/// databases the app actually owns, and how to bring their schema up to
-/// date. Invoked by <see cref="Components.Shared.DatabaseErrorAlert"/> on a
-/// recoverable boot failure (<see cref="SchemaIncompatibleFailure"/>,
-/// <see cref="GenericInitFailure"/>, or any unmapped
-/// <see cref="IDbInitFailure"/>), and by the encryption panel after every
-/// operation that replaces pool content.
+/// databases the app actually owns, and what their schema is supposed to
+/// look like. Only the host can answer either — it owns the
+/// <see cref="Microsoft.EntityFrameworkCore.DbContext"/> types whose models
+/// define both.
 ///
 /// <para>
-/// The library intentionally does not own the recovery path because the
-/// CryptoSync.UI panels are reusable across consumer apps with different
-/// <c>DbContext</c> types and database names. Hosts that ship without
-/// recovery (read-only deployments, etc.) register
-/// <see cref="NullHostDatabaseService.Instance"/> — the panel will hide
-/// the reset button and only offer the reload path.
+/// Consumed by the import paths on <see cref="ISqliteWasmDatabaseService"/>:
+/// a validated import calls <see cref="ValidateSchemaAsync"/> while the
+/// content it would replace is parked, and re-runs
+/// <see cref="MigrateAsync"/> once it commits. Hosts that declare nothing
+/// register <see cref="NullHostDatabaseService.Instance"/>, or simply do not
+/// register the seam at all.
 /// </para>
 /// </summary>
 public interface IHostDatabaseService
 {
     /// <summary>
-    /// True when the implementation can actually perform a reset. The
-    /// <see cref="NullHostDatabaseService"/> default returns <c>false</c>,
-    /// which the alert panel uses to hide the reset button.
-    /// </summary>
-    bool IsAvailable { get; }
-
-    /// <summary>
     /// Names of the databases this app opens by connection string, e.g.
     /// <c>["TodoDb.db", "NotesDb.db"]</c>. The pool can hold more entries
-    /// than this — imports and retired features leave rows behind — so the
-    /// encryption panel uses the list to tell "this app reads this one"
+    /// than this — imports and retired features leave rows behind — so a UI
+    /// listing pool content uses the list to tell "this app reads this one"
     /// apart from "this is just stored here", and to keep an import from
     /// landing on a name nothing will ever open.
     ///
     /// <para>
-    /// Empty when the host doesn't declare its databases; the panel then
-    /// treats every pool entry as unowned.
+    /// Empty when the host doesn't declare its databases; every pool entry
+    /// is then treated as unowned.
     /// </para>
     /// </summary>
     IReadOnlyList<string> OwnedDatabases { get; }
-
-    /// <summary>
-    /// Perform the host-defined recovery: wipe the pool, re-migrate every
-    /// owned database, then promote the boot status back to
-    /// <see cref="DbInitState.READY"/>.
-    /// </summary>
-    ValueTask ResetAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Re-run migrations for every owned database and promote the boot
@@ -67,12 +54,10 @@ public interface IHostDatabaseService
     /// import survives only if this returns.
     ///
     /// <para>
-    /// The host is the only layer that can answer this: it owns the
-    /// <c>DbContext</c> whose model says which tables the database must
-    /// have. <c>DbContext.ValidateImportedSchemaAsync</c> implements the
-    /// check; open a context bound to <paramref name="probeDatabaseName"/>
-    /// and call it. Names outside <see cref="OwnedDatabases"/> have no
-    /// model to check against — return without throwing.
+    /// <c>DbContext.ValidateImportedSchemaAsync</c> implements the check;
+    /// open a context bound to <paramref name="probeDatabaseName"/> and call
+    /// it. Names outside <see cref="OwnedDatabases"/> have no model to check
+    /// against — return without throwing.
     /// </para>
     /// </summary>
     /// <param name="ownedDatabaseName">The database the import is destined for.</param>
@@ -89,8 +74,9 @@ public interface IHostDatabaseService
 }
 
 /// <summary>
-/// No-op <see cref="IHostDatabaseService"/> for hosts that don't ship
-/// recovery. Use <see cref="Instance"/> to avoid allocations.
+/// No-op <see cref="IHostDatabaseService"/> for hosts that declare no
+/// databases and want no schema gate. Use <see cref="Instance"/> to avoid
+/// allocations.
 /// </summary>
 public sealed class NullHostDatabaseService : IHostDatabaseService
 {
@@ -98,14 +84,7 @@ public sealed class NullHostDatabaseService : IHostDatabaseService
     public static NullHostDatabaseService Instance { get; } = new();
 
     /// <inheritdoc />
-    public bool IsAvailable => false;
-
-    /// <inheritdoc />
     public IReadOnlyList<string> OwnedDatabases => [];
-
-    /// <inheritdoc />
-    public ValueTask ResetAsync(CancellationToken cancellationToken = default)
-        => ValueTask.CompletedTask;
 
     /// <inheritdoc />
     public ValueTask MigrateAsync(CancellationToken cancellationToken = default)

@@ -318,6 +318,23 @@ convenience, not the mechanism.
 Also fix the folder/namespace mismatch: the file sits in `Abstractions/` and
 declares `namespace SqliteWasmBlazor.Crypto.UI.Services`.
 
+**DONE.** `IHostDatabaseService` (+ `NullHostDatabaseService`) is on base with
+the three database members; `IHostRecoveryService : IHostDatabaseService`
+(+ `NullHostRecoveryService`) is in `Crypto.UI` with `IsAvailable` + `ResetAsync`.
+`EncryptionModel` and `DatabaseErrorAlertModel` resolve the derived interface;
+the namespace now matches the folder. Solution builds clean, 98/98 Playwright.
+
+**"One class and one registration" needed a helper to stay true.** A host that
+registers only `IHostRecoveryService` leaves base's import paths — Goal 6's
+consumers — unable to find the seam, and registering both by hand is two lines
+plus a lifetime trap (two `AddScoped<TInterface, THost>()` calls give the same
+scope *two* instances). So the registration is a method:
+`AddHostRecoveryService<THost>()` in `Crypto.UI` binds one scoped instance to
+both interfaces, and base offers `AddHostDatabaseService<THost>()` for the
+plain-plane consumer who has no UI. The demo is one line either way.
+
+Everything else went as sketched.
+
 ### Goal 6 — Pull migrate-after-import into the import path
 
 The release notes state an invariant: every successful import re-runs the host's

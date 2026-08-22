@@ -1,11 +1,11 @@
 using Microsoft.EntityFrameworkCore;
-using SqliteWasmBlazor.Crypto.UI.Services;
+using SqliteWasmBlazor.Crypto.UI.Abstractions;
 using SqliteWasmBlazor.Models;
 
 namespace SqliteWasmBlazor.Demo.Services;
 
 /// <summary>
-/// Demo-side <see cref="IHostDatabaseService"/> — the single place that
+/// Demo-side <see cref="IHostRecoveryService"/> — the single place that
 /// knows which databases the Demo owns and how to bring their schema up
 /// to date. Two entry points:
 /// <list type="bullet">
@@ -47,7 +47,7 @@ namespace SqliteWasmBlazor.Demo.Services;
 /// it up automatically — no per-callsite enumeration.
 /// </para>
 /// </summary>
-public sealed class DemoHostDatabaseService : IHostDatabaseService
+public sealed class DemoHostDatabaseService : IHostRecoveryService
 {
     private readonly IEncryptedSqliteWasmDatabaseService _session;
     private readonly IDbContextFactory<TodoDbContext> _todoFactory;
