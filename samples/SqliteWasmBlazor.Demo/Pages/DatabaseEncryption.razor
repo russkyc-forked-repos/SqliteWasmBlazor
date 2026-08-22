@@ -204,6 +204,7 @@
                             <MudIconButtonAsyncRxOf T="string"
                                                     Command="@Model.ExportDatabase"
                                                     Parameter="@row.Name"
+                                                    ConfirmExecutionAsync="@(() => ConfirmPlainExportAsync(row.Name))"
                                                     Icon="@Icons.Material.Filled.SaveAlt"
                                                     Color="Color.Default"
                                                     Disabled="@(!row.Present)"
@@ -277,6 +278,7 @@
             @if (Model.SelectedDatabases.Count >= 2)
             {
                 <MudButtonAsyncRx Command="@Model.ExportDatabases"
+                                  ConfirmExecutionAsync="ConfirmPlainBundleExportAsync"
                                   Variant="Variant.Outlined"
                                   Color="Color.Default"
                                   StartIcon="@Icons.Material.Filled.Inventory2"

@@ -42,6 +42,33 @@ public partial class DatabaseEncryption
             title, message, destructiveLabel, Model.Localizer["Btn_Cancel"]);
 
     /// <summary>
+    /// Gate on saving one database as a plain <c>.db</c>. On an unlocked pool
+    /// the worker decrypts slot-by-slot on the way out, so what lands in the
+    /// downloads folder is readable by anyone who opens it — the one moment
+    /// where content leaves the protection the passkey gave it. A plain pool
+    /// has nothing to disclose, so no dialog is raised there.
+    /// </summary>
+    private Task<bool> ConfirmPlainExportAsync(string dbName)
+        => Model.IsUnlocked
+            ? ConfirmDestructiveAsync(
+                title: Model.Localizer["Btn_ExportDatabase", dbName],
+                message: Model.Localizer["Confirm_ExportPlainSingle", dbName],
+                destructiveLabel: Model.Localizer["Btn_SaveUnencrypted"])
+            : Task.FromResult(true);
+
+    /// <summary>
+    /// Same gate for the <c>.dbs</c> bundle — every ticked database, decrypted
+    /// into one file.
+    /// </summary>
+    private Task<bool> ConfirmPlainBundleExportAsync()
+        => Model.IsUnlocked
+            ? ConfirmDestructiveAsync(
+                title: Model.Localizer["Btn_ExportBundle", Model.SelectedDatabases.Count],
+                message: Model.Localizer["Confirm_ExportPlainBundle", Model.SelectedDatabases.Count],
+                destructiveLabel: Model.Localizer["Btn_SaveUnencrypted"])
+            : Task.FromResult(true);
+
+    /// <summary>
     /// A <c>.db</c> file picked on one database's row. The row decides the
     /// target, so the only question left is whether the user means to
     /// overwrite what that database currently holds.

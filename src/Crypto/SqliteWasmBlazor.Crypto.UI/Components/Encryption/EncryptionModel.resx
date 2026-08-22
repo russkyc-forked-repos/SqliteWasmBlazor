@@ -98,4 +98,7 @@
   <data name="Btn_ExportBundle" xml:space="preserve"><value>Export {0} databases as one file (.dbs)</value></data>
   <data name="Btn_ExportDatabase" xml:space="preserve"><value>Save {0} as a .db file</value></data>
   <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} does not fit {1}. Missing tables: {2}. Nothing was changed.</value></data>
+  <data name="Confirm_ExportPlainSingle" xml:space="preserve"><value>{0} is encrypted in this browser, but the file you are about to save is not — anyone who opens it can read everything in it. Save it somewhere you trust, or use the encrypted backup instead. Continue?</value></data>
+  <data name="Confirm_ExportPlainBundle" xml:space="preserve"><value>Your databases are encrypted in this browser, but the file you are about to save is not — anyone who opens it can read all {0} of them. Save it somewhere you trust, or use the encrypted backup instead. Continue?</value></data>
+  <data name="Btn_SaveUnencrypted" xml:space="preserve"><value>Save unencrypted</value></data>
 </root>

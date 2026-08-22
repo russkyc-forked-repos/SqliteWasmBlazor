@@ -98,4 +98,7 @@
   <data name="Btn_ExportBundle" xml:space="preserve"><value>{0} Datenbanken als eine Datei exportieren (.dbs)</value></data>
   <data name="Btn_ExportDatabase" xml:space="preserve"><value>{0} als .db-Datei speichern</value></data>
   <data name="Error_SchemaMismatch" xml:space="preserve"><value>{0} passt nicht zu {1}. Fehlende Tabellen: {2}. Es wurde nichts geändert.</value></data>
+  <data name="Confirm_ExportPlainSingle" xml:space="preserve"><value>{0} ist in diesem Browser verschlüsselt, die Datei, die du gleich speicherst, jedoch nicht — wer sie öffnet, kann alles darin lesen. Speichere sie an einem Ort, dem du vertraust, oder nutze stattdessen die verschlüsselte Sicherung. Fortfahren?</value></data>
+  <data name="Confirm_ExportPlainBundle" xml:space="preserve"><value>Deine Datenbanken sind in diesem Browser verschlüsselt, die Datei, die du gleich speicherst, jedoch nicht — wer sie öffnet, kann alle {0} lesen. Speichere sie an einem Ort, dem du vertraust, oder nutze stattdessen die verschlüsselte Sicherung. Fortfahren?</value></data>
+  <data name="Btn_SaveUnencrypted" xml:space="preserve"><value>Unverschlüsselt speichern</value></data>
 </root>
