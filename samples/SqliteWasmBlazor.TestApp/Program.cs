@@ -6,6 +6,7 @@ using MudBlazor.Services;
 using SqliteWasmBlazor;
 using SqliteWasmBlazor.Models;
 using SqliteWasmBlazor.Crypto.Extensions;
+using SqliteWasmBlazor.TestApp.TestInfrastructure;
 using SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
@@ -79,6 +80,16 @@ builder.Services.AddSqliteWasm(o => o.BaseHref = baseHref);
 
 // Register SqliteWasmBlazor.Crypto services (SubtleCrypto + @awasm/noble)
 builder.Services.AddSqliteWasmBlazorCrypto(configure: o => o.BaseHref = baseHref);
+
+// Counting host seam — ImportReconcilesHostSchemaTest asserts that the
+// import paths reconcile the host's schema themselves. Declares no owned
+// databases, so nothing else in the harness is affected. Registered as a
+// singleton rather than through AddHostDatabaseService so the instance the
+// bridge resolves and the one the test reads its counter from are the same
+// one; a real host has no reason to care.
+builder.Services.AddSingleton<TestHostDatabaseService>();
+builder.Services.AddSingleton<IHostDatabaseService>(
+    sp => sp.GetRequiredService<TestHostDatabaseService>());
 
 // Short TTL keeps the PRF session-expiry E2E test fast. Post-auth ops in
 // the other Facts complete inside 1-2s, so 5s leaves comfortable margin.

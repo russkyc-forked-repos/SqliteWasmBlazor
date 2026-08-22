@@ -92,6 +92,8 @@ public static class SqliteWasmServiceCollectionExtensions
 
         SqliteWasmWorkerBridge.Instance.AttachBootStatus(
             reporter, services.GetRequiredService<IDbInitializationStatus>());
+        SqliteWasmWorkerBridge.Instance.AttachHostDatabaseService(
+            services.GetService<IHostDatabaseService>);
         reporter.Report(DbInitState.INITIALIZING);
 
         try
@@ -133,6 +135,12 @@ Please close any other tabs running this application and refresh the page.
         // <AuthorizeView> bound to the state re-evaluates; the bridge is a
         // singleton outside the container and cannot resolve it itself.
         SqliteWasmWorkerBridge.Instance.AttachBootStatus(reporter, status);
+
+        // Every import reconciles the host's schema with what it landed, so
+        // the invariant holds for a headless consumer too. Resolved per call
+        // rather than captured — the seam is Scoped, the bridge is not.
+        SqliteWasmWorkerBridge.Instance.AttachHostDatabaseService(
+            services.GetService<IHostDatabaseService>);
 
         // Skip if a previous boot stage already failed — don't overwrite that diagnosis.
         if (status.State is DbInitState.TAB_LOCKED

@@ -28,6 +28,7 @@ internal sealed partial class SqliteWasmWorkerBridge
 
     private IDbInitializationReporter? _bootReporter;
     private IDbInitializationStatus? _bootStatus;
+    private Func<IHostDatabaseService?>? _resolveHost;
 
     /// <summary>
     /// Attach the boot-status surface a whole-pool import reports through.
@@ -40,6 +41,44 @@ internal sealed partial class SqliteWasmWorkerBridge
     {
         _bootReporter = reporter;
         _bootStatus = status;
+    }
+
+    /// <summary>
+    /// Attach the host seam the import paths reconcile against. A
+    /// <em>resolver</em> rather than an instance: the seam is registered
+    /// Scoped and this bridge is a singleton, so holding one would pin the
+    /// first scope's instance forever. Absent — no registration, or a host
+    /// that never called an init helper — imports simply skip the step.
+    /// </summary>
+    internal void AttachHostDatabaseService(Func<IHostDatabaseService?> resolve)
+    {
+        _resolveHost = resolve;
+    }
+
+    /// <summary>
+    /// The host seam, or <c>null</c> when none is registered. Internal so
+    /// the Crypto plane's guided <c>.eds</c> import reconciles through the
+    /// same attach point rather than resolving its own.
+    /// </summary>
+    internal IHostDatabaseService? HostDatabaseService => _resolveHost?.Invoke();
+
+    /// <summary>
+    /// Reconcile the host's schema with what an import just landed. Every
+    /// import ends here, which is what makes the invariant hold for a
+    /// headless consumer and not only for the drop-in UI: the bytes may
+    /// carry an older schema than the app's model, and an owned database
+    /// the source omitted has to be re-created before the next query hits
+    /// it.
+    /// </summary>
+    private async Task MigrateAfterImportAsync(CancellationToken cancellationToken)
+    {
+        var host = HostDatabaseService;
+        if (host is null)
+        {
+            return;
+        }
+
+        await host.MigrateAsync(cancellationToken);
     }
 
     /// <summary>
@@ -288,6 +327,7 @@ internal sealed partial class SqliteWasmWorkerBridge
         if (validateImported is null)
         {
             await StreamIntoDatabaseAsync(databaseName, stream, size, cancellationToken);
+            await MigrateAfterImportAsync(cancellationToken);
             return;
         }
 
@@ -327,6 +367,8 @@ internal sealed partial class SqliteWasmWorkerBridge
         {
             await DeleteDatabaseAsync(parked, cancellationToken);
         }
+
+        await MigrateAfterImportAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -359,6 +401,7 @@ internal sealed partial class SqliteWasmWorkerBridge
         {
             await StreamIntoPoolAsync(
                 envelopeStream, envelopeSize, keepExisting: false, cancellationToken);
+            await MigrateAfterImportAsync(cancellationToken);
             ReportDbState(DbInitState.READY);
             return;
         }
@@ -413,6 +456,7 @@ internal sealed partial class SqliteWasmWorkerBridge
                 PoolNaming.ImportParkFor(name), cancellationToken);
         }
 
+        await MigrateAfterImportAsync(cancellationToken);
         ReportDbState(DbInitState.READY);
     }
 

@@ -346,10 +346,28 @@ schema and no re-created owned databases, silently.
 Move it into the base import methods, after the validated import commits, and
 delete the duplicated calls from `EncryptionModel`.
 
-**Open decision.** How the import path reaches the host: resolve
-`IHostDatabaseService` from DI inside the service (absent -> skip, documented), or
-take it as an optional parameter. DI-resolved is the smaller call site and keeps
-the invariant automatic — recommend that.
+**Open decision — settled: DI-resolved, but as a resolver, not an instance.**
+The seam is registered Scoped and the bridge is a singleton, so holding an
+instance would pin the first scope's forever. The init helpers hand the bridge
+`services.GetService<IHostDatabaseService>` — the same `Attach*` shape Goal 3
+used for the boot reporter — and each import asks fresh. Absent seam, or a host
+that never called an init helper: the step is skipped, documented.
+
+**DONE.** All four import paths reconcile: both exits of
+`ImportDatabaseFromStreamAsync`, both of `ImportDatabasesFromStreamAsync`, and
+the guided `.eds` import. `EncryptionModel` keeps one `MigrateAsync` call — the
+one after clearing an owned database, which is not an import. 99/99 Playwright.
+
+- **The `.eds` import was not in the sketch and belongs.** The plan said "the
+  base import methods", written before Goal 5 put `IHostDatabaseService` on
+  base. A headless consumer of the guided import gets a wiped-and-rewritten
+  pool — the case that needs re-migration most. It reads the seam through
+  `SqliteWasmWorkerBridge.HostDatabaseService`, so there is one attach point,
+  not two.
+- **The invariant now has a test.** `ImportRawDatabase_ReconcilesHostSchema`
+  registers a counting host seam in the TestApp and asserts the count rises
+  across both single-database exits — no UI in sight, which is the whole point.
+  The multi-database paths call the same helper.
 
 ### Goal A — Disclose that a plain export leaves an encrypted pool unencrypted
 

@@ -482,10 +482,6 @@ public partial class EncryptionModel : ObservableModel
         // been rewritten to match this credential.
         Auth.ApplyImportedSession(hint, importedPublicKey);
 
-        // The envelope decides what the pool holds; the app's schema is
-        // whatever its model says today. Reconcile before anything queries.
-        await HostDatabaseService.MigrateAsync(cancellationToken);
-
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(Localizer["Status_PoolImported"], nameof(ImportPool));
     }
@@ -543,10 +539,6 @@ public partial class EncryptionModel : ObservableModel
             file.Size,
             (imported, ct) => ValidateImportedAsync(imported, file.Name, ct),
             cancellationToken);
-        // The file may carry an older schema than the app's model, and the
-        // worker closed the database to swap its slot in — re-migrate before
-        // the next query reopens it.
-        await HostDatabaseService.MigrateAsync(cancellationToken);
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_SingleDbImported", target],
@@ -607,10 +599,6 @@ public partial class EncryptionModel : ObservableModel
             file.Size,
             (imported, ct) => ValidateImportedAsync(imported, file.Name, ct),
             cancellationToken);
-        // The bundle decides what the pool holds — including whether an
-        // owned database is in it at all. Re-migrate so a database the
-        // bundle omitted is back before the next query hits it.
-        await HostDatabaseService.MigrateAsync(cancellationToken);
         await RefreshAsync(cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_DbsImported", file.Name],

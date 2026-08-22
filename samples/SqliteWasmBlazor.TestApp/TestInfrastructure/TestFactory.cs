@@ -42,6 +42,12 @@ internal class TestFactory
             as IEncryptedSqliteWasmDatabaseService;
 
         PopulateTests(todoFactory, databaseService);
+        if (services?.GetService(typeof(TestHostDatabaseService)) is TestHostDatabaseService host)
+        {
+            var reconcile = new ImportReconcilesHostSchemaTest(todoFactory, databaseService, host);
+            _entries.Add(new TestEntry(
+                "Import/Export", reconcile.Name, () => reconcile.RunTestWithFreshDatabaseAsync()));
+        }
         if (services is not null)
         {
             PopulateMigrationRecoveryTests(services);

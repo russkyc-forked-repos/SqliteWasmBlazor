@@ -88,6 +88,7 @@ public static class TestRegistry
         "ImportRawDatabase_SequentialImports",
         "ImportExportRawDatabase_ImportThenExport",
         "ImportRawDatabase_SchemaValidationExtension",
+        "ImportRawDatabase_ReconcilesHostSchema",
 
         // Checkpoints
         "RestoreToCheckpoint_Basic",

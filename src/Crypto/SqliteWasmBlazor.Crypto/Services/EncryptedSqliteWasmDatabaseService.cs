@@ -904,6 +904,16 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 return (PoolImportResult)commitResult;
             }
 
+            // The envelope decides what the pool holds; the app's schema is
+            // whatever its model says today. Reconcile through the same host
+            // seam the plane-1 imports use, so a headless consumer of the
+            // guided import gets it as well.
+            var host = _bridge.HostDatabaseService;
+            if (host is not null)
+            {
+                await host.MigrateAsync(cancellationToken);
+            }
+
             ReportDbState(DbInitState.READY);
             return PoolImportResult.OK;
         }
