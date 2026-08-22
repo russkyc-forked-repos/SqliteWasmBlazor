@@ -6,12 +6,14 @@
 @using SqliteWasmBlazor.Models.Extensions
 @using SqliteWasmBlazor.Models.DTOs
 @using SqliteWasmBlazor.Components.Interop
+@using SqliteWasmBlazor.Demo.Models
 @using MessagePack
 @inject IDbContextFactory<TodoDbContext> DbContextFactory
 @inject IDbContextFactory<NoteDbContext> NoteDbContextFactory
 @inject ISnackbar Snackbar
 @inject ISqliteWasmDatabaseService DatabaseService
 @inject IDialogService DialogService
+@inject Fts5AdminModel Fts5
 @inherits EncryptionModelComponent
 
 <PageTitle>Administration</PageTitle>
@@ -106,36 +108,36 @@
                     </MudButton>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Info"
-                               OnClick="OptimizeFTS5IndexAsync"
-                               StartIcon="@Icons.Material.Filled.Tune"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
+                    <MudButtonAsyncRx Command="@Fts5.Optimize"
+                                      Variant="Variant.Outlined"
+                                      Color="Color.Info"
+                                      StartIcon="@Icons.Material.Filled.Tune"
+                                      FullWidth="true"
+                                      Disabled="_isGenerating">
                         Optimize FTS5
-                    </MudButton>
+                    </MudButtonAsyncRx>
                 </MudItem>
             </MudGrid>
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Secondary"
-                               OnClick="RebuildFTS5IndexAsync"
-                               StartIcon="@Icons.Material.Filled.Build"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
+                    <MudButtonAsyncRx Command="@Fts5.Rebuild"
+                                      Variant="Variant.Outlined"
+                                      Color="Color.Secondary"
+                                      StartIcon="@Icons.Material.Filled.Build"
+                                      FullWidth="true"
+                                      Disabled="_isGenerating">
                         Rebuild FTS5 Index
-                    </MudButton>
+                    </MudButtonAsyncRx>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Primary"
-                               OnClick="CheckFTS5IntegrityAsync"
-                               StartIcon="@Icons.Material.Filled.VerifiedUser"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
+                    <MudButtonAsyncRx Command="@Fts5.CheckIntegrity"
+                                      Variant="Variant.Outlined"
+                                      Color="Color.Primary"
+                                      StartIcon="@Icons.Material.Filled.VerifiedUser"
+                                      FullWidth="true"
+                                      Disabled="_isGenerating">
                         Check FTS5 Integrity
-                    </MudButton>
+                    </MudButtonAsyncRx>
                 </MudItem>
             </MudGrid>
 
@@ -331,70 +333,4 @@
             destructiveLabel: Model.ResetLabel,
             cancelLabel: Model.Localizer["Btn_Cancel"]);
 
-    private async Task OptimizeFTS5IndexAsync()
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            await using var context = await DbContextFactory.CreateDbContextAsync();
-
-            // Optimize FTS5 index (reduces size and improves performance)
-            await context.OptimizeTodoItemFts5IndexAsync();
-
-            stopwatch.Stop();
-
-            _performanceInfo = $"FTS5 index optimized in {stopwatch.ElapsedMilliseconds}ms - Index size reduced, query performance improved";
-            Snackbar.Add($"FTS5 index optimized in {stopwatch.ElapsedMilliseconds}ms", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"FTS5 optimization failed: {ex.Message}", Severity.Error);
-            _performanceInfo = $"Optimization error: {ex.Message}";
-        }
-    }
-
-    private async Task RebuildFTS5IndexAsync()
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            await using var context = await DbContextFactory.CreateDbContextAsync();
-            await context.RebuildTodoItemFts5IndexAsync();
-
-            stopwatch.Stop();
-
-            _performanceInfo = $"FTS5 index rebuilt in {stopwatch.ElapsedMilliseconds}ms - Full index reconstruction completed";
-            Snackbar.Add($"FTS5 index rebuilt in {stopwatch.ElapsedMilliseconds}ms", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"FTS5 rebuild failed: {ex.Message}", Severity.Error);
-            _performanceInfo = $"Rebuild error: {ex.Message}";
-        }
-    }
-
-    private async Task CheckFTS5IntegrityAsync()
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            await using var context = await DbContextFactory.CreateDbContextAsync();
-
-            // Check FTS5 index integrity
-            await context.CheckTodoItemFts5IntegrityAsync();
-
-            stopwatch.Stop();
-
-            _performanceInfo = $"FTS5 integrity check passed in {stopwatch.ElapsedMilliseconds}ms - No corruption detected";
-            Snackbar.Add($"FTS5 integrity check passed in {stopwatch.ElapsedMilliseconds}ms", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"FTS5 integrity check failed: {ex.Message}", Severity.Error);
-            _performanceInfo = $"FTS5 integrity check FAILED: {ex.Message}";
-        }
-    }
 }

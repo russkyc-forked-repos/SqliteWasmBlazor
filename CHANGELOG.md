@@ -136,6 +136,11 @@ With that in place the demo's export buttons show their own progress, and the im
 
 **Consumers of `SqliteWasmBlazor.Crypto.UI` should move to `RxBlazorV2.MudBlazor` 1.2.6 or newer** — below that, the panels' async buttons give no feedback.
 
+The same treatment reaches the demo's two remaining silent operations:
+
+- **FTS5 index maintenance shows that it is working.** Optimize, rebuild and integrity-check were click handlers on plain buttons, and a rebuild walks every row — long enough on a populated database for a still screen to read as a dead one. They are now commands on `Fts5AdminModel`, so the buttons spin, disable themselves and offer cancellation, and their results land in the app-bar status rather than a snackbar.
+- **Search-as-you-type waits for the typing to stop.** Every keystroke used to reach SQLite. `SearchString` now triggers a cancelable command that waits 300 ms before signalling a reload; because the command's method takes a `CancellationToken`, RxBlazorV2 gives it Switch semantics — the next keystroke cancels the previous execution mid-wait, and a query already running is cancelled with it. Mode toggles still refetch immediately; there is no burst to settle.
+
 ### Other Fixes
 
 - **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.

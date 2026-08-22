@@ -52,13 +52,17 @@ public enum SearchDisplayMode
 /// </para>
 ///
 /// <para>
-/// <b>Search debounce.</b> Each keystroke fires the reload signal so an
-/// in-flight FTS5 query is cancelled (<see cref="MudTable{T}"/> passes the
-/// caller's <see cref="CancellationToken"/> through). The cancel-on-
-/// retrigger comes for free from the table's debouncer + SQLite query
-/// cancellation; we don't add an explicit timer here. If load latency
-/// becomes a problem on huge DBs, swap to an R3 <c>Throttle</c> on the
-/// SearchString observable inside <c>OnContextReadyAsync</c>.
+/// <b>Search debounce.</b> Typing does not reach the database directly.
+/// <see cref="SearchString"/> triggers <see cref="SearchSettled"/>, whose
+/// method takes a <see cref="CancellationToken"/> and therefore runs under
+/// RxBlazorV2's Switch semantics: each keystroke cancels the previous
+/// execution, so the <see cref="SearchSettleDelay"/> wait only elapses once
+/// typing stops, and only that last execution bumps the reload signal. A
+/// query already running when the next keystroke lands is cancelled with
+/// it — <see cref="MudTable{T}"/> passes its token into
+/// <see cref="LoadServerDataAsync"/>, which hands it to SQLite. Mode
+/// toggles keep the immediate <see cref="ObservableTriggerAttribute"/>:
+/// there is no burst to settle.
 /// </para>
 /// </summary>
 [ObservableModelScope(ModelScope.Scoped)]
@@ -76,8 +80,27 @@ public partial class TodoListModel : ObservableModel
     public partial string NewTitle { get; set; } = string.Empty;
     public partial string NewDescription { get; set; } = string.Empty;
 
-    [ObservableTrigger(nameof(BumpReloadSignal))]
     public partial string SearchString { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Settle window before a typed search reaches the database. A command
+    /// method that takes a <see cref="CancellationToken"/> gets Switch
+    /// semantics from RxBlazorV2 — the next keystroke cancels this one mid
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/>, so only the
+    /// last one in a burst ever reaches <see cref="BumpReloadSignal"/>, and
+    /// a query already in flight is cancelled rather than raced.
+    /// </summary>
+    private static readonly TimeSpan SearchSettleDelay = TimeSpan.FromMilliseconds(300);
+
+    [ObservableCommand(nameof(SearchSettledAsync))]
+    [ObservableCommandTrigger(nameof(SearchString))]
+    public partial IObservableCommandAsync SearchSettled { get; }
+
+    private async Task SearchSettledAsync(CancellationToken cancellationToken)
+    {
+        await Task.Delay(SearchSettleDelay, cancellationToken);
+        BumpReloadSignal();
+    }
 
     [ObservableTrigger(nameof(BumpReloadSignal))]
     public partial SearchDisplayMode SearchMode { get; set; } = SearchDisplayMode.NORMAL;
@@ -213,6 +236,7 @@ public partial class TodoListModel : ObservableModel
         {
             _highlightCache[r.Id] = (r.DisplayTitle, r.DisplayDescription);
         }
+
         return new TableData<TodoItem>
         {
             Items = rows.Cast<TodoItem>().ToList(),
@@ -235,6 +259,7 @@ public partial class TodoListModel : ObservableModel
         {
             _highlightCache[r.Id] = (r.DisplayTitleSnippet, r.DisplayDescriptionSnippet);
         }
+
         return new TableData<TodoItem>
         {
             Items = rows.Cast<TodoItem>().ToList(),
@@ -266,6 +291,7 @@ public partial class TodoListModel : ObservableModel
         {
             return isTitle ? cached.Title : cached.Description;
         }
+
         return null;
     }
 
@@ -285,6 +311,7 @@ public partial class TodoListModel : ObservableModel
             context.TodoItems.Add(todo);
             await context.SaveChangesAsync(cancellationToken);
         }
+
         stopwatch.Stop();
 
         NewTitle = string.Empty;
@@ -306,6 +333,7 @@ public partial class TodoListModel : ObservableModel
             context.TodoItems.Update(todo);
             await context.SaveChangesAsync(cancellationToken);
         }
+
         stopwatch.Stop();
 
         BumpReloadSignal();
@@ -324,8 +352,8 @@ public partial class TodoListModel : ObservableModel
             // Id isn't in the form the provider binds. Reporting success here
             // would leave the row on screen with a "deleted" notice next to it.
             var tracked = await context.TodoItems.FindAsync([todo.Id], cancellationToken)
-                ?? throw new InvalidOperationException(
-                    $"No TodoItem with Id {todo.Id} — the row is not addressable by its key.");
+                          ?? throw new InvalidOperationException(
+                              $"No TodoItem with Id {todo.Id} — the row is not addressable by its key.");
 
             tracked.IsDeleted = true;
             tracked.DeletedAt = DateTime.UtcNow;
@@ -343,6 +371,7 @@ public partial class TodoListModel : ObservableModel
                 return;
             }
         }
+
         stopwatch.Stop();
 
         BumpReloadSignal();
@@ -385,11 +414,12 @@ public partial class TodoListModel : ObservableModel
             DatabaseFileSize = 0;
             return;
         }
+
         try
         {
             await using var context = await ContextFactory.CreateDbContextAsync(cancellationToken);
             var fileSize = await context.Database.SqlQueryRaw<long>(
-                "SELECT (SELECT page_count FROM pragma_page_count()) * (SELECT page_size FROM pragma_page_size()) AS Value")
+                    "SELECT (SELECT page_count FROM pragma_page_count()) * (SELECT page_size FROM pragma_page_size()) AS Value")
                 .SingleOrDefaultAsync(cancellationToken);
             DatabaseFileSize = fileSize;
         }
@@ -440,15 +470,18 @@ public partial class TodoListModel : ObservableModel
         {
             return fullErrorMessage;
         }
+
         var errorPart = fullErrorMessage[(fts5Index + 5)..].Trim();
         if (!errorPart.Contains("syntax error near"))
         {
             return errorPart;
         }
+
         if (fullErrorMessage.Contains("NEAR"))
         {
             return $"{errorPart}. NEAR uses 'NEAR(term1 term2, distance)'.";
         }
+
         return $"{errorPart}. Column filters use 'title:term'.";
     }
 }
