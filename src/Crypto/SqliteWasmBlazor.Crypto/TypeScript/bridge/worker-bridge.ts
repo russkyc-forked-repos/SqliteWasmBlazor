@@ -16,7 +16,7 @@ import {
     packBinHeader,
     packStr,
     packUint,
-} from './msgpack-stream';
+} from '@sqlitewasmblazor/worker-common';
 
 /**
  * IMemoryView interface from dotnet runtime — view over managed Span/ArraySegment.

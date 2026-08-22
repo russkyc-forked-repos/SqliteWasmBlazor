@@ -16,14 +16,13 @@ import {
     packBinHeader,
     packStr,
     packUint,
-} from '../../../bridge/msgpack-stream.js';
+} from '@sqlitewasmblazor/worker-common';
 import { buildPageAad } from '../aad.js';
 import {
     importPoolStreamPreflight,
     importPoolStreamCommit,
-    PoolImportResult,
-    MAX_IMPORT_FILES,
 } from '../import-streamed.js';
+import {PoolImportResult, MAX_IMPORT_FILES} from '@sqlitewasmblazor/worker-common';
 
 const SECTOR_SIZE = 4096;
 const PAGE_NONCE_LEN = 12;

@@ -21,12 +21,6 @@ import {
     clearGlobalKey,
 } from './vfs-prf/key-registry';
 import {rekeySlots} from './vfs-prf/rekey';
-import {
-    DECRYPT_TMP_SUFFIX,
-    ENCRYPT_TMP_SUFFIX,
-    MULTI_IMPORT_TMP_SUFFIX,
-    planPoolSweep,
-} from './vfs-prf/pool-naming';
 import {clearBytes} from '@sqlitewasmblazor/crypto-core';
 import {
     readPoolManifestOp,
@@ -36,16 +30,22 @@ import {
 import {
     importPoolStreamPreflight,
     importPoolStreamCommit,
-    createDatabaseImportSink,
-    assertImportFileCount,
-    type DatabaseImportSink,
 } from './vfs-prf/import-streamed';
 import {
     openExportStaging,
-    openImportStaging,
     readStagingFile,
     sweepExportStaging,
     type ExportStagingFile,
+    DECRYPT_TMP_SUFFIX,
+    ENCRYPT_TMP_SUFFIX,
+    MULTI_IMPORT_TMP_SUFFIX,
+    planPoolSweep,
+    createDatabaseImportSink,
+    assertImportFileCount,
+    createImportSessionHost,
+    importDatabasesFromEnvelope,
+    exportDatabasesToStaging,
+    withHandleRecovery,
 } from '@sqlitewasmblazor/worker-common';
 import {
     BufferedStreamReader,
@@ -55,7 +55,7 @@ import {
     packArrayHeader,
     packBinHeader,
     packStr,
-} from '../bridge/msgpack-stream';
+} from '@sqlitewasmblazor/worker-common';
 
 // Re-export mutable state references for local use
 let sqlite3: any;
@@ -370,7 +370,7 @@ async function handleStreamingRequest(
                 }
                 await importPoolStreamPreflightHandler(
                     streamId,
-                    await stagedSessionFile(
+                    await importSessionHost.stagedFile(
                         requireSessionId(data), 'importPoolStreamPreflight'),
                     new Uint8Array(binaryPayload));
                 return;
@@ -380,7 +380,7 @@ async function handleStreamingRequest(
                 }
                 await importPoolStreamCommitHandler(
                     streamId,
-                    await stagedSessionFile(
+                    await importSessionHost.stagedFile(
                         requireSessionId(data), 'importPoolStreamCommit'),
                     new Uint8Array(binaryPayload));
                 return;
@@ -401,7 +401,7 @@ async function handleStreamingRequest(
             case 'importDatabasesFromSession':
                 await importDatabasesFromSessionHandler(
                     streamId,
-                    await stagedSessionFile(
+                    await importSessionHost.stagedFile(
                         requireSessionId(data), 'importDatabasesFromSession'),
                     (data as any).keepExisting === true);
                 return;
@@ -598,88 +598,20 @@ async function exportDatabasesToStagingHandler(
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
-    if (dbNames.length === 0) {
-        throw new Error('exportDatabasesToStaging: dbNames must be non-empty');
-    }
 
-    const encrypted = hasGlobalKey();
-    const sourceSlotSize = encrypted ? ENCRYPTED_SLOT_SIZE : PLAIN_SLOT_SIZE;
-    const fileNames = poolUtil.getFileNames();
-    for (const dbName of dbNames) {
-        const dbPath = `/databases/${dbName}`;
-        if (!fileNames.includes(dbPath)) {
-            throw new Error(`exportDatabasesToStaging: no existing DB at ${dbPath}`);
-        }
-    }
-
-    // Close every DB up front so the SAH snapshot is consistent across the
-    // envelope (no slot reads racing with SQLite writes from an open ctx).
-    for (const dbName of dbNames) {
-        await closeDatabase(dbName);
-    }
-
-    const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
-    const staging = await openExportStaging();
-    try {
-        // Outer array header. Per file: array(2) + str(name) + bin(plainSize).
-        staging.write(packArrayHeader(dbNames.length));
-
-        for (const dbName of dbNames) {
-            const dbPath = `/databases/${dbName}`;
-            const fileSize = poolUtil.getFileSize(dbPath);
-            if (fileSize === 0 || fileSize % sourceSlotSize !== 0) {
-                throw new Error(
-                    `exportDatabasesToStaging: ${dbName} length ${fileSize} ` +
-                    `is not a non-zero multiple of slot size ${sourceSlotSize} ` +
-                    `(disk state=${encrypted ? 'encrypted' : 'plain'}).`);
+    const staging = await exportDatabasesToStaging(dbNames, {
+        poolUtil,
+        closeDatabase,
+        crypto: hasGlobalKey()
+            ? {
+                snapshotKey: () => snapshotGlobalKey()!,
+                toPlain: (chunk, dbPath, slotIndexBase, key) =>
+                    rekeySlots(chunk, dbPath, key, undefined, slotIndexBase),
             }
-            const totalSlots = fileSize / sourceSlotSize;
-            const plainSize = totalSlots * PLAIN_SLOT_SIZE;
+            : undefined,
+    });
 
-            staging.write(packArrayHeader(2));
-            for (const part of packStr(dbName)) {
-                staging.write(part);
-            }
-            staging.write(packBinHeader(plainSize));
-
-            for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
-                const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
-                const sourceOffset = slotBase * sourceSlotSize;
-                const sourceBytes = slotCount * sourceSlotSize;
-
-                let sourceChunk: Uint8Array | null = null;
-                let plainChunk: Uint8Array | null = null;
-                try {
-                    sourceChunk = poolUtil.exportFileSlice(dbPath, sourceOffset, sourceBytes);
-                    if (encrypted) {
-                        plainChunk = rekeySlots(
-                            sourceChunk!, dbPath, globalKey, undefined, slotBase);
-                    } else {
-                        plainChunk = sourceChunk;
-                        sourceChunk = null;
-                    }
-                    staging.write(plainChunk!);
-                } finally {
-                    if (sourceChunk !== null) {
-                        clearBytes(sourceChunk);
-                    }
-                    if (plainChunk !== null) {
-                        clearBytes(plainChunk);
-                    }
-                }
-            }
-        }
-
-        staging.finish();
-        self.postMessage({streamId, streamDone: true, stagingFile: staging.name});
-    } catch (err) {
-        await staging.abort();
-        throw err;
-    } finally {
-        if (globalKey !== undefined) {
-            clearBytes(globalKey);
-        }
-    }
+    self.postMessage({streamId, streamDone: true, stagingFile: staging.name});
 }
 
 /**
@@ -714,140 +646,23 @@ async function importDatabasesFromSessionHandler(
         throw new Error('SQLite not initialized');
     }
 
-    const encrypted = hasGlobalKey();
-
-    // Pass 1 — validate the entire envelope before touching the pool.
-    {
-        const probe = new BufferedStreamReader(blob.stream().getReader());
-        try {
-            const fileCount = await readArrayHeader(probe);
-            assertImportFileCount(fileCount, 'importDatabasesFromSession');
-            for (let i = 0; i < fileCount; i++) {
-                const tupleLen = await readArrayHeader(probe);
-                if (tupleLen !== 2) {
-                    throw new Error(
-                        `importDatabasesFromSession: file ${i} must be array(2), got array(${tupleLen})`);
-                }
-                const name = await readStr(probe);
-                const plainSize = await readBinHeader(probe);
-                if (plainSize === 0 || plainSize % PLAIN_SLOT_SIZE !== 0) {
-                    throw new Error(
-                        `importDatabasesFromSession: file '${name}' plain length ${plainSize} ` +
-                        `is not a non-zero multiple of ${PLAIN_SLOT_SIZE}.`);
-                }
-                const head = await probe.read(SQLITE_MAGIC_HEADER.length);
-                if (!hasSqliteMagicHeader(head)) {
-                    throw new Error(
-                        `importDatabasesFromSession: file '${name}' does not start with the ` +
-                        `SQLite magic header — refusing to import a non-plain source.`);
-                }
-                // skip() throws on premature EOF, so a truncated envelope
-                // is also caught here, pre-wipe.
-                await probe.skip(plainSize - SQLITE_MAGIC_HEADER.length);
+    await importDatabasesFromEnvelope(blob, keepExisting, {
+        poolUtil,
+        closeAllDatabases: async () => {
+            for (const dbName of [...openDatabases.keys()]) {
+                await closeDatabase(dbName);
             }
-        } finally {
-            probe.releaseLock();
-        }
-    }
-
-    // Pass 2 — commit. Only reached once the whole envelope has validated.
-    //
-    // Close every cached DB first: an open OFile captures its SAH at xOpen
-    // time, so a handle that survives an unlink or a slot swap keeps
-    // reading and writing a slot the pool has already handed back to the
-    // free list — and the very next writeFileSlice can hand that slot to
-    // another file.
-    for (const dbName of [...openDatabases.keys()]) {
-        await closeDatabase(dbName);
-    }
-    // A validated run leaves the pool alone — C# parked the previous
-    // content and decides its fate once it has seen what arrived. An
-    // unvalidated one keeps the replace-the-pool contract, whose
-    // user-facing confirmation the caller owns.
-    if (!keepExisting) {
-        const existing = poolUtil.listDatabases();
-        for (const name of existing) {
-            try {
-                poolUtil.unlink(`/databases/${name}`);
-            } catch { /* best-effort */
+        },
+        crypto: hasGlobalKey()
+            ? {
+                snapshotKey: () => snapshotGlobalKey()!,
+                rekey: (chunk, dbPath, slotIndexBase, key) =>
+                    rekeySlots(chunk, dbPath, undefined, key, slotIndexBase),
             }
-        }
-    }
+            : undefined,
+    });
 
-    const reader = new BufferedStreamReader(blob.stream().getReader());
-    const globalKey = encrypted ? snapshotGlobalKey()! : undefined;
-    try {
-        const fileCount = await readArrayHeader(reader);
-
-        for (let i = 0; i < fileCount; i++) {
-            const tupleLen = await readArrayHeader(reader);
-            if (tupleLen !== 2) {
-                throw new Error(
-                    `importDatabasesFromSession: file ${i} must be array(2), got array(${tupleLen})`);
-            }
-            const name = await readStr(reader);
-            const plainSize = await readBinHeader(reader);
-            if (plainSize === 0 || plainSize % PLAIN_SLOT_SIZE !== 0) {
-                throw new Error(
-                    `importDatabasesFromSession: file '${name}' plain length ${plainSize} ` +
-                    `is not a non-zero multiple of ${PLAIN_SLOT_SIZE}.`);
-            }
-            const dbPath = `/databases/${name}`;
-            const tempPath = `${dbPath}${MULTI_IMPORT_TMP_SUFFIX}`;
-            if (poolUtil.getFileNames().includes(tempPath)) {
-                try {
-                    poolUtil.unlink(tempPath);
-                } catch { /* best-effort */
-                }
-            }
-            const totalSlots = plainSize / PLAIN_SLOT_SIZE;
-
-            for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
-                const slotCount = Math.min(CHUNK_SLOTS, totalSlots - slotBase);
-                const plainChunkBytes = slotCount * PLAIN_SLOT_SIZE;
-                const plainChunk = await reader.read(plainChunkBytes);
-
-                if (slotBase === 0
-                    && !hasSqliteMagicHeader(plainChunk.subarray(0, SQLITE_MAGIC_HEADER.length))) {
-                    clearBytes(plainChunk);
-                    throw new Error(
-                        `importDatabasesFromSession: file '${name}' does not start with the ` +
-                        `SQLite magic header — refusing to import a non-plain source.`);
-                }
-
-                if (encrypted) {
-                    let encryptedChunk: Uint8Array | null = null;
-                    try {
-                        encryptedChunk = rekeySlots(
-                            plainChunk, dbPath, undefined, globalKey!, slotBase);
-                        poolUtil.writeFileSlice(
-                            tempPath, slotBase * ENCRYPTED_SLOT_SIZE, encryptedChunk!);
-                    } finally {
-                        clearBytes(plainChunk);
-                        if (encryptedChunk !== null) {
-                            clearBytes(encryptedChunk);
-                        }
-                    }
-                } else {
-                    try {
-                        poolUtil.writeFileSlice(
-                            tempPath, slotBase * PLAIN_SLOT_SIZE, plainChunk);
-                    } finally {
-                        clearBytes(plainChunk);
-                    }
-                }
-            }
-
-            poolUtil.atomicReplaceFile(tempPath, dbPath);
-        }
-
-        self.postMessage({streamId, streamDone: true, result: 0});
-    } finally {
-        reader.releaseLock();
-        if (globalKey !== undefined) {
-            clearBytes(globalKey);
-        }
-    }
+    self.postMessage({streamId, streamDone: true, result: 0});
 }
 
 /**
@@ -871,19 +686,76 @@ async function importDatabasesFromSessionHandler(
  *              pass and committed in another. It lands in an OPFS staging
  *              file the worker re-streams per pass.
  */
-type ImportSession =
-    | {
-    kind: 'database';
-    dbName: string;
-    sink: DatabaseImportSink;
-    // Snapshot of globalKey taken at open: the session outlives the call
-    // that started it, and the registry's key can be cleared mid-import by
-    // a lock. Wiped when the session ends, whichever way it ends.
-    globalKey: Uint8Array | undefined;
-}
-    | { kind: 'staging'; staging: ExportStagingFile; finished: boolean };
+/**
+ * The chunk pump C# pushes a picked file through. The session machinery is
+ * plane-neutral and lives in worker-common; what plane 2 supplies is the
+ * opener below — the snapshot of the global key and the rekey transform that
+ * turns each batch into encrypted slots.
+ *
+ * The key is snapshotted at open because the session outlives the call that
+ * started it and a lock can clear the registry underneath it; the snapshot is
+ * wiped when the session ends, whichever way it ends.
+ */
+const importSessionHost = createImportSessionHost({
+    async openDatabaseSink(dbName, plainSize) {
+        if (!sqlite3 || !poolUtil) {
+            throw new Error('SQLite not initialized');
+        }
+        await closeDatabase(dbName);
+        let globalKey = hasGlobalKey() ? snapshotGlobalKey()! : undefined;
+        try {
+            return {
+                sink: createDatabaseImportSink(
+                    dbName, plainSize, poolUtil, globalKey,
+                    globalKey === undefined
+                        ? undefined
+                        : (chunk, dbPath, slotIndexBase, key) =>
+                            rekeySlots(chunk, dbPath, undefined, key, slotIndexBase)),
+                dispose() {
+                    if (globalKey !== undefined) {
+                        clearBytes(globalKey);
+                        globalKey = undefined;
+                    }
+                },
+            };
+        } catch (err) {
+            if (globalKey !== undefined) {
+                clearBytes(globalKey);
+            }
+            throw err;
+        }
+    },
+    onDatabaseCommitted(dbName) {
+        logger.info(MODULE_NAME, `✓ Imported ${dbName}`);
+    },
+});
 
-const importSessions = new Map<number, ImportSession>();
+// The worker protocol answers every request with a result object; the session
+// host returns nothing, so these adapt rather than reimplement.
+async function openImportSession(
+    sessionId: number,
+    sink: string,
+    dbName: string | undefined,
+    size: number | undefined,
+) {
+    await importSessionHost.open(sessionId, sink, dbName, size);
+    return {rowsAffected: 0};
+}
+
+function appendToImportSession(sessionId: number, chunk: Uint8Array) {
+    importSessionHost.append(sessionId, chunk);
+    return {rowsAffected: 0};
+}
+
+function closeImportSession(sessionId: number) {
+    importSessionHost.close(sessionId);
+    return {rowsAffected: 0};
+}
+
+async function discardImportSession(sessionId: number) {
+    await importSessionHost.discard(sessionId);
+    return {rowsAffected: 0};
+}
 
 /** The session id a streaming import request must carry. */
 function requireSessionId(data: { type: string }): number {
@@ -892,157 +764,6 @@ function requireSessionId(data: { type: string }): number {
         throw new Error(`${data.type} requires data.sessionId`);
     }
     return sessionId;
-}
-
-function takeImportSession(sessionId: number, what: string): ImportSession {
-    const session = importSessions.get(sessionId);
-    if (!session) {
-        throw new Error(`${what}: no open import session ${sessionId}`);
-    }
-    return session;
-}
-
-/**
- * The staged envelope of a session, as a File the import passes can
- * stream. Each pass lifts its own File — a stream is one-shot, the OPFS
- * entry behind it is not.
- */
-async function stagedSessionFile(sessionId: number, what: string): Promise<File> {
-    const session = takeImportSession(sessionId, what);
-    if (session.kind !== 'staging') {
-        throw new Error(`${what}: session ${sessionId} is not a staging session`);
-    }
-    if (!session.finished) {
-        throw new Error(`${what}: session ${sessionId} is still open for writing`);
-    }
-    return readStagingFile(session.staging.name);
-}
-
-/**
- * Open an import session. A database session closes the target first: its
- * commit promotes a temp slot over the database via atomicReplaceFile,
- * and an OFile still holding the old SAH would keep serving stale pages —
- * and write into a slot the pool can hand to the next file. C# reopens on
- * demand.
- */
-async function importSessionOpen(
-    sessionId: number,
-    sink: string,
-    dbName: string | undefined,
-    size: number | undefined,
-) {
-    if (!sqlite3 || !poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    if (importSessions.has(sessionId)) {
-        throw new Error(`importSessionOpen: session ${sessionId} is already open`);
-    }
-
-    if (sink === 'staging') {
-        importSessions.set(sessionId, {
-            kind: 'staging',
-            staging: await openImportStaging(),
-            finished: false,
-        });
-        return {rowsAffected: 0};
-    }
-
-    if (sink !== 'database') {
-        throw new Error(`importSessionOpen: unknown sink '${sink}'`);
-    }
-    if (typeof dbName !== 'string' || dbName.length === 0) {
-        throw new Error('importSessionOpen: a database sink needs data.database');
-    }
-    if (typeof size !== 'number') {
-        throw new Error('importSessionOpen: a database sink needs data.size');
-    }
-
-    await closeDatabase(dbName);
-    const globalKey = hasGlobalKey() ? snapshotGlobalKey()! : undefined;
-    try {
-        importSessions.set(sessionId, {
-            kind: 'database',
-            dbName,
-            globalKey,
-            sink: createDatabaseImportSink(
-                dbName, size, poolUtil, globalKey,
-                globalKey === undefined
-                    ? undefined
-                    : (chunk, dbPath, slotIndexBase, key) =>
-                        rekeySlots(chunk, dbPath, undefined, key, slotIndexBase)),
-        });
-    } catch (err) {
-        if (globalKey !== undefined) {
-            clearBytes(globalKey);
-        }
-        throw err;
-    }
-    return {rowsAffected: 0};
-}
-
-/**
- * Take one chunk. The incoming buffer was transferred, so this worker owns
- * it; it is wiped once written because a plain `.db` chunk is plaintext
- * pages and a `.dbs`/`.eds` chunk can be either.
- */
-function importSessionAppend(sessionId: number, chunk: Uint8Array) {
-    const session = takeImportSession(sessionId, 'importSessionAppend');
-    try {
-        if (session.kind === 'database') {
-            session.sink.append(chunk);
-        } else {
-            session.staging.write(chunk);
-        }
-    } finally {
-        clearBytes(chunk);
-    }
-    return {rowsAffected: 0};
-}
-
-/**
- * End the source. A database session promotes its temp slot here — that
- * is the import. A staging session only closes the write handle; what
- * happens to the envelope is the pass that reads it back.
- */
-function importSessionClose(sessionId: number) {
-    const session = takeImportSession(sessionId, 'importSessionClose');
-    if (session.kind === 'staging') {
-        session.staging.finish();
-        session.finished = true;
-        return {rowsAffected: 0};
-    }
-    try {
-        session.sink.commit();
-    } finally {
-        if (session.globalKey !== undefined) {
-            clearBytes(session.globalKey);
-            session.globalKey = undefined;
-        }
-    }
-    logger.info(MODULE_NAME, `✓ Imported ${session.dbName}`);
-    return {rowsAffected: 0};
-}
-
-/**
- * Drop a session and everything it staged. Idempotent — C# calls it from
- * a finally-block whether the import committed, failed, or never started.
- */
-async function importSessionDiscard(sessionId: number) {
-    const session = importSessions.get(sessionId);
-    if (!session) {
-        return {rowsAffected: 0};
-    }
-    importSessions.delete(sessionId);
-    if (session.kind === 'database') {
-        session.sink.abort();
-        if (session.globalKey !== undefined) {
-            clearBytes(session.globalKey);
-            session.globalKey = undefined;
-        }
-    } else {
-        await session.staging.abort();
-    }
-    return {rowsAffected: 0};
 }
 
 /**
@@ -1194,7 +915,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             return await replaceDatabase(database!, (data as any).targetName);
 
         case 'importSessionOpen':
-            return await importSessionOpen(
+            return await openImportSession(
                 (data as any).sessionId,
                 (data as any).sink,
                 database,
@@ -1204,14 +925,14 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             if (!binaryPayload) {
                 throw new Error('importSessionAppend requires binaryPayload');
             }
-            return importSessionAppend(
+            return appendToImportSession(
                 (data as any).sessionId, new Uint8Array(binaryPayload));
 
         case 'importSessionClose':
-            return importSessionClose((data as any).sessionId);
+            return closeImportSession((data as any).sessionId);
 
         case 'importSessionDiscard':
-            return await importSessionDiscard((data as any).sessionId);
+            return await discardImportSession((data as any).sessionId);
 
         case 'importDb':
             if (!binaryPayload) {
@@ -1769,66 +1490,6 @@ async function closeDatabase(dbName: string) {
  * moment every pool call fails the same way — including the rename that
  * would put a parked database back.
  */
-function isClosedHandleError(error: unknown): boolean {
-    return error instanceof DOMException && error.name === 'InvalidStateError';
-}
-
-/**
- * Re-acquire the pool's access handles after the platform closed them.
- *
- * Open databases go first: a connection whose SAH is dead cannot close
- * cleanly, so each close is best-effort and the cache entry is dropped
- * either way. C# reopens on demand — its open-set mirror is an
- * optimisation, never the authority (OpenDatabaseAsync always reaches the
- * worker). The pool rebuilds its path mapping from the slot headers, so
- * what it knows afterwards is what is actually on disk.
- */
-async function recoverPoolAccessHandles(): Promise<void> {
-    if (!poolUtil) {
-        throw new Error('SQLite not initialized');
-    }
-    for (const [dbName, db] of [...openDatabases.entries()]) {
-        try {
-            db.close();
-        } catch (err) {
-            logger.warn(MODULE_NAME, `close during handle recovery failed for ${dbName}:`, err);
-        }
-        openDatabases.delete(dbName);
-        pragmasSet.delete(dbName);
-    }
-    await poolUtil.recoverAccessHandles();
-    logger.warn(
-        MODULE_NAME,
-        `Re-acquired pool access handles after the platform closed them; ` +
-        `${poolUtil.listDatabases().length} database(s) in the pool.`);
-}
-
-/**
- * Run a pool metadata operation, and if the platform has closed the access
- * handles, re-acquire them and run it once more.
- *
- * Only for operations that are a single header update — rename, unlink.
- * Those either happened or did not, so a retry is a retry and not a second
- * half-write. Chunked body writes are deliberately not wrapped: their
- * source stream is already consumed, and their temp slot is discarded by
- * the caller's own rollback.
- */
-async function withHandleRecovery<T>(what: string, op: () => T): Promise<T> {
-    try {
-        return op();
-    } catch (error) {
-        if (!isClosedHandleError(error)) {
-            throw error;
-        }
-        logger.warn(
-            MODULE_NAME,
-            `${what}: pool access handles were closed by the platform — re-acquiring`,
-            error);
-        await recoverPoolAccessHandles();
-        return op();
-    }
-}
-
 async function checkDatabaseExists(dbName: string) {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');

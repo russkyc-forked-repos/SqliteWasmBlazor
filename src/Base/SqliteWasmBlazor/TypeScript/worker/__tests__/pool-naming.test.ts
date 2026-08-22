@@ -13,7 +13,7 @@ import {
     isImportPark,
     isTempSlot,
     planPoolSweep,
-} from '../pool-naming.js';
+} from '@sqlitewasmblazor/worker-common';
 
 describe('park names', () => {
     it('round-trips a database name', () => {
