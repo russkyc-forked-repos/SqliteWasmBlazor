@@ -109,8 +109,29 @@ injected sink hook; the plane-2 worker supplies the key lookup and the
 already declares the structural pool type it needs (`atomicReplaceFile(src, dst): true`)
 — reuse it as the contract both VFS variants satisfy.
 
-- **Verify:** `vfs-prf/__tests__/import-streamed.test.ts` moves with the module
-  and must pass unchanged.
+**DONE.** Eight modules now live in `worker-common`: `msgpack-stream`,
+`pool-naming`, `import-sink`, `import-session`, `envelope-import`,
+`envelope-export`, `handle-recovery`, `memory`. Encryption enters each as an
+injected transform — the session takes an `openDatabaseSink`, the envelope
+paths take a `crypto` object with `snapshotKey` + `rekey`/`toPlain`. The crypto
+worker's `.dbs` import and export handlers, 144 and 90 lines of near-identical
+batching, are now six-line delegations.
+
+Deviations from the sketch above, both deliberate:
+
+- **`pool-naming.ts` moved whole**, encrypt/decrypt temp suffixes included.
+  Splitting it would have broken `planPoolSweep`'s decision table, which is the
+  unit-tested part; two of the suffixes being crypto-flavoured strings is not
+  worth fracturing that.
+- **`import-streamed.ts` was two modules in one file.** Only the sink half moved;
+  the `.eds` envelope passes stay in `vfs-prf`, which is where they belong. The
+  first cut put `consumeEnvelopeMetadata` on the wrong side — it parses the
+  envelope, so it went back.
+
+`withHandleRecovery` came along and finally has a test (one retry, exactly one,
+other errors untouched); its recover step is a parameter so the branch is
+reachable at all. Base TS 6 files / 38 tests, crypto 4 / 43, both typecheck and
+lint clean.
 
 ### Goal 3 — Move the C# streamed surface to base
 
@@ -144,6 +165,27 @@ existing seam: `IDatabaseLockProbe` + `ThrowIfPoolLocked`, which base's
   'InvalidStateError')` once, assert exactly one retry, and assert any other
   error propagates untouched. Its comment should describe the platform
   condition, not the import bug that first exposed it.
+**Mapped, not started.** What the survey found, so the next pass does not
+re-derive it:
+
+- **The C# JSImport declarations already exist in base.** `SqliteWasmWorkerBridge`
+  declares all 13, `exportDatabasesToDownload` and `importDatabasesFromSession`
+  among them; they resolve against whichever bundle `AssetRoot` points at. So no
+  new JSImport surface is needed — only implementations.
+- **The plane-1 JS bridge implements 3 of those 13**; the other 10 exist only in
+  the crypto bridge. Base needs `exportDatabasesToDownload` and
+  `importDatabasesFromSession` (the eight `.eds`/pool ones stay plane-2).
+- **Base's bridge has no stream protocol at all** — no `streamHandlers`, no
+  `nextStreamId`, no `streamId` branch in `onmessage`. Both functions ride it, so
+  it has to come first. Worth extracting into `worker-common` as a router both
+  bridges share rather than duplicating ~25 lines of routing.
+- **Base's worker needs six cases**: `replaceDb`, the four `importSession*`, and
+  `importDatabasesFromSession` / `exportDatabasesToStaging`. All six now have
+  their implementation in `worker-common`; the worker only wires the dispatch and
+  supplies `crypto: undefined`.
+
+Then the C# half as sketched above (bridge members, service moves, interface).
+
 - **Verify:** TestApp suite; the `.dbs` round-trip and validated-import-rejected
   tests exercise park/restore end to end.
 
