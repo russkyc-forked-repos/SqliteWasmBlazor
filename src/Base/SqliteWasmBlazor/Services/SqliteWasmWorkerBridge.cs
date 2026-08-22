@@ -1035,19 +1035,6 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
         [JSMarshalAs<JSType.MemoryView>] ArraySegment<byte> kWrap);
 
     /// <summary>
-    /// Streaming single-DB export. Worker reads the SAH file in slot-batches,
-    /// dispatches by <c>hasGlobalKey()</c> (Plain → verbatim; Encrypted+
-    /// Unlocked → decrypt to plain pages), writes into an OPFS staging file.
-    /// Bridge lifts the staging entry as a disk-backed <c>File</c> (no
-    /// envelope wrapper — raw <c>.db</c> bytes a SQLite tool can open) and
-    /// triggers anchor-click download. Caller refuses Encrypted+Locked.
-    /// </summary>
-    [JSImport("exportDatabaseToDownload", "sqliteWasmWorker")]
-    internal static partial Task<bool> ExportDatabaseToDownloadJsAsync(
-        string filename,
-        string databaseName);
-
-    /// <summary>
     /// Anchor-click download of a finished OPFS staging file produced by
     /// the worker's <c>exportDbToStaging</c> request. The staging entry
     /// backs the download as a disk-backed <c>File</c>, so the bytes never
@@ -1070,7 +1057,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// serialise to a string at the C# call site).
     /// </summary>
     [JSImport("exportDatabasesToDownload", "sqliteWasmWorker")]
-    internal static partial Task<bool> ExportDatabasesToDownloadAsync(
+    private static partial Task<bool> ExportDatabasesToDownloadJsAsync(
         string filename,
         string dbNamesJson);
 
@@ -1089,7 +1076,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
     /// import has been inspected.
     /// </param>
     [JSImport("importDatabasesFromSession", "sqliteWasmWorker")]
-    internal static partial Task<int> ImportDatabasesFromSessionAsync(
+    private static partial Task<int> ImportDatabasesFromSessionAsync(
         int sessionId,
         bool keepExisting);
 }

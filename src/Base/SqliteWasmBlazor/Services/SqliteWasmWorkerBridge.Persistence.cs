@@ -127,11 +127,11 @@ internal sealed partial class SqliteWasmWorkerBridge
         }
 
         await EnsureInitializedAsync(cancellationToken);
-        // On an Encrypted+Locked disk the worker has no globalKey and can't
-        // decrypt slots to plain pages — refuse up front with the same
-        // guard the SQL path uses instead of surfacing a worker slot-size
-        // error.
-        ThrowIfPoolLocked($"ExportDatabaseToDownload('{databaseName}')");
+        ThrowIfPoolLocked(
+            PoolOperationRejection.EXPORT_NEEDS_UNLOCK,
+            $"ExportDatabaseToDownloadAsync('{databaseName}') rejected: pool is " +
+            "Encrypted+Locked. Unlock first; without the global key the worker " +
+            "can't decrypt slots back to plain pages.");
 
         var request = new { type = "exportDbToStaging", database = databaseName };
         var result = await SendRequestAsync(request, cancellationToken);

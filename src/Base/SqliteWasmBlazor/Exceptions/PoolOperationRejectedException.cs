@@ -4,18 +4,26 @@
 namespace SqliteWasmBlazor;
 
 /// <summary>
-/// Why an encrypted-pool operation was refused before it touched the disk.
-/// Every value names a precondition on <see cref="EncryptedPoolState"/> —
-/// the caller can either fix the state (Lock / Unlock / Reset) and retry,
-/// or render the matching explanation. Carried by
+/// Why a pool operation was refused before it touched the disk. Every value
+/// names a precondition on the pool's encryption state — the caller can
+/// either fix the state (Lock / Unlock / Reset) and retry, or render the
+/// matching explanation. Carried by
 /// <see cref="PoolOperationRejectedException"/> so UI layers can localize
 /// the refusal instead of surfacing an internal message.
+///
+/// <para>
+/// The state itself is <c>EncryptedPoolState</c> on the Crypto plane, which
+/// this plane cannot reference — hence the plain-text naming here. Three of
+/// the reasons are raised only from that plane; the two the file-movement
+/// paths raise (<see cref="EXPORT_NEEDS_UNLOCK"/>,
+/// <see cref="PLAIN_IMPORT_NEEDS_UNLOCK"/>) are raised from here.
+/// </para>
 /// </summary>
 public enum PoolOperationRejection
 {
     /// <summary>
-    /// <c>EnterEncryptedAsync</c> needs <see cref="EncryptedPoolState.Plain"/>
-    /// — the pool already carries a passkey manifest.
+    /// <c>EnterEncryptedAsync</c> needs a Plain pool — this one already
+    /// carries a passkey manifest.
     /// </summary>
     ENTER_NEEDS_PLAIN,
 
@@ -49,9 +57,9 @@ public enum PoolOperationRejection
 }
 
 /// <summary>
-/// Thrown when an encrypted-pool operation's <see cref="EncryptedPoolState"/>
-/// precondition does not hold. Nothing has been written when this surfaces —
-/// the guards run before any disk mutation.
+/// Thrown when a pool operation's encryption-state precondition does not
+/// hold. Nothing has been written when this surfaces — the guards run
+/// before any disk mutation.
 ///
 /// <para>
 /// UI layers branch on <see cref="Reason"/> to render localized copy (and,

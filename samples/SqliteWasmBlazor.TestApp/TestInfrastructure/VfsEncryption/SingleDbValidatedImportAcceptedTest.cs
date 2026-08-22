@@ -101,7 +101,7 @@ internal sealed class SingleDbValidatedImportAcceptedTest
         try
         {
             using var stream = new MemoryStream(snapshot, writable: false);
-            await _session.ImportDatabaseFromStreamAsync(
+            await _databaseService.ImportDatabaseFromStreamAsync(
                 dbName, stream, snapshot.Length, ValidateImportedAsync);
         }
         catch (Exception ex)

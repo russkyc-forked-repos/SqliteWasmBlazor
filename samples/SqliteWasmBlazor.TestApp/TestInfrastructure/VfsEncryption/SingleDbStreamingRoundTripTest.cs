@@ -13,11 +13,11 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 /// </para>
 /// <list type="number">
 ///   <item><b>Plain → Plain</b>: populate, export plain bytes, delete,
-///         re-import via <see cref="IEncryptedSqliteWasmDatabaseService.ImportDatabaseFromStreamAsync"/>,
+///         re-import via <see cref="ISqliteWasmDatabaseService.ImportDatabaseFromStreamAsync"/>,
 ///         verify rows.</item>
 ///   <item><b>Plain → Encrypted+Unlocked</b>: take the same plain bytes,
 ///         <see cref="IEncryptedSqliteWasmDatabaseService.EnterEncryptedAsync"/>
-///         on an empty pool, then <see cref="IEncryptedSqliteWasmDatabaseService.ImportDatabaseFromStreamAsync"/>
+///         on an empty pool, then <see cref="ISqliteWasmDatabaseService.ImportDatabaseFromStreamAsync"/>
 ///         (worker rekey-on-write under the registered globalKey),
 ///         verify rows readable through the encrypted I/O path.</item>
 /// </list>
@@ -97,7 +97,7 @@ internal sealed class SingleDbStreamingRoundTripTest
         try
         {
             using var stream = new MemoryStream(plainBytes, writable: false);
-            await _session.ImportDatabaseFromStreamAsync(
+            await _databaseService.ImportDatabaseFromStreamAsync(
                 dbName, stream, plainBytes.Length);
         }
         catch (Exception ex)
@@ -144,7 +144,7 @@ internal sealed class SingleDbStreamingRoundTripTest
         try
         {
             using var stream = new MemoryStream(plainBytes, writable: false);
-            await _session.ImportDatabaseFromStreamAsync(
+            await _databaseService.ImportDatabaseFromStreamAsync(
                 dbName, stream, plainBytes.Length);
         }
         catch (Exception ex)

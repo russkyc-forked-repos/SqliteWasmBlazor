@@ -67,6 +67,8 @@ public static class SqliteWasmServiceCollectionExtensions
         var reporter = services.GetRequiredService<IDbInitializationReporter>();
         ConfigureCommandLogging(options);
 
+        SqliteWasmWorkerBridge.Instance.AttachBootStatus(
+            reporter, services.GetRequiredService<IDbInitializationStatus>());
         reporter.Report(DbInitState.INITIALIZING);
 
         try
@@ -103,6 +105,11 @@ Please close any other tabs running this application and refresh the page.
         var status = services.GetRequiredService<IDbInitializationStatus>();
         var options = services.GetRequiredService<IOptions<SqliteWasmOptions>>().Value;
         ConfigureCommandLogging(options);
+
+        // A whole-pool import reports READY through this so every
+        // <AuthorizeView> bound to the state re-evaluates; the bridge is a
+        // singleton outside the container and cannot resolve it itself.
+        SqliteWasmWorkerBridge.Instance.AttachBootStatus(reporter, status);
 
         // Skip if a previous boot stage already failed — don't overwrite that diagnosis.
         if (status.State is DbInitState.TAB_LOCKED

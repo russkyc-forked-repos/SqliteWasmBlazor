@@ -80,7 +80,7 @@ internal sealed class DbsValidatedImportRejectedTest
         try
         {
             using var stream = new MemoryStream(envelope, writable: false);
-            await _session.ImportDatabasesFromStreamAsync(
+            await _databaseService.ImportDatabasesFromStreamAsync(
                 stream, envelope.Length, ValidateImportedAsync);
         }
         catch (InvalidOperationException)

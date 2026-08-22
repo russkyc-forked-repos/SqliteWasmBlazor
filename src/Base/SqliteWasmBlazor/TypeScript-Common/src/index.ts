@@ -3,9 +3,10 @@
 //
 // Re-exports the worker state singletons, logger, type conversion, plain
 // bulk-insert path, EF Core SQL helpers, the worker request/response envelope
-// types, and the pool-level import machinery (staging, chunk sessions, the
-// single-database sink, the .dbs codec and the park/temp naming rules). Consumers `import { logger, openDatabases, ... } from
-// '@sqlitewasmblazor/worker-common'`.
+// types, the main-thread streaming router, and the pool-level import machinery
+// (staging, chunk sessions, the single-database sink, the .dbs codec and the
+// park/temp naming rules). Consumers `import { logger, openDatabases, ... }
+// from '@sqlitewasmblazor/worker-common'`.
 
 export * from './worker-state';
 export * from './sqlite-logger';
@@ -15,6 +16,7 @@ export * from './ef-core-functions';
 export * from './worker-envelope';
 export * from './export-staging';
 export * from './staged-download';
+export * from './stream-bridge';
 export * from './memory';
 export * from './msgpack-stream';
 export * from './pool-naming';

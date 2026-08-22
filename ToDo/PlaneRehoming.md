@@ -165,29 +165,57 @@ existing seam: `IDatabaseLockProbe` + `ThrowIfPoolLocked`, which base's
   'InvalidStateError')` once, assert exactly one retry, and assert any other
   error propagates untouched. Its comment should describe the platform
   condition, not the import bug that first exposed it.
-**Mapped, not started.** What the survey found, so the next pass does not
-re-derive it:
 
-- **The C# JSImport declarations already exist in base.** `SqliteWasmWorkerBridge`
-  declares all 13, `exportDatabasesToDownload` and `importDatabasesFromSession`
-  among them; they resolve against whichever bundle `AssetRoot` points at. So no
-  new JSImport surface is needed — only implementations.
-- **The plane-1 JS bridge implements 3 of those 13**; the other 10 exist only in
-  the crypto bridge. Base needs `exportDatabasesToDownload` and
-  `importDatabasesFromSession` (the eight `.eds`/pool ones stay plane-2).
-- **Base's bridge has no stream protocol at all** — no `streamHandlers`, no
-  `nextStreamId`, no `streamId` branch in `onmessage`. Both functions ride it, so
-  it has to come first. Worth extracting into `worker-common` as a router both
-  bridges share rather than duplicating ~25 lines of routing.
-- **Base's worker needs six cases**: `replaceDb`, the four `importSession*`, and
-  `importDatabasesFromSession` / `exportDatabasesToStaging`. All six now have
-  their implementation in `worker-common`; the worker only wires the dispatch and
-  supplies `crypto: undefined`.
+**DONE.** The bridge members, the service methods, `PoolNaming` and
+`PoolOperationRejectedException` are on base; `ISqliteWasmDatabaseService`
+carries the five memory-flat file paths and `IEncryptedSqliteWasmDatabaseService`
+is encryption-only. Solution builds clean, 98/98 Playwright, base TS 6 files /
+38 tests, crypto 4 / 43. Net -582 lines while base gained the whole surface.
 
-Then the C# half as sketched above (bridge members, service moves, interface).
+What the pass turned up, beyond the survey:
 
-- **Verify:** TestApp suite; the `.dbs` round-trip and validated-import-rejected
-  tests exercise park/restore end to end.
+- **The stream protocol became one shared router**, `worker-common/stream-bridge.ts`,
+  rather than ~25 duplicated lines per bridge. It owns the negative id counter,
+  the handler registry and the dispatch; a caller supplies `build(streamId)` and
+  `settle(done)`. The two plane-neutral ops that ride it —
+  `exportDatabasesToDownload`, `importDatabasesFromSession` — are in the same
+  module and both bridges expose one-line adapters. The crypto bridge lost 172
+  lines to this.
+- **Which `ExportDatabaseToDownloadAsync` survived: base's.** It rides the
+  request/response protocol (`exportDbToStaging` + `downloadStagedExport`), and
+  the crypto worker already implemented that op state-aware, so base's works
+  against either bundle. What went away is plane 2's stream-protocol twin —
+  the JS entry point, the worker's `exportDatabaseToStaging` stream case, and
+  the `ExportDatabaseToDownloadJsAsync` JSImport.
+- **The lock guard changed exception type, on purpose.** The plan said use
+  `ThrowIfPoolLocked`, which throws `PoolLockedException` — but that type means
+  "consumer code reached the DB outside the AuthorizeView gate", and the copy
+  says so. A user clicking Export on a locked pool is not that. So the guard
+  gained an overload taking a `PoolOperationRejection`, and all five file paths
+  (base's existing single-DB export included) raise
+  `EXPORT_NEEDS_UNLOCK` / `PLAIN_IMPORT_NEEDS_UNLOCK` — which is what
+  `EncryptionModel` already localizes. `IDatabaseLockProbe` was not needed: the
+  `_poolLocked` flag it feeds is refreshed on every state probe and transition,
+  which is the same freshness the SQL path already relies on.
+- **`ReportDbState` needed a home.** The whole-pool import reports READY so
+  every `<AuthorizeView>` re-evaluates, and the reporter is a base type
+  (`IDbInitializationReporter`) — but the bridge is a `Lazy` singleton outside
+  the container. Resolving it from the DI registration risks a cycle
+  (`DbStateModel` → `IPrfAuthenticationStateProvider` → …), so the two init
+  helpers, which already resolve both facets at app start, call
+  `AttachBootStatus`. Same mutator shape as `SetPoolLocked`.
+- **`withHandleRecovery` needs no new test** — Goal 2 gave it one when it moved.
+  Base now wraps the same three ops it wraps on plane 2 (rename, unlink,
+  replace), and base's init runs `planPoolSweep` so a park can be restored
+  there too.
+
+- **Coverage gap, deliberate and open.** TestApp calls
+  `AddSqliteWasmBlazorCrypto`, so its `AssetRoot` points at the Crypto bundle
+  and all 98 Playwright tests drive the plane-2 worker. Base's six new worker
+  cases and its init sweep are typechecked and bundled but executed by nothing
+  in the repo. Closing it means a plain-plane Playwright fixture (a sample app
+  on `AddSqliteWasm` alone, plus host wiring) — a scope call, not part of this
+  goal.
 
 ### Goal 4 — Retire the `byte[]` file methods
 

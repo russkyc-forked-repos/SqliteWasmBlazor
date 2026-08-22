@@ -94,7 +94,7 @@ internal sealed class SingleDbValidatedImportRejectedTest
         try
         {
             using var stream = new MemoryStream(foreignBytes, writable: false);
-            await _session.ImportDatabaseFromStreamAsync(
+            await _databaseService.ImportDatabaseFromStreamAsync(
                 dbName,
                 stream,
                 foreignBytes.Length,

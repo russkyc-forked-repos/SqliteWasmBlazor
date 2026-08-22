@@ -86,7 +86,7 @@ internal sealed class DbsEnvelopeRoundTripTest
         try
         {
             using var stream = new MemoryStream(envelope, writable: false);
-            await _session.ImportDatabasesFromStreamAsync(stream, envelope.Length);
+            await _databaseService.ImportDatabasesFromStreamAsync(stream, envelope.Length);
         }
         catch (Exception ex)
         {

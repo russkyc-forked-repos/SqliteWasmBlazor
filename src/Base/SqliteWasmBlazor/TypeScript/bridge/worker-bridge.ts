@@ -3,7 +3,12 @@
 // Exposes a single async initializeBridge(baseHref, assetRoot) entry point;
 // C# awaits its returned Promise so worker creation errors surface on the .NET side.
 
-import { downloadStagedExport } from '@sqlitewasmblazor/worker-common';
+import {
+    createStreamRouter,
+    downloadStagedExport,
+    exportDatabasesToDownload as exportDatabasesToDownloadVia,
+    importDatabasesFromSession as importDatabasesFromSessionVia,
+} from '@sqlitewasmblazor/worker-common';
 
 /**
  * IMemoryView interface from dotnet runtime — view over managed Span/ArraySegment.
@@ -15,6 +20,18 @@ interface IMemoryView {
 }
 
 let worker: Worker | null = null;
+
+/**
+ * Streaming-response router — the half of the protocol whose payload rides
+ * an OPFS staging file instead of postMessage. Lives in worker-common so
+ * both bridges route the same way; see stream-bridge.ts.
+ */
+const streams = createStreamRouter((message, transfer) => {
+    if (!worker) {
+        throw new Error('Worker not initialized');
+    }
+    worker.postMessage(message, transfer ?? []);
+});
 
 /**
  * Create the Web Worker and wire up message handling.
@@ -50,6 +67,10 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
             } catch (error) {
                 console.error('[Worker Bridge] Failed to call OnWorkerError:', error);
             }
+            return;
+        }
+
+        if (streams.dispatch(event.data)) {
             return;
         }
 
@@ -142,6 +163,26 @@ export const logger = {
     }
 };
 
+/**
+ * JSImport entry — multi-database plain export to a `.dbs` download. Both
+ * this and the import below are one-line adapters over the shared
+ * implementation; the router is the only per-bridge part.
+ */
+export function exportDatabasesToDownload(
+    filename: string,
+    dbNamesJson: string,
+): Promise<boolean> {
+    return exportDatabasesToDownloadVia(streams, filename, dbNamesJson);
+}
+
+/** JSImport entry — multi-database plain import from a staged `.dbs` envelope. */
+export function importDatabasesFromSession(
+    sessionId: number,
+    keepExisting: boolean,
+): Promise<number> {
+    return importDatabasesFromSessionVia(streams, sessionId, keepExisting);
+}
+
 // Staged export downloads live in worker-common so both bridges share one
 // staging-directory name and one filename → content-type mapping; see
 // staged-download.ts for why the content type decides whether iOS Safari
@@ -152,6 +193,8 @@ export { downloadStagedExport };
     initializeBridge,
     sendToWorker,
     sendBinaryToWorker,
+    exportDatabasesToDownload,
+    importDatabasesFromSession,
     downloadStagedExport
 };
 

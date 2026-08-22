@@ -103,7 +103,7 @@ internal sealed class SingleDbImportOverOpenDatabaseTest
         try
         {
             using var stream = new MemoryStream(snapshot, writable: false);
-            await _session.ImportDatabaseFromStreamAsync(
+            await _databaseService.ImportDatabaseFromStreamAsync(
                 dbName, stream, snapshot.Length);
         }
         catch (Exception ex)

@@ -17,6 +17,12 @@ import {
     setSqlite3, setPoolUtil, setBaseHref,
     bulkInsertRows, type BulkInsertHeader,
     openExportStaging, sweepExportStaging,
+    createDatabaseImportSink,
+    createImportSessionHost,
+    exportDatabasesToStaging,
+    importDatabasesFromEnvelope,
+    planPoolSweep,
+    withHandleRecovery,
 } from '@sqlitewasmblazor/worker-common';
 
 // Re-export mutable state references for local use
@@ -81,6 +87,28 @@ function convertBigInt(value: any): any {
         return converted;
     }
     return value;
+}
+
+/**
+ * Settle pool entries an import left behind. A park whose database is gone
+ * is that database — the restore that would have put it back never ran — so
+ * it goes back under its own name; a temp slot no promotion ever reached is
+ * dropped. See planPoolSweep for the decision table.
+ */
+function sweepUnfinishedPoolEntries() {
+    for (const action of planPoolSweep(poolUtil.listDatabases())) {
+        if (action.kind === 'restore') {
+            poolUtil.renameFile(
+                `/databases/${action.park}`, `/databases/${action.database}`);
+            logger.warn(
+                MODULE_NAME,
+                `Restored ${action.database} from ${action.park} — an import replaced ` +
+                `it and never finished.`);
+            continue;
+        }
+        poolUtil.unlink(`/databases/${action.name}`);
+        logger.warn(MODULE_NAME, `Dropped unfinished write ${action.name}.`);
+    }
 }
 
 // Initialize sqlite-wasm with OPFS SAHPool
@@ -169,6 +197,9 @@ async function initializeSQLite() {
             logger.warn(MODULE_NAME, 'export-staging sweep failed:', err);
         }
 
+        // Put back what a session that died mid-import could not.
+        sweepUnfinishedPoolEntries();
+
         logger.info(MODULE_NAME, 'OPFS SAHPool VFS installed successfully');
         logger.debug(MODULE_NAME, 'Available VFS:', sqlite3.capi.sqlite3_vfs_find(null));
 
@@ -201,6 +232,19 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
     // Handle log level changes (no response needed)
     if ('type' in event.data && event.data.type === 'setLogLevel' && 'level' in event.data) {
         logger.setLogLevel(event.data.level);
+        return;
+    }
+
+    // Streaming requests — keyed by `streamId` (a negative int issued by
+    // the bridge to stay clear of the C#-side positive request-id space).
+    // The streaming dispatcher answers with exactly one `streamDone` /
+    // `streamError` message bearing the same streamId; no `id` field.
+    if ('streamId' in event.data && typeof (event.data as any).streamId === 'number') {
+        const streamMsg = event.data as unknown as {
+            streamId: number;
+            data: { type: string };
+        };
+        await handleStreamingRequest(streamMsg.streamId, streamMsg.data);
         return;
     }
 
@@ -250,6 +294,51 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
     }
 };
 
+/**
+ * Top-level dispatcher for `streamId`-bearing messages. Each handler posts
+ * exactly one `streamDone` (or `streamError`) under the same streamId and
+ * none with a top-level `id`. The export handler writes its output into an
+ * OPFS staging file and reports its name; the import handler reads the file
+ * its session already staged. Neither moves bytes through postMessage.
+ */
+async function handleStreamingRequest(
+    streamId: number,
+    data: { type: string },
+): Promise<void> {
+    try {
+        switch (data.type) {
+            case 'exportDatabasesToStaging': {
+                if (!Array.isArray((data as any).databases)) {
+                    throw new Error('exportDatabasesToStaging requires data.databases (string[])');
+                }
+                const staging = await exportDatabasesToStagingOp(
+                    (data as any).databases as string[]);
+                self.postMessage({streamId, streamDone: true, stagingFile: staging});
+                return;
+            }
+            case 'importDatabasesFromSession': {
+                const sessionId = (data as any).sessionId;
+                if (typeof sessionId !== 'number') {
+                    throw new Error('importDatabasesFromSession requires data.sessionId');
+                }
+                await importDatabasesFromSessionOp(
+                    await importSessionHost.stagedFile(sessionId, data.type),
+                    (data as any).keepExisting === true);
+                self.postMessage({streamId, streamDone: true, result: 0});
+                return;
+            }
+            default:
+                throw new Error(`Unknown streaming request type: ${data.type}`);
+        }
+    } catch (error) {
+        self.postMessage({
+            streamId,
+            streamError: true,
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+
 async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayBuffer, binaryHeader?: ArrayBuffer) {
     const { type, database, sql, parameters } = data;
 
@@ -287,6 +376,31 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
 
         case 'rename':
             return await renameDatabase(database!, (data as any).newName);
+
+        case 'replaceDb':
+            return await replaceDatabase(database!, (data as any).targetName);
+
+        case 'importSessionOpen':
+            await importSessionHost.open(
+                (data as any).sessionId, (data as any).sink,
+                database, (data as any).size);
+            return { rowsAffected: 0 };
+
+        case 'importSessionAppend':
+            if (!binaryPayload) {
+                throw new Error('importSessionAppend requires binaryPayload');
+            }
+            importSessionHost.append(
+                (data as any).sessionId, new Uint8Array(binaryPayload));
+            return { rowsAffected: 0 };
+
+        case 'importSessionClose':
+            importSessionHost.close((data as any).sessionId);
+            return { rowsAffected: 0 };
+
+        case 'importSessionDiscard':
+            await importSessionHost.discard((data as any).sessionId);
+            return { rowsAffected: 0 };
 
           case 'importDb':
               if (!binaryPayload) {
@@ -725,7 +839,8 @@ async function deleteDatabase(dbName: string) {
 
         // Use unlink to delete a specific database file (not wipeFiles which deletes ALL databases!)
         if (poolUtil.unlink) {
-            const deleted = poolUtil.unlink(dbPath);
+            const deleted = await withHandleRecovery(
+                `delete ${dbName}`, () => poolUtil.unlink(dbPath));
             if (deleted) {
                 logger.info(MODULE_NAME, `✓ Deleted database: ${dbName}`);
             } else {
@@ -770,7 +885,9 @@ async function renameDatabase(oldName: string, newName: string) {
         logger.debug(MODULE_NAME, `Renaming database file in OPFS: ${oldPath} -> ${newPath}`);
 
         try {
-            poolUtil.renameFile(oldPath, newPath);
+            await withHandleRecovery(
+                `rename ${oldName} → ${newName}`,
+                () => poolUtil.renameFile(oldPath, newPath));
             logger.info(MODULE_NAME, `✓ Successfully renamed database from ${oldName} to ${newName} (metadata-only, no file copy)`);
 
             // Debug: Verify rename worked
@@ -788,6 +905,119 @@ async function renameDatabase(oldName: string, newName: string) {
         logger.error(MODULE_NAME, `Failed to rename database from ${oldName} to ${newName}:`, error);
         throw error;
     }
+}
+
+/**
+ * Put `sourceName` in `targetName`'s place: the target's slot is freed and
+ * the source's slot re-tagged with the target's path, in one pool metadata
+ * update. No bytes are copied.
+ *
+ * This is what park/restore needs and a plain rename cannot give it. A
+ * rename onto an occupied name silently drops the occupant's slot out of
+ * the path map — it stays claimed and its bytes stay unreachable — and
+ * splitting it into delete-then-rename opens a window where a failure
+ * between the two leaves both the park and what it was meant to replace
+ * standing, with nothing left to say which one is the database.
+ */
+async function replaceDatabase(sourceName: string, targetName: string) {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    // Both slots change identity here; an OFile that captured either SAH at
+    // xOpen keeps serving pages from a slot that now belongs to the other
+    // path. C# reopens on demand.
+    await closeDatabase(sourceName);
+    await closeDatabase(targetName);
+    await withHandleRecovery(
+        `replace ${targetName} with ${sourceName}`,
+        () => poolUtil.atomicReplaceFile(
+            `/databases/${sourceName}`, `/databases/${targetName}`));
+    logger.info(MODULE_NAME, `✓ Replaced ${targetName} with ${sourceName}`);
+    return { success: true };
+}
+
+/**
+ * Import sessions — the one way a file the user picked reaches this worker.
+ *
+ * C# opens a session, pushes the file one chunk at a time (awaiting each,
+ * so at most one chunk is in flight), then closes it. Nothing accumulates
+ * on the main thread: every chunk is a transferred ArrayBuffer that lands
+ * on disk here and is wiped. That is the whole point of the design —
+ * WebKit holds a Blob built from ArrayBuffers in process memory, and a
+ * large import built that way is what closed the pool's access handles
+ * mid-write on iOS.
+ *
+ * Two sinks, because two shapes of import need different things:
+ *
+ *   database → one plain `.db` going into one database. Single pass, so
+ *              the chunks go straight into the pool's temp slot and no copy
+ *              of the file exists anywhere.
+ *   staging  → a `.dbs` envelope, which is validated in one pass and
+ *              committed in another. It lands in an OPFS staging file the
+ *              worker re-streams per pass.
+ *
+ * The session machinery itself is plane-neutral and lives in worker-common;
+ * what a plane supplies is the opener. Plane 1 has no key, so the sink
+ * writes plain pages and there is nothing to dispose.
+ */
+const importSessionHost = createImportSessionHost({
+    async openDatabaseSink(dbName, plainSize) {
+        if (!sqlite3 || !poolUtil) {
+            throw new Error('SQLite not initialized');
+        }
+        await closeDatabase(dbName);
+        return {
+            sink: createDatabaseImportSink(dbName, plainSize, poolUtil, undefined, undefined),
+            dispose() {
+            },
+        };
+    },
+    onDatabaseCommitted(dbName) {
+        logger.info(MODULE_NAME, `✓ Imported ${dbName}`);
+    },
+});
+
+/**
+ * Multi-DB plain export — writes the complete `.dbs` envelope into an OPFS
+ * staging file and returns its name. Plane 1 emits every file verbatim;
+ * the codec itself is shared with plane 2, which decrypts on the way out.
+ */
+async function exportDatabasesToStagingOp(dbNames: string[]): Promise<string> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    const staging = await exportDatabasesToStaging(dbNames, {
+        poolUtil,
+        closeDatabase,
+    });
+    return staging.name;
+}
+
+/**
+ * Multi-DB plain import — consumes the `.dbs` envelope the session staged.
+ * Two passes over the re-streamable File: validate the whole envelope
+ * read-only (file count, tuple arity, page-aligned lengths, SQLite magic,
+ * no premature EOF) before any destructive pool operation, then commit.
+ *
+ * `keepExisting` skips the commit pass's wipe: C# has already parked the
+ * previous content under a suffixed name and will restore or drop it once
+ * it has inspected what arrived.
+ */
+async function importDatabasesFromSessionOp(
+    blob: Blob,
+    keepExisting: boolean,
+): Promise<void> {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    await importDatabasesFromEnvelope(blob, keepExisting, {
+        poolUtil,
+        closeAllDatabases: async () => {
+            for (const dbName of [...openDatabases.keys()]) {
+                await closeDatabase(dbName);
+            }
+        },
+    });
 }
 
 async function importDatabase(dbName: string, data: Uint8Array, opaque = false) {

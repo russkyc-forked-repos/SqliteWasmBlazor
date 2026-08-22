@@ -334,7 +334,7 @@ public partial class EncryptionModel : ObservableModel
             ? databaseName[..^3]
             : databaseName;
         var fileName = $"{stem}-{DateTime.Now:yyyyMMdd-HHmmss}.db";
-        await Session.ExportDatabaseToDownloadAsync(databaseName, fileName, cancellationToken);
+        await DatabaseService.ExportDatabaseToDownloadAsync(databaseName, fileName, cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_SingleDbExported", databaseName, fileName],
             nameof(ExportDatabase));
@@ -357,7 +357,7 @@ public partial class EncryptionModel : ObservableModel
                 "Tick at least two databases before exporting a bundle.");
         }
         var fileName = $"databases-{DateTime.Now:yyyyMMdd-HHmmss}.dbs";
-        await Session.ExportDatabasesToDownloadAsync(picked, fileName, cancellationToken);
+        await DatabaseService.ExportDatabasesToDownloadAsync(picked, fileName, cancellationToken);
         StatusModel.AddSuccess(
             Localizer["Status_DbsExported", picked.Length, fileName],
             nameof(ExportDatabases));
@@ -536,7 +536,7 @@ public partial class EncryptionModel : ObservableModel
         }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
-        await Session.ImportDatabaseFromStreamAsync(
+        await DatabaseService.ImportDatabaseFromStreamAsync(
             target,
             stream,
             file.Size,
@@ -601,7 +601,7 @@ public partial class EncryptionModel : ObservableModel
         }
         await using var stream = file.OpenReadStream(
             maxAllowedSize: file.Size, cancellationToken);
-        await Session.ImportDatabasesFromStreamAsync(
+        await DatabaseService.ImportDatabasesFromStreamAsync(
             stream,
             file.Size,
             (imported, ct) => ValidateImportedAsync(imported, file.Name, ct),

@@ -5,8 +5,7 @@ namespace SqliteWasmBlazor;
 
 /// <summary>
 /// Outcome returned by <see cref="ISqliteWasmDatabaseService.ImportDatabaseAsync"/>
-/// and the streaming import paths on
-/// <c>IEncryptedSqliteWasmDatabaseService</c>. Plain (non-opaque) imports
+/// and by the Crypto plane's guided <c>.eds</c> import. Plain (non-opaque) imports
 /// always return <see cref="OK"/> on success and throw on byte-level
 /// failures. Opaque (encrypted) imports go through the refuse-on-existing
 /// + verify-on-write policy: a fresh-path import that AEAD-verifies under
@@ -51,9 +50,9 @@ public enum PoolImportResult
 /// (which also use <c>IEncryptedSqliteWasmDatabaseService</c>) and
 /// pure plain apps. Per-DB <c>.db</c> bytes from
 /// <see cref="ExportDatabaseAsync"/> open in <c>sqlite3</c>; multi-DB
-/// transfers go through the streaming <c>.dbs</c> envelope on the
-/// encrypted plane (<c>ExportDatabasesToDownloadAsync</c> /
-/// <c>ImportDatabasesFromStreamAsync</c>).
+/// transfers go through the streaming <c>.dbs</c> envelope
+/// (<see cref="ExportDatabasesToDownloadAsync"/> /
+/// <see cref="ImportDatabasesFromStreamAsync"/>).
 /// </para>
 ///
 /// <para>
@@ -66,10 +65,13 @@ public enum PoolImportResult
 /// </para>
 ///
 /// <para>
-/// All single-DB operations refuse to write or read while the encrypted
-/// disk is locked — they throw <see cref="PoolLockedException"/> via the
-/// bridge gate. Wrap DB-touching code in
-/// <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> to avoid that path.
+/// Every operation refuses to write or read while the encrypted pool is
+/// locked. SQL and single-DB ops throw <see cref="PoolLockedException"/> via
+/// the bridge gate — that one means consumer code reached the DB outside a
+/// <c>&lt;AuthorizeView Policy="DatabaseOpen"&gt;</c> gate. The
+/// file-movement paths throw <see cref="PoolOperationRejectedException"/>
+/// instead: they are user-driven actions whose remedy is to unlock, and the
+/// reason code is what a UI localizes.
 /// </para>
 /// </summary>
 public interface ISqliteWasmDatabaseService
@@ -143,10 +145,10 @@ public interface ISqliteWasmDatabaseService
     /// for a consistent snapshot — caller must re-open afterwards.
     ///
     /// <para>
-    /// For multi-DB plain export use the encrypted plane's
-    /// <c>IEncryptedSqliteWasmDatabaseService.ExportDatabasesToDownloadAsync</c>
-    /// (a streamed <c>.dbs</c> envelope) — that path avoids the managed-byte[]
-    /// allocation this byte[]-returning per-DB primitive still incurs.
+    /// For multi-DB plain export use
+    /// <see cref="ExportDatabasesToDownloadAsync"/> (a streamed <c>.dbs</c>
+    /// envelope) — that path avoids the managed-byte[] allocation this
+    /// byte[]-returning per-DB primitive still incurs.
     /// </para>
     /// </summary>
     /// <param name="databaseName">The database filename (e.g., "mydb.db").</param>
@@ -176,7 +178,119 @@ public interface ISqliteWasmDatabaseService
     /// <param name="databaseName">The database filename (e.g., "mydb.db").</param>
     /// <param name="filename">Download filename presented to the user.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="PoolOperationRejectedException">
+    /// The pool is encrypted and locked
+    /// (<see cref="PoolOperationRejection.EXPORT_NEEDS_UNLOCK"/>) — without
+    /// the global key the worker cannot turn slots back into plain pages.
+    /// </exception>
     Task ExportDatabaseToDownloadAsync(string databaseName, string filename,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Exports several databases as one <c>.dbs</c> envelope (a MessagePack
+    /// array of <c>[name, bytes]</c> tuples, no compression) straight to a
+    /// browser download. Memory-flat by the same mechanism as
+    /// <see cref="ExportDatabaseToDownloadAsync"/>: the worker assembles the
+    /// envelope in an OPFS staging file and the bridge downloads the
+    /// disk-backed <c>File</c>.
+    ///
+    /// <para>
+    /// Exactly one name short-circuits to
+    /// <see cref="ExportDatabaseToDownloadAsync"/>, so a single-selection
+    /// download lands as a vanilla <c>.db</c> file rather than a
+    /// one-element envelope. Two or more produce a <c>.dbs</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// With the Crypto plane loaded the worker is state-aware: a Plain pool
+    /// emits verbatim pages, Encrypted+Unlocked decrypts each file
+    /// slot-by-slot to plain pages. Either way the output is plaintext —
+    /// disclose that before offering it on an encrypted pool.
+    /// </para>
+    /// </summary>
+    /// <param name="databaseNames">Databases to include; must be non-empty.</param>
+    /// <param name="filename">Download filename presented to the user.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="PoolOperationRejectedException">
+    /// The pool is encrypted and locked
+    /// (<see cref="PoolOperationRejection.EXPORT_NEEDS_UNLOCK"/>).
+    /// </exception>
+    Task ExportDatabasesToDownloadAsync(IReadOnlyList<string> databaseNames,
+        string filename, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Imports one raw <c>.db</c> file from <paramref name="stream"/> — the
+    /// right primitive for "I have one big database file and want it in this
+    /// pool". Managed-heap peak is one ArrayPool chunk (~1 MB) whatever the
+    /// file's size, and so is every other heap on the way: the chunks are
+    /// pushed into the worker one at a time and written into a temp SAH slot
+    /// that an atomic replace promotes at the end. Nothing assembles the
+    /// file.
+    ///
+    /// <para>
+    /// With the Crypto plane loaded the worker is state-aware: a Plain pool
+    /// gets plain pages, Encrypted+Unlocked rekeys-on-write into encrypted
+    /// slots.
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="validateImported"/> turns this into a validated
+    /// import: the previous content is parked under
+    /// <see cref="PoolNaming.ImportParkSuffix"/>, the file lands under
+    /// <paramref name="databaseName"/>, and the delegate gets to open it and
+    /// decide. A delegate that throws puts the parked content back exactly
+    /// as it was — the replaces are metadata-only, so nothing is rewritten.
+    /// </para>
+    /// </summary>
+    /// <param name="databaseName">Target database filename.</param>
+    /// <param name="stream">Source of the plain <c>.db</c> bytes.</param>
+    /// <param name="size">Declared source length; the import fails if the
+    /// stream ends early.</param>
+    /// <param name="validateImported">Called once with
+    /// <paramref name="databaseName"/> after the import commits; throwing
+    /// rolls it back. <c>null</c> imports without the park/restore pass.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="PoolOperationRejectedException">
+    /// The pool is encrypted and locked
+    /// (<see cref="PoolOperationRejection.PLAIN_IMPORT_NEEDS_UNLOCK"/>).
+    /// </exception>
+    Task ImportDatabaseFromStreamAsync(string databaseName, Stream stream, long size,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Imports a <c>.dbs</c> envelope from <paramref name="envelopeStream"/>
+    /// and writes every entry in it through the same chunked path
+    /// <see cref="ImportDatabaseFromStreamAsync"/> uses. The pool ends up
+    /// holding exactly what the envelope carries.
+    ///
+    /// <para>
+    /// The worker validates the whole envelope read-only — file count, tuple
+    /// arity, page-aligned lengths, SQLite magic per file, no premature EOF —
+    /// before any destructive pool operation, so a truncated or crafted
+    /// <c>.dbs</c> fails with the existing pool intact.
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="validateImported"/> makes it a validated import: the
+    /// previous content is parked, the envelope's entries land under their
+    /// real names, and the delegate is called once per imported database. A
+    /// delegate that throws puts the pool back exactly as it was.
+    /// </para>
+    /// </summary>
+    /// <param name="envelopeStream">Source of the <c>.dbs</c> bytes.</param>
+    /// <param name="envelopeSize">Declared envelope length; the import fails
+    /// if the stream ends early.</param>
+    /// <param name="validateImported">Called once per imported database;
+    /// throwing rolls the whole import back. <c>null</c> replaces the pool
+    /// without the park/restore pass.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="PoolOperationRejectedException">
+    /// The pool is encrypted and locked
+    /// (<see cref="PoolOperationRejection.PLAIN_IMPORT_NEEDS_UNLOCK"/>).
+    /// </exception>
+    Task ImportDatabasesFromStreamAsync(Stream envelopeStream, long envelopeSize,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

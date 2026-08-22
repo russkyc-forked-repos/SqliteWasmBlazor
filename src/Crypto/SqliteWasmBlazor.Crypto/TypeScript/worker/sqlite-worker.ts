@@ -384,13 +384,6 @@ async function handleStreamingRequest(
                         requireSessionId(data), 'importPoolStreamCommit'),
                     new Uint8Array(binaryPayload));
                 return;
-            case 'exportDatabaseToStaging':
-                if (typeof (data as any).database !== 'string') {
-                    throw new Error('exportDatabaseToStaging requires data.database');
-                }
-                await exportDatabaseToStagingHandler(
-                    streamId, (data as any).database as string);
-                return;
             case 'exportDatabasesToStaging':
                 if (!Array.isArray((data as any).databases)) {
                     throw new Error('exportDatabasesToStaging requires data.databases (string[])');
@@ -474,33 +467,22 @@ async function importPoolStreamCommitHandler(
 }
 
 /**
- * Streaming single-DB export handler. Dispatch by hasGlobalKey():
+ * State-aware single-DB staging export, behind the plane-1
+ * 'exportDbToStaging' request — the base library's
+ * ExportDatabaseToDownloadAsync runs against this worker when the Crypto
+ * bundle is loaded. Dispatch by hasGlobalKey():
  *   Encrypted+Unlocked → decrypt slot-by-slot to plain pages
- *   Plain disk        → copy verbatim
+ *   Plain pool        → copy verbatim
  *   Encrypted+Locked  → C# refuses before posting; not reachable here
  *
  * Output is always plain SQLite .db bytes — the file a downstream tool
- * (`sqlite3 file.db`) can open directly, or our own
- * <see cref="ImportDatabaseFromStreamAsync"/> can re-import. Every chunk is
- * written straight into an OPFS staging file via a sync access handle, so
- * JS heap peak per op stays ~1 MB and no bytes accumulate main-thread-side
- * regardless of DB size; streamDone carries the staging file name.
+ * (`sqlite3 file.db`) can open directly, or ImportDatabaseFromStreamAsync
+ * can re-import. Every chunk is written straight into an OPFS staging file
+ * via a sync access handle, so JS heap peak per op stays ~1 MB and no bytes
+ * accumulate main-thread-side regardless of DB size. Returns the staging
+ * file name.
  */
-async function exportDatabaseToStagingHandler(
-    streamId: number,
-    dbName: string,
-): Promise<void> {
-    const stagingFile = await exportDatabaseToStagingCore(dbName);
-    self.postMessage({streamId, streamDone: true, stagingFile});
-}
-
-/**
- * Shared state-aware staging exporter — used by the streaming handler
- * above and by the plane-1-compatible 'exportDbToStaging' request (the
- * base library's ExportDatabaseToDownloadAsync runs against this worker
- * when the Crypto bundle is loaded). Returns the staging file name.
- */
-async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
+async function exportDatabaseToStaging(dbName: string): Promise<string> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
@@ -866,7 +848,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // Plane-1-compatible request shape (base library's
             // ExportDatabaseToDownloadAsync). State-aware: Encrypted+
             // Unlocked decrypts to plain pages, Plain copies verbatim.
-            return {stagingFile: await exportDatabaseToStagingCore(database!)};
+            return {stagingFile: await exportDatabaseToStaging(database!)};
 
         case 'setGlobalEncryptionKey':
             // Install the worker-wide key. Every page I/O across every open

@@ -5,8 +5,11 @@
 
 import { base64ToBytes } from '@sqlitewasmblazor/crypto-core';
 import {
+    createStreamRouter,
     deleteStagedExportFile,
     downloadStagedExport,
+    exportDatabasesToDownload as exportDatabasesToDownloadVia,
+    importDatabasesFromSession as importDatabasesFromSessionVia,
     stagedExportFile,
     triggerDownload,
 } from '@sqlitewasmblazor/worker-common';
@@ -35,28 +38,19 @@ interface IMemoryView {
 let worker: Worker | null = null;
 
 /**
- * JS-side stream handler registry — separate from the C# request-id space.
- * Streaming worker calls answer with exactly one `streamDone` (or
- * `streamError`) keyed by `streamId`. Export operations never send bytes
- * through postMessage: the worker writes its output into an OPFS staging
- * file and streamDone carries the staging file name (plus a per-file
- * offset table for the disk export), which the bridge lifts as a
- * disk-backed File for delivery.
- *
- * `streamId` is allocated from a negative-int counter so it never collides
- * with the C#-side `_nextRequestId` (which only increments positively).
+ * Streaming-response router — the half of the protocol whose payload rides
+ * an OPFS staging file rather than postMessage. Export operations never send
+ * bytes back: the worker writes into a staging file and streamDone carries
+ * its name (plus a per-file offset table for the pool export), which the
+ * bridge lifts as a disk-backed File. Shared with the plane-1 bridge; see
+ * worker-common's stream-bridge.ts.
  */
-interface StagedFileEntry {
-    name: string;
-    offset: number;
-    size: number;
-}
-interface StreamHandler {
-    onDone(result?: number, stagingFile?: string, files?: StagedFileEntry[]): void;
-    onError(message: string): void;
-}
-const streamHandlers = new Map<number, StreamHandler>();
-let nextStreamId = -1;
+const streams = createStreamRouter((message, transfer) => {
+    if (!worker) {
+        throw new Error('Worker not initialized');
+    }
+    worker.postMessage(message, transfer ?? []);
+});
 
 /**
  * Create the Web Worker and wire up message handling.
@@ -95,32 +89,9 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
             return;
         }
 
-        // Streaming responses — keyed by `streamId`, dispatched JS-side to
-        // a handler in `streamHandlers`. Worker answers each streaming
-        // request with one streamDone (or streamError) under the same
-        // streamId. C# never sees these messages directly.
-        if (event.data.streamId !== undefined) {
-            const handler = streamHandlers.get(event.data.streamId);
-            if (!handler) {
-                console.warn(
-                    '[Worker Bridge] Stream message for unknown streamId',
-                    event.data.streamId);
-                return;
-            }
-            if (event.data.streamDone === true) {
-                handler.onDone(
-                    typeof event.data.result === 'number' ? event.data.result : undefined,
-                    typeof event.data.stagingFile === 'string' ? event.data.stagingFile : undefined,
-                    Array.isArray(event.data.files)
-                        ? event.data.files as StagedFileEntry[]
-                        : undefined,
-                );
-            } else if (event.data.streamError === true) {
-                handler.onError(
-                    typeof event.data.error === 'string' ? event.data.error : 'unknown stream error');
-            } else {
-                console.warn('[Worker Bridge] Unknown stream message shape', event.data);
-            }
+        // Streaming responses — keyed by `streamId` and settled JS-side.
+        // C# never sees these messages.
+        if (streams.dispatch(event.data)) {
             return;
         }
 
@@ -317,9 +288,6 @@ function _assembleEnvelopeStaged(
     metadataJson: string,
     kWrapView: IMemoryView,
 ): Promise<{ blob: Blob; stagingFile: string }> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
     const meta = JSON.parse(metadataJson) as {
         version: number;
         aadVersion: string;
@@ -330,56 +298,38 @@ function _assembleEnvelopeStaged(
         credentialIdHint: string;
     };
 
-    const streamId = nextStreamId--;
-    const kWrap = kWrapView.slice();
-
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(_result, stagingFile, files) {
-                streamHandlers.delete(streamId);
-                if (stagingFile === undefined || files === undefined) {
-                    reject(new Error(
-                        'exportPoolToStaging: streamDone missing stagingFile/files'));
-                    return;
-                }
-                stagedExportFile(stagingFile)
-                    .then((file) => {
-                        // File.slice() segments stay backed by the OPFS
-                        // entry — composing them into the envelope Blob
-                        // adds no main-thread memory.
-                        const fileParts = files.map((f) => ({
-                            name: f.name,
-                            size: f.size,
-                            blob: file.slice(f.offset, f.offset + f.size),
-                        }));
-                        resolve({
-                            blob: composeEnvelopeBlob(meta, fileParts),
-                            stagingFile,
-                        });
-                    })
-                    .catch((e: unknown) => {
-                        reject(e instanceof Error ? e : new Error(String(e)));
-                    });
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
+    return streams.request(
+        (streamId) => {
+            // Transfer K_wrap into the worker — the buffer detaches from the
+            // main side immediately, matching the existing sendBinaryToWorker
+            // ownership semantics. `data: { type }` matches the legacy
+            // WorkerRequest shape the worker's onmessage destructures.
+            const kWrap = kWrapView.slice();
+            return {
+                message: {
+                    streamId,
+                    data: {type: 'exportPoolToStaging'},
+                    binaryPayload: kWrap.buffer,
+                },
+                transfer: [kWrap.buffer],
+            };
+        },
+        async ({stagingFile, files}) => {
+            if (stagingFile === undefined || files === undefined) {
+                throw new Error(
+                    'exportPoolToStaging: streamDone missing stagingFile/files');
+            }
+            const file = await stagedExportFile(stagingFile);
+            // File.slice() segments stay backed by the OPFS entry —
+            // composing them into the envelope Blob adds no main-thread
+            // memory.
+            const fileParts = files.map((f) => ({
+                name: f.name,
+                size: f.size,
+                blob: file.slice(f.offset, f.offset + f.size),
+            }));
+            return {blob: composeEnvelopeBlob(meta, fileParts), stagingFile};
         });
-
-        // Transfer K_wrap into the worker — the buffer detaches from the
-        // main side immediately, matching the existing sendBinaryToWorker
-        // ownership semantics. `data: { type }` matches the legacy
-        // WorkerRequest shape the worker's onmessage destructures.
-        worker!.postMessage(
-            {
-                streamId,
-                data: { type: 'exportPoolToStaging' },
-                binaryPayload: kWrap.buffer,
-            },
-            [kWrap.buffer],
-        );
-    });
 }
 
 /**
@@ -477,129 +427,23 @@ export function importPoolStreamCommitFromSession(
 }
 
 /**
- * JSImport entry — multi-DB plain export. The worker assembles the
- * complete <c>.dbs</c> envelope (Plain: verbatim per file;
- * Encrypted+Unlocked: decrypt per file) in an OPFS staging file; the
- * bridge downloads the disk-backed File via anchor click. C# never sees
- * the bytes and the envelope never occupies main-thread memory.
+ * JSImport entry — multi-DB plain export. One-line adapter over the shared
+ * implementation; only the router (and so the worker behind it) differs
+ * from plane 1.
  */
 export function exportDatabasesToDownload(
     filename: string,
     dbNamesJson: string,
 ): Promise<boolean> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
-    const dbNames = JSON.parse(dbNamesJson) as string[];
-    if (!Array.isArray(dbNames) || dbNames.length === 0) {
-        return Promise.reject(new Error('exportDatabasesToDownload: dbNames must be non-empty array'));
-    }
-    const streamId = nextStreamId--;
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(_result, stagingFile) {
-                streamHandlers.delete(streamId);
-                if (stagingFile === undefined) {
-                    reject(new Error('exportDatabasesToStaging: streamDone missing stagingFile'));
-                    return;
-                }
-                stagedExportFile(stagingFile)
-                    .then((file) => {
-                        triggerDownload(filename, file);
-                        resolve(true);
-                    })
-                    .catch((e: unknown) => {
-                        reject(e instanceof Error ? e : new Error(String(e)));
-                    });
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
-        });
-        worker!.postMessage({
-            streamId,
-            data: { type: 'exportDatabasesToStaging', databases: dbNames },
-        });
-    });
+    return exportDatabasesToDownloadVia(streams, filename, dbNamesJson);
 }
 
-/**
- * JSImport entry — multi-DB plain import. Points the worker at the `.dbs`
- * envelope staged under <paramref name="sessionId"/>; the worker writes
- * each file in it via the chunked SAH path (Plain: verbatim;
- * Encrypted+Unlocked: rekey-on-write). It wipes the pool first unless
- * <c>keepExisting</c> says C# has parked the previous content itself and
- * will restore or drop it after inspecting the import.
- */
+/** JSImport entry — multi-DB plain import from a staged `.dbs` envelope. */
 export function importDatabasesFromSession(
     sessionId: number,
     keepExisting: boolean,
 ): Promise<number> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
-    const streamId = nextStreamId--;
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(result) {
-                streamHandlers.delete(streamId);
-                resolve(typeof result === 'number' ? result : 0);
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
-        });
-        worker!.postMessage({
-            streamId,
-            data: { type: 'importDatabasesFromSession', sessionId, keepExisting },
-        });
-    });
-}
-
-/**
- * JSImport entry — single-DB plain export. The worker writes the per-DB
- * export (Plain disk: verbatim; Encrypted+Unlocked: decrypt to plain
- * pages) into an OPFS staging file — no envelope wrapper, raw .db bytes a
- * SQLite tool can open — and the bridge downloads the disk-backed File
- * via anchor click. C# never sees the bytes.
- */
-export function exportDatabaseToDownload(
-    filename: string,
-    dbName: string,
-): Promise<boolean> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
-    const streamId = nextStreamId--;
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(_result, stagingFile) {
-                streamHandlers.delete(streamId);
-                if (stagingFile === undefined) {
-                    reject(new Error('exportDatabaseToStaging: streamDone missing stagingFile'));
-                    return;
-                }
-                stagedExportFile(stagingFile)
-                    .then((file) => {
-                        triggerDownload(filename, file);
-                        resolve(true);
-                    })
-                    .catch((e: unknown) => {
-                        reject(e instanceof Error ? e : new Error(String(e)));
-                    });
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
-        });
-        worker!.postMessage({
-            streamId,
-            data: { type: 'exportDatabaseToStaging', database: dbName },
-        });
-    });
+    return importDatabasesFromSessionVia(streams, sessionId, keepExisting);
 }
 
 function _sendImportPoolStreamSession(
@@ -607,35 +451,20 @@ function _sendImportPoolStreamSession(
     sessionId: number,
     kWrapView: IMemoryView,
 ): Promise<number> {
-    if (!worker) {
-        return Promise.reject(new Error('Worker not initialized'));
-    }
-    const kWrap = kWrapView.slice();
-    const streamId = nextStreamId--;
-    return new Promise((resolve, reject) => {
-        streamHandlers.set(streamId, {
-            onDone(result) {
-                streamHandlers.delete(streamId);
-                if (typeof result !== 'number') {
-                    reject(new Error(`${type} streamDone missing result`));
-                    return;
-                }
-                resolve(result);
-            },
-            onError(message) {
-                streamHandlers.delete(streamId);
-                reject(new Error(message));
-            },
+    return streams.request(
+        (streamId) => {
+            const kWrap = kWrapView.slice();
+            return {
+                message: {streamId, data: {type, sessionId}, binaryPayload: kWrap.buffer},
+                transfer: [kWrap.buffer],
+            };
+        },
+        ({result}) => {
+            if (typeof result !== 'number') {
+                throw new Error(`${type} streamDone missing result`);
+            }
+            return result;
         });
-        worker!.postMessage(
-            {
-                streamId,
-                data: { type, sessionId },
-                binaryPayload: kWrap.buffer,
-            },
-            [kWrap.buffer],
-        );
-    });
 }
 
 // Staged export downloads live in worker-common so both bridges share one
@@ -655,7 +484,6 @@ export { downloadStagedExport };
     importPoolStreamPreflightFromSession,
     importPoolStreamCommitFromSession,
     importDatabasesFromSession,
-    exportDatabaseToDownload,
     exportDatabasesToDownload,
     downloadStagedExport,
 };

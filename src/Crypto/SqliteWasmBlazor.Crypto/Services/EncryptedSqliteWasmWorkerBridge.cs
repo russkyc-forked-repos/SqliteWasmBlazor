@@ -8,9 +8,11 @@ namespace SqliteWasmBlazor.Crypto.Services;
 
 /// <summary>
 /// Plane 2 worker-bridge wrapper. Encapsulates encryption-specific worker
-/// dispatch (set/clear global key, in-place encrypt/decrypt, disk-manifest
-/// read/write/clear), delta-sync ops (export/import/rotate), and the
-/// mode-aware import/export-rekey paths that consume a 32-byte key.
+/// dispatch (set/clear global key, in-place encrypt/decrypt, pool-manifest
+/// read/write/clear) and the delta-sync ops (export/import/rotate). The
+/// pool operations the streamed imports drive — import sessions, the
+/// park/restore replace — are plane-1's; see
+/// <c>SqliteWasmWorkerBridge.Streaming.cs</c>.
 ///
 /// <para>
 /// Delegates to plane-1's <see cref="SqliteWasmWorkerBridge"/> for every
@@ -228,113 +230,5 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     {
         var request = new { type = "clearPoolManifest" };
         await _bridge.SendRequestAsync(request, cancellationToken);
-    }
-
-    /// <summary>
-    /// Open an import session in the worker. The picked file is pushed in
-    /// chunk by chunk from there — nothing about it is ever assembled on
-    /// the main thread, which is what a Blob part list did and what WebKit
-    /// holds in process memory until the pool's access handles die under it.
-    ///
-    /// <para>
-    /// <paramref name="sink"/> says where the chunks land.
-    /// <c>"database"</c> writes them straight into the pool's temp slot for
-    /// <paramref name="databaseName"/> (rekeyed on the way in when the pool
-    /// is encrypted), which <see cref="ImportSessionCloseAsync"/> promotes —
-    /// one pass, no copy of the file anywhere.
-    /// <c>"staging"</c> writes them into an OPFS staging file the worker
-    /// re-streams per pass, for the envelope imports that validate in one
-    /// pass and commit in another.
-    /// </para>
-    /// </summary>
-    /// <param name="sessionId">Caller-allocated id; must be unique and closed by Discard.</param>
-    /// <param name="sink"><c>"database"</c> or <c>"staging"</c>.</param>
-    /// <param name="databaseName">Target database, for a database sink.</param>
-    /// <param name="size">Declared source length in bytes, for a database sink.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    internal async Task ImportSessionOpenAsync(
-        int sessionId,
-        string sink,
-        string? databaseName,
-        long size,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new
-        {
-            type = "importSessionOpen", sessionId, sink, database = databaseName, size,
-        };
-        await _bridge.SendRequestAsync(request, cancellationToken);
-    }
-
-    /// <summary>
-    /// Push one chunk into an open import session. The buffer is transferred
-    /// to the worker, so the main thread keeps nothing; awaiting the call is
-    /// the flow control — the next chunk is read only once this one is on
-    /// disk.
-    /// </summary>
-    internal async Task ImportSessionAppendAsync(
-        int sessionId,
-        Memory<byte> chunk,
-        CancellationToken cancellationToken = default)
-    {
-        await _bridge.PostBinaryAsync(
-            new { type = "importSessionAppend", sessionId }, chunk, cancellationToken);
-    }
-
-    /// <summary>
-    /// End the source. A database session commits here — its temp slot is
-    /// promoted over the database. A staging session only closes the write
-    /// side; what happens to the envelope is the pass that reads it back.
-    /// </summary>
-    internal async Task ImportSessionCloseAsync(
-        int sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new { type = "importSessionClose", sessionId };
-        await _bridge.SendRequestAsync(request, cancellationToken);
-    }
-
-    /// <summary>
-    /// Drop the session and anything it staged. Idempotent — call it from a
-    /// finally-block whether the import committed, failed, or never started.
-    /// </summary>
-    internal async Task ImportSessionDiscardAsync(
-        int sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new { type = "importSessionDiscard", sessionId };
-        await _bridge.SendRequestAsync(request, cancellationToken);
-    }
-
-    /// <summary>
-    /// Put <paramref name="sourceName"/> in <paramref name="targetName"/>'s
-    /// place — the target's pool slot is freed and the source's slot takes
-    /// over its name, in one metadata update. No bytes are copied and no
-    /// intermediate state exists: either the source is the target now, or
-    /// nothing moved.
-    ///
-    /// <para>
-    /// This is the park/restore primitive.
-    /// <see cref="ISqliteWasmDatabaseService.RenameDatabaseAsync"/> cannot
-    /// stand in for it: renaming onto a name the pool already holds leaves
-    /// the occupant's slot claimed but unreachable, and splitting the job
-    /// into delete-then-rename leaves a park and the import that displaced
-    /// it standing side by side if the pool fails in between — with nothing
-    /// left to say which of the two is the database.
-    /// </para>
-    /// </summary>
-    /// <param name="sourceName">Entry that takes over the target's name.</param>
-    /// <param name="targetName">Name to place it under; its content is dropped.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    internal async Task ReplaceDatabaseAsync(
-        string sourceName,
-        string targetName,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new { type = "replaceDb", database = sourceName, targetName };
-        await _bridge.SendRequestAsync(request, cancellationToken);
-        // The worker closes both to swap the slots; keep the C# mirror in step.
-        _bridge.MarkDatabaseClosed(sourceName);
-        _bridge.MarkDatabaseClosed(targetName);
     }
 }
