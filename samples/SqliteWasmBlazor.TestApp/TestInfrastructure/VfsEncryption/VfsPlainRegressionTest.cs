@@ -70,7 +70,7 @@ internal sealed class VfsPlainRegressionTest
             await ctx.SaveChangesAsync();
         }
 
-        var bytes = await _databaseService.ExportDatabaseAsync(TodoDatabaseName);
+        var bytes = await SqliteWasmWorkerBridge.Instance.ExportDatabaseRawAsync(TodoDatabaseName);
 
         if (bytes.Length < 16)
         {

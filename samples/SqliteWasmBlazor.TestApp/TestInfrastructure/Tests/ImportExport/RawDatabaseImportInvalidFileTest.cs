@@ -15,7 +15,7 @@ internal class RawDatabaseImportInvalidFileTest(IDbContextFactory<TodoDbContext>
             throw new InvalidOperationException("ISqliteWasmDatabaseService not available");
         }
 
-        // Try importing random non-SQLite bytes. ImportDatabaseAsync auto-
+        // Try importing random non-SQLite bytes. ImportDatabaseRawAsync auto-
         // detects ciphertext vs plaintext via the "SQLite format 3" magic,
         // so random bytes are treated as opaque. The opaque path refuses
         // to overwrite an existing DB at the same path, so we delete the
@@ -27,11 +27,11 @@ internal class RawDatabaseImportInvalidFileTest(IDbContextFactory<TodoDbContext>
         Random.Shared.NextBytes(randomData);
 
         await DatabaseService.DeleteDatabaseAsync("TestDb.db");
-        var result = await DatabaseService.ImportDatabaseAsync("TestDb.db", randomData);
+        var result = await SqliteWasmWorkerBridge.Instance.ImportDatabaseRawAsync("TestDb.db", randomData);
         if (result != PoolImportResult.OK)
         {
             throw new InvalidOperationException(
-                $"Expected ImportDatabaseAsync to write opaque bytes (OK), got {result}");
+                $"Expected ImportDatabaseRawAsync to write opaque bytes (OK), got {result}");
         }
 
         try

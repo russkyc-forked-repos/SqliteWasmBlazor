@@ -34,7 +34,7 @@ internal class RawDatabaseSequentialImportTest(IDbContextFactory<TodoDbContext> 
             await context.SaveChangesAsync();
         }
 
-        var snapshotA = await DatabaseService.ExportDatabaseAsync(DbName);
+        var snapshotA = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {
@@ -46,11 +46,11 @@ internal class RawDatabaseSequentialImportTest(IDbContextFactory<TodoDbContext> 
             await context.SaveChangesAsync();
         }
 
-        var snapshotB = await DatabaseService.ExportDatabaseAsync(DbName);
+        var snapshotB = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // First import: restore snapshot A (1 item)
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, snapshotA);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, snapshotA);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {
@@ -63,7 +63,7 @@ internal class RawDatabaseSequentialImportTest(IDbContextFactory<TodoDbContext> 
 
         // Second import: restore snapshot B (2 items) — this was the failing case
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, snapshotB);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, snapshotB);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {
@@ -76,7 +76,7 @@ internal class RawDatabaseSequentialImportTest(IDbContextFactory<TodoDbContext> 
 
         // Third import: back to snapshot A — verify it keeps working
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, snapshotA);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, snapshotA);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {

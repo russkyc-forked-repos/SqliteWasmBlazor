@@ -117,6 +117,31 @@ export async function readStagingFile(name: string): Promise<File> {
 }
 
 /**
+ * Read one slice of a finished staging file. The File is disk-backed and
+ * `slice()` is lazy, so only the requested range is materialised — this is
+ * how an export reaches a caller-supplied Stream without either side ever
+ * holding the whole file. Returns fewer bytes than asked for at EOF.
+ */
+export async function readStagingSlice(
+    name: string, offset: number, length: number): Promise<Uint8Array> {
+    const file = await readStagingFile(name);
+    const slice = file.slice(offset, offset + length);
+    return new Uint8Array(await slice.arrayBuffer());
+}
+
+/**
+ * Drop a staging file the caller is done draining. The download path cannot
+ * do this — an anchor download reads its File lazily, so it leaves the entry
+ * to the init sweep — but a caller that has read the bytes itself knows when
+ * they are gone, and a session doing repeated exports should not accumulate
+ * them.
+ */
+export async function deleteStagingFile(name: string): Promise<void> {
+    const dir = await stagingDir(false);
+    await dir.removeEntry(name);
+}
+
+/**
  * Remove every staging leftover from previous sessions. Called once on
  * worker init, before any export can open a new staging file.
  */

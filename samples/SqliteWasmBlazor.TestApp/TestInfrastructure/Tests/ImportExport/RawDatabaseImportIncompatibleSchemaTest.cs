@@ -22,7 +22,7 @@ internal class RawDatabaseImportIncompatibleSchemaTest(IDbContextFactory<TodoDbC
         }
 
         // Step 1: Export the current valid database to have a reference
-        var validBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var validBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Re-open after export
         await using (var context = await Factory.CreateDbContextAsync())
@@ -41,10 +41,10 @@ internal class RawDatabaseImportIncompatibleSchemaTest(IDbContextFactory<TodoDbC
         }
 
         // Export this incompatible DB
-        var incompatibleBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var incompatibleBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Step 3: Restore the valid database first
-        await DatabaseService.ImportDatabaseAsync(DbName, validBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, validBytes);
 
         // Re-open
         await using (var context = await Factory.CreateDbContextAsync())
@@ -69,7 +69,7 @@ internal class RawDatabaseImportIncompatibleSchemaTest(IDbContextFactory<TodoDbC
 
         // Step 5: Now try importing the incompatible bytes and verify TodoItems is missing
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, incompatibleBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, incompatibleBytes);
 
         // Re-open
         await using (var verifyContext = await Factory.CreateDbContextAsync())
@@ -106,7 +106,7 @@ internal class RawDatabaseImportIncompatibleSchemaTest(IDbContextFactory<TodoDbC
 
         // Step 6: Restore valid DB for cleanup
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, validBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, validBytes);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {

@@ -12,7 +12,18 @@ namespace SqliteWasmBlazor;
 internal sealed partial class SqliteWasmWorkerBridge
 {
     /// <summary>
-    /// Import a raw .db file into OPFS SAHPool storage.
+    /// Write raw bytes into a pool slot, whole and from managed memory.
+    ///
+    /// <para>
+    /// <b>Not part of the public surface.</b> Every consumer-facing import is
+    /// streamed (<see cref="ImportDatabaseFromStreamAsync"/> /
+    /// <see cref="ImportDatabasesFromStreamAsync"/>) and refuses anything that
+    /// is not a plain SQLite file. This one accepts <em>any</em> bytes, which
+    /// is what makes it the VFS test seam: writing back tampered ciphertext,
+    /// or deliberate garbage, is how the encrypted-at-rest and
+    /// corrupt-database behaviours are exercised. It holds the whole file in
+    /// managed memory, so it is unsuitable for real data.
+    /// </para>
     ///
     /// Auto-detects ciphertext vs plaintext by inspecting the first 16 bytes:
     /// if they are <c>"SQLite format 3\0"</c>, the input is treated as a plain
@@ -28,7 +39,7 @@ internal sealed partial class SqliteWasmWorkerBridge
     /// DB. A failed verify rolls back the import (unlinks the file) and
     /// returns <see cref="PoolImportResult.WRONG_KEY"/>.
     /// </summary>
-    public async Task<PoolImportResult> ImportDatabaseAsync(
+    internal async Task<PoolImportResult> ImportDatabaseRawAsync(
         string databaseName,
         byte[] data,
         CancellationToken cancellationToken = default)
@@ -99,8 +110,22 @@ internal sealed partial class SqliteWasmWorkerBridge
         }
     }
 
-    /// <inheritdoc />
-    public Task<byte[]> ExportDatabaseAsync(
+    /// <summary>
+    /// Read a pool slot's bytes verbatim, whole and into managed memory.
+    ///
+    /// <para>
+    /// <b>Not part of the public surface.</b> The consumer-facing exports
+    /// (<see cref="ExportDatabaseToStreamAsync"/> /
+    /// <see cref="ExportDatabaseToDownloadAsync"/>) emit plain pages, because
+    /// a file only the pool that wrote it can read is not something to hand a
+    /// user. This one emits what is physically on disk — slot-format
+    /// ciphertext on an encrypted pool — which is what lets the VFS tests
+    /// assert that data really is encrypted at rest, and tamper with a slot
+    /// to prove AEAD catches it. It holds the whole file in managed memory,
+    /// so it is unsuitable for real data.
+    /// </para>
+    /// </summary>
+    internal Task<byte[]> ExportDatabaseRawAsync(
         string databaseName,
         CancellationToken cancellationToken = default)
         => SendRawBinaryRequestAsync(
@@ -108,6 +133,86 @@ internal sealed partial class SqliteWasmWorkerBridge
             new { type = "exportDb", database = databaseName, mode = "verbatim" },
             "Export verbatim",
             cancellationToken);
+
+    /// <inheritdoc />
+    public async Task ExportDatabaseToStreamAsync(
+        string databaseName,
+        Stream destination,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            throw new ArgumentException(
+                "databaseName must be non-empty.", nameof(databaseName));
+        }
+        ArgumentNullException.ThrowIfNull(destination);
+
+        await EnsureInitializedAsync(cancellationToken);
+        ThrowIfPoolLocked(
+            PoolOperationRejection.EXPORT_NEEDS_UNLOCK,
+            $"ExportDatabaseToStreamAsync('{databaseName}') rejected: pool is " +
+            "Encrypted+Locked. Unlock first; without the global key the worker " +
+            "can't decrypt slots back to plain pages.");
+
+        // Same worker op the download path drives, so both emit the same
+        // bytes; the difference is only who drains the staging file. The
+        // download hands it to the browser as a disk-backed File and leaves
+        // collection to the next session's sweep — here C# reads it, so it
+        // can be dropped as soon as the last slice is out.
+        var staged = await SendRequestAsync(
+            new { type = "exportDbToStaging", database = databaseName }, cancellationToken);
+        if (string.IsNullOrEmpty(staged.StagingFile))
+        {
+            throw new InvalidOperationException(
+                "exportDbToStaging returned no staging file name.");
+        }
+
+        // Worker closed the DB for a consistent snapshot — mirror that in
+        // the C#-side open set so the next use re-opens cleanly.
+        _openDatabases.Remove(databaseName);
+
+        try
+        {
+            long offset = 0;
+            while (offset < staged.FileSize)
+            {
+                var length = (int)Math.Min(ExportSliceBytes, staged.FileSize - offset);
+                var slice = await SendRawBinaryRequestAsync(
+                    databaseName,
+                    new
+                    {
+                        type = "readStagingSlice",
+                        name = staged.StagingFile,
+                        offset,
+                        length,
+                    },
+                    "Export to stream",
+                    cancellationToken);
+                if (slice.Length == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"ExportDatabaseToStreamAsync: staging file " +
+                        $"'{staged.StagingFile}' ended at {offset} of {staged.FileSize} bytes.");
+                }
+
+                await destination.WriteAsync(slice, cancellationToken);
+                offset += slice.Length;
+            }
+        }
+        finally
+        {
+            await SendRequestAsync(
+                new { type = "deleteStagingFile", name = staged.StagingFile },
+                CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// One staging read per this many bytes. Matches the chunk the import
+    /// pump pushes, so a round trip through both directions holds the same
+    /// managed peak.
+    /// </summary>
+    private const int ExportSliceBytes = 1 << 20;
 
     /// <inheritdoc />
     public async Task ExportDatabaseToDownloadAsync(

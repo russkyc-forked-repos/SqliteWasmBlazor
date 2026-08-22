@@ -12,7 +12,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 /// Building the envelope in C# avoids the export-side anchor-click
 /// download which isn't reachable from in-page test code. Bytes for both
 /// entries come from a single EF-populated DB exported through
-/// <see cref="ISqliteWasmDatabaseService.ExportDatabaseAsync"/>; the
+/// <c>ExportDatabaseBytesAsync</c>; the
 /// envelope packs them under two distinct names. After import, both
 /// names must appear in the pool with byte-for-byte equal contents.
 /// </para>
@@ -61,15 +61,15 @@ internal sealed class DbsEnvelopeRoundTripTest
         byte[] plainBytes;
         try
         {
-            plainBytes = await _databaseService.ExportDatabaseAsync(PrfVfsTestContext.DatabaseName);
+            plainBytes = await _databaseService.ExportDatabaseBytesAsync(PrfVfsTestContext.DatabaseName);
         }
         catch (Exception ex)
         {
-            return $"FAIL[ExportDatabaseAsync]: {ex.GetType().Name}: {ex.Message}";
+            return $"FAIL[ExportDatabaseBytesAsync]: {ex.GetType().Name}: {ex.Message}";
         }
         if (plainBytes.Length == 0)
         {
-            return "FAIL: ExportDatabaseAsync returned empty bytes";
+            return "FAIL: ExportDatabaseBytesAsync returned empty bytes";
         }
 
         // ---- Wipe the pool so the importer has no pre-existing files ------
@@ -104,8 +104,8 @@ internal sealed class DbsEnvelopeRoundTripTest
             return $"FAIL: pool missing '{EntryB}' after import (got [{string.Join(", ", names)}])";
         }
 
-        var a = await _databaseService.ExportDatabaseAsync(EntryA);
-        var b = await _databaseService.ExportDatabaseAsync(EntryB);
+        var a = await _databaseService.ExportDatabaseBytesAsync(EntryA);
+        var b = await _databaseService.ExportDatabaseBytesAsync(EntryB);
         if (!a.AsSpan().SequenceEqual(plainBytes))
         {
             return $"FAIL[{EntryA}]: bytes differ ({a.Length} vs {plainBytes.Length})";

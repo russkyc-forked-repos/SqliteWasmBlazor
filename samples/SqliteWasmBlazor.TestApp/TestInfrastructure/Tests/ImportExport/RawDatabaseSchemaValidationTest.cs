@@ -30,10 +30,10 @@ internal class RawDatabaseSchemaValidationTest(IDbContextFactory<TodoDbContext> 
         }
 
         // Test 2: Export valid DB, import it, validate passes
-        var validBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var validBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, validBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, validBytes);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {
@@ -46,15 +46,15 @@ internal class RawDatabaseSchemaValidationTest(IDbContextFactory<TodoDbContext> 
             await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS TodoItems");
         }
 
-        var incompatibleBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var incompatibleBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Restore valid DB first
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, validBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, validBytes);
 
         // Now import the incompatible one
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, incompatibleBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, incompatibleBytes);
 
         try
         {
@@ -73,7 +73,7 @@ internal class RawDatabaseSchemaValidationTest(IDbContextFactory<TodoDbContext> 
 
         // Restore valid DB for cleanup
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, validBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, validBytes);
 
         // Verify restored DB works
         await using (var context = await Factory.CreateDbContextAsync())

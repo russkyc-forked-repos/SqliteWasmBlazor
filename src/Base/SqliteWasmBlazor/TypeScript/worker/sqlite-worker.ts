@@ -17,6 +17,7 @@ import {
     setSqlite3, setPoolUtil, setBaseHref,
     bulkInsertRows, type BulkInsertHeader,
     openExportStaging, sweepExportStaging,
+    deleteStagingFile, readStagingSlice,
     createDatabaseImportSink,
     createImportSessionHost,
     exportDatabasesToStaging,
@@ -428,6 +429,17 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
 
         case 'exportDbToStaging':
             return await exportDatabaseToStaging(database!);
+
+        case 'readStagingSlice':
+            return {
+                rawBinary: true,
+                data: await readStagingSlice(
+                    (data as any).name, (data as any).offset, (data as any).length),
+            };
+
+        case 'deleteStagingFile':
+            await deleteStagingFile((data as any).name);
+            return { success: true };
 
         case 'importRows':
             if (!binaryPayload) {
@@ -1162,7 +1174,7 @@ async function exportDatabaseToStaging(dbName: string) {
         throw err;
     }
     logger.info(MODULE_NAME, `✓ Exported ${dbName} to staging (${fileSize}B)`);
-    return { stagingFile: staging.name };
+    return { stagingFile: staging.name, fileSize };
 }
 
 /**

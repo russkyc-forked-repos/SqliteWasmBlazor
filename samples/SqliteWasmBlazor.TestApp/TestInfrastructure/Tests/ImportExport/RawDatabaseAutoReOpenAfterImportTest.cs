@@ -34,11 +34,11 @@ internal class RawDatabaseAutoReOpenAfterImportTest(IDbContextFactory<TodoDbCont
             await context.SaveChangesAsync();
         }
 
-        var exportedBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var exportedBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Import — worker closes DB during this operation
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, exportedBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, exportedBytes);
 
         // Directly query via EF Core without any manual open/close dance.
         // This tests that SqliteWasmConnection.State returns Closed (via IsDatabaseOpen check)

@@ -63,7 +63,7 @@ internal sealed class SingleDbValidatedImportAcceptedTest
         byte[] snapshot;
         try
         {
-            snapshot = await _databaseService.ExportDatabaseAsync(dbName);
+            snapshot = await _databaseService.ExportDatabaseBytesAsync(dbName);
         }
         catch (Exception ex)
         {

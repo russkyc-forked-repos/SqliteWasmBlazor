@@ -37,11 +37,11 @@ internal sealed class VfsOnDiskCiphertextTest(
             await ctx.SaveChangesAsync();
         }
 
-        // Dump raw OPFS bytes. ExportDatabaseAsync reads the SAH from
+        // Dump raw OPFS bytes. ExportDatabaseRawAsync reads the SAH from
         // HEADER_OFFSET_DATA onwards, which for our encrypted DBs is the
         // full sequence of 4124-byte encrypted physical slots (ciphertext
         // 4096 + nonce 12 + tag 16).
-        var bytes = await DatabaseService.ExportDatabaseAsync(EncryptedDatabaseName);
+        var bytes = await SqliteWasmWorkerBridge.Instance.ExportDatabaseRawAsync(EncryptedDatabaseName);
 
         // One full physical slot minimum.
         const int PhysicalSlotSize = 4124;

@@ -230,12 +230,58 @@ callers are 21 TestApp files that want bytes in hand for assertions.
   once nothing calls them.
 - `ImportRowsAsync` stays — it is a bulk-row path, not a file path.
 
-**Open decision.** `ImportDatabaseAsync` returns `PoolImportResult`
-(`OK` / `WRONG_KEY` / `EXISTING_DB_REFUSED`); the streamed single-DB import
-returns `Task` and signals by exception. Either give the streamed import the same
-return, or accept exception-only signalling and document it. Exception-only is
-the smaller surface and matches the multi-DB path — recommend that unless a
-consumer branches on the value.
+**Open decision — settled: exception-only.** The streamed single-DB import
+signals by exception and returns `Task`, matching the multi-DB path. Nothing
+branched on the value, and the three codes are not symmetric anyway: everything
+the streamed import can refuse is a property of the source file, not a pool
+state the caller can fix and retry. `PoolImportResult` survives for the guided
+`.eds` import, which really can fail on the key.
+
+**DONE.** `ExportDatabaseToStreamAsync` is on `ISqliteWasmDatabaseService`;
+`ExportDatabaseAsync` and `ImportDatabaseAsync` are off it. Solution builds
+clean, 98/98 Playwright, TS 38 + 43.
+
+**The premise needed one correction, and it is the interesting part of this
+goal.** "Nothing calls them but tests that want bytes in hand" is true of most
+of the 21 files and false of six, which need something no streamed path can
+give:
+
+- `ExportDatabaseAsync` returns the bytes **physically on disk** — slot-format
+  ciphertext on an encrypted pool. `VfsOnDiskCiphertextTest` asserts the
+  plaintext marker does *not* appear in them; that is the encrypted-at-rest
+  proof. `VfsPhysicalLayoutTest` and `VfsPlainRegressionTest` assert slot
+  geometry and pass-through byte-compat the same way.
+- `ImportDatabaseAsync` writes **any** bytes back, opaque ones included.
+  `VfsTamperDetectionTest` flips a byte inside a slot's ciphertext and
+  re-imports to prove AEAD rejects it; two more write deliberate garbage to
+  prove SQLite refuses to open it.
+
+The streamed paths cannot serve either: the export emits plain pages (the plan
+counts removing the ciphertext-out path as a *feature* of this goal — see Goal
+A), and the import validates SQLite magic and page alignment before it writes.
+So deleting the methods outright would have deleted the encrypted-at-rest and
+tamper-detection coverage with them.
+
+They are therefore **retired from the public surface, not from the codebase**:
+`internal ExportDatabaseRawAsync` / `ImportDatabaseRawAsync` on the bridge,
+documented as the VFS test seam, reached through the `InternalsVisibleTo` the
+TestApp already has. Goal 4's actual claim — no consumer can take a
+non-memory-safe file path — holds exactly.
+
+Two smaller notes:
+
+- **`ExportDatabaseToStreamAsync` reuses `exportDbToStaging`** rather than
+  adding a second state-aware slice-and-decrypt loop. The worker stages, C#
+  drains the staging file a slice at a time (new `readStagingSlice` /
+  `deleteStagingFile` ops) and drops it. It costs a temp file and a second pass
+  over the bytes; it buys one exporter with one set of semantics, and the
+  download path is the one that has to be fast.
+- **`SqlQueryResult.FileSize`** is new (the three-place plumbing: result, DTO,
+  copy line). The drain loop needs the *plain* length, which on an encrypted
+  pool is not the source's on-disk size.
+- Tests use `DatabaseBytesExtensions` — `ExportDatabaseBytesAsync` /
+  `ImportDatabaseBytesAsync` over the streamed paths — so the library keeps no
+  bytes-in-hand convenience it does not want to offer.
 
 ### Goal 5 — Split the host seam
 

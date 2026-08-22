@@ -40,7 +40,7 @@ internal class RawDatabaseImportIntoNewTest(IDbContextFactory<TodoDbContext> fac
             await context.SaveChangesAsync();
         }
 
-        var exportedBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var exportedBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Step 2: Delete the database entirely
         await DatabaseService.DeleteDatabaseAsync(DbName);
@@ -53,7 +53,7 @@ internal class RawDatabaseImportIntoNewTest(IDbContextFactory<TodoDbContext> fac
 
         // Step 3: Import into non-existent DB (no backup path)
         await DatabaseService.CloseDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, exportedBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, exportedBytes);
 
         // Step 4: Re-open and verify
         await using (var context = await Factory.CreateDbContextAsync())

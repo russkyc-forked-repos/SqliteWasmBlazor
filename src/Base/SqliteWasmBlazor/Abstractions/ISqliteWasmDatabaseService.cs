@@ -4,16 +4,11 @@
 namespace SqliteWasmBlazor;
 
 /// <summary>
-/// Outcome returned by <see cref="ISqliteWasmDatabaseService.ImportDatabaseAsync"/>
-/// and by the Crypto plane's guided <c>.eds</c> import. Plain (non-opaque) imports
-/// always return <see cref="OK"/> on success and throw on byte-level
-/// failures. Opaque (encrypted) imports go through the refuse-on-existing
-/// + verify-on-write policy: a fresh-path import that AEAD-verifies under
-/// the registered key returns <see cref="OK"/>; an import refused because
-/// a DB already exists at the path returns <see cref="EXISTING_DB_REFUSED"/>;
-/// an import whose slot 0 fails AEAD under the registered key returns
-/// <see cref="WRONG_KEY"/> after the worker has rolled back (unlinked) the
-/// partial file.
+/// Outcome of an import that can fail on the key rather than on the bytes —
+/// the Crypto plane's guided <c>.eds</c> import, and the raw-slot write the
+/// VFS tests use. The streamed imports on this interface do not return it:
+/// they signal by exception, because everything they can refuse is a
+/// property of the source file rather than a state the caller can act on.
 /// </summary>
 public enum PoolImportResult
 {
@@ -41,18 +36,22 @@ public enum PoolImportResult
 
 /// <summary>
 /// Plain SQLite database management on OPFS. Single-DB ops (Exists / Delete
-/// / Rename / Close / Import / Export native <c>.db</c>), the pool-wide
+/// / Rename / Close), the file paths in and out, the pool-wide
 /// <see cref="ListDatabasesAsync"/>, plain bulk row insert
 /// (<see cref="ImportRowsAsync"/>).
 ///
 /// <para>
 /// <b>Audience.</b> Anyone using SQLite-on-OPFS — encryption-aware apps
 /// (which also use <c>IEncryptedSqliteWasmDatabaseService</c>) and
-/// pure plain apps. Per-DB <c>.db</c> bytes from
-/// <see cref="ExportDatabaseAsync"/> open in <c>sqlite3</c>; multi-DB
-/// transfers go through the streaming <c>.dbs</c> envelope
-/// (<see cref="ExportDatabasesToDownloadAsync"/> /
-/// <see cref="ImportDatabasesFromStreamAsync"/>).
+/// pure plain apps.
+/// </para>
+///
+/// <para>
+/// <b>Every file path is memory-flat</b> — one database or many, in or out,
+/// to a Stream or straight to a download. None of them holds the file in
+/// managed memory, so a 250 MB database transfers on a phone. What they
+/// carry is a plain <c>.db</c> (or a <c>.dbs</c> envelope of them), which is
+/// what <c>sqlite3</c> opens and what the import side reads.
 /// </para>
 ///
 /// <para>
@@ -115,46 +114,32 @@ public interface ISqliteWasmDatabaseService
     Task CloseDatabaseAsync(string databaseName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Imports a raw <c>.db</c> file into OPFS. The database is not opened
-    /// after import — caller must re-open when ready (e.g., after cleaning
-    /// up backup files to avoid SAH pool exhaustion).
+    /// Exports a single database into <paramref name="destination"/> without
+    /// the bytes ever entering managed memory whole. The worker writes the
+    /// export into an OPFS staging file and this drains it a slice at a time,
+    /// so the managed peak is one slice (~1 MB) regardless of database size —
+    /// materializing is the caller's explicit choice, made by passing a
+    /// <see cref="System.IO.MemoryStream"/>.
     ///
     /// <para>
-    /// Auto-detects ciphertext vs plaintext via the SQLite-format-3 magic
-    /// bytes. Plain imports allow overwriting an existing DB and always
-    /// return <see cref="PoolImportResult.OK"/> on success. Opaque
-    /// (encrypted) imports are subject to the refuse-on-existing +
-    /// verify-on-write policy and may return
-    /// <see cref="PoolImportResult.EXISTING_DB_REFUSED"/> or
-    /// <see cref="PoolImportResult.WRONG_KEY"/>.
-    /// </para>
-    /// </summary>
-    /// <param name="databaseName">The database filename (e.g., "mydb.db")</param>
-    /// <param name="data">Raw SQLite database bytes (plaintext .db file or
-    /// PRF-VFS slot-format ciphertext)</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    Task<PoolImportResult> ImportDatabaseAsync(string databaseName, byte[] data,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Exports a single database as raw native SQLite bytes — equivalent
-    /// to dumping the on-disk file. Plain DBs return standard SQLite pages
-    /// (<c>sqlite3 file.db</c> opens them); encrypted DBs return slot-format
-    /// ciphertext under the active globalKey (only re-importable on a disk
-    /// holding the same key). The worker closes the DB before exporting
-    /// for a consistent snapshot — caller must re-open afterwards.
-    ///
-    /// <para>
-    /// For multi-DB plain export use
-    /// <see cref="ExportDatabasesToDownloadAsync"/> (a streamed <c>.dbs</c>
-    /// envelope) — that path avoids the managed-byte[] allocation this
-    /// byte[]-returning per-DB primitive still incurs.
+    /// Emits the same bytes as <see cref="ExportDatabaseToDownloadAsync"/>: a
+    /// plain <c>.db</c> file, which is what
+    /// <see cref="ImportDatabaseFromStreamAsync"/> reads on the other end.
+    /// With the Crypto plane loaded the worker is state-aware — a Plain pool
+    /// emits verbatim pages, Encrypted+Unlocked decrypts slot-by-slot. The
+    /// output is therefore plaintext on an encrypted pool; disclose that
+    /// before offering it to a user. The worker closes the database first for
+    /// a consistent snapshot — caller must re-open afterwards.
     /// </para>
     /// </summary>
     /// <param name="databaseName">The database filename (e.g., "mydb.db").</param>
+    /// <param name="destination">Stream the export is written into. Not closed.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Raw native SQLite bytes (plain pages or slot-format ciphertext).</returns>
-    Task<byte[]> ExportDatabaseAsync(string databaseName,
+    /// <exception cref="PoolOperationRejectedException">
+    /// The pool is encrypted and locked
+    /// (<see cref="PoolOperationRejection.EXPORT_NEEDS_UNLOCK"/>).
+    /// </exception>
+    Task ExportDatabaseToStreamAsync(string databaseName, Stream destination,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -162,10 +147,10 @@ public interface ISqliteWasmDatabaseService
     /// bytes ever entering managed memory. The worker copies the on-disk
     /// file in small slices into an OPFS staging file; the bridge lifts the
     /// finished staging entry as a disk-backed <c>File</c> and fires an
-    /// anchor-click download. Memory stays flat regardless of DB size —
-    /// use this instead of <see cref="ExportDatabaseAsync"/> whenever the
-    /// goal is a file download (mobile Safari kills the page on large
-    /// in-memory exports).
+    /// anchor-click download. Memory stays flat regardless of DB size.
+    /// Use this whenever the goal is a file the user saves;
+    /// <see cref="ExportDatabaseToStreamAsync"/> is the same bytes when the
+    /// caller wants them programmatically.
     ///
     /// <para>
     /// With the Crypto plane loaded the worker is state-aware: Plain pools

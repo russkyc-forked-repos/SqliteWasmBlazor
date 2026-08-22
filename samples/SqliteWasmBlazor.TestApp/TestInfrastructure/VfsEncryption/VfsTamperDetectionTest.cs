@@ -35,7 +35,7 @@ internal sealed class VfsTamperDetectionTest(
         // Close worker handle — export below will re-close anyway, but be explicit.
         await DatabaseService.CloseDatabaseAsync(EncryptedDatabaseName);
 
-        var ciphertext = await DatabaseService.ExportDatabaseAsync(EncryptedDatabaseName);
+        var ciphertext = await SqliteWasmWorkerBridge.Instance.ExportDatabaseRawAsync(EncryptedDatabaseName);
         // Physical slot is 4124 bytes (ciphertext 4096 + nonce 12 + tag 16).
         // We need at least two slots so we can tamper slot 1 cleanly.
         const int PhysicalSlotSize = 4124;
@@ -55,7 +55,7 @@ internal sealed class VfsTamperDetectionTest(
         ciphertext[tamperOffset] ^= 0xFF;
 
         // Re-import — the ciphertext bytes don't start with "SQLite format 3",
-        // so ImportDatabaseAsync auto-detects them as opaque and skips both
+        // so the raw import auto-detects them as opaque and skips both
         // the header check and the byte-18 WAL patch that would otherwise
         // invalidate the AEAD tag on slot 0.
         //
@@ -65,7 +65,7 @@ internal sealed class VfsTamperDetectionTest(
         // tamper detection we're testing surfaces at the next read instead,
         // which is exactly the path EF takes when reopening the DB below.
         await DatabaseService.DeleteDatabaseAsync(EncryptedDatabaseName);
-        var importOutcome = await DatabaseService.ImportDatabaseAsync(EncryptedDatabaseName, ciphertext);
+        var importOutcome = await SqliteWasmWorkerBridge.Instance.ImportDatabaseRawAsync(EncryptedDatabaseName, ciphertext);
         if (importOutcome != PoolImportResult.OK)
         {
             return $"Expected import outcome OK (no key registered → no verify), got {importOutcome}";

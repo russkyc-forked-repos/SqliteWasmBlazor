@@ -73,15 +73,15 @@ internal sealed class SingleDbStreamingRoundTripTest
         byte[] plainBytes;
         try
         {
-            plainBytes = await _databaseService.ExportDatabaseAsync(dbName);
+            plainBytes = await _databaseService.ExportDatabaseBytesAsync(dbName);
         }
         catch (Exception ex)
         {
-            return $"FAIL: ExportDatabaseAsync threw {ex.GetType().Name}: {ex.Message}";
+            return $"FAIL: ExportDatabaseBytesAsync threw {ex.GetType().Name}: {ex.Message}";
         }
         if (plainBytes.Length == 0)
         {
-            return "FAIL: ExportDatabaseAsync returned empty bytes";
+            return "FAIL: ExportDatabaseBytesAsync returned empty bytes";
         }
 
         // ---- Phase 2: Plain → Plain streaming import round-trip ----------

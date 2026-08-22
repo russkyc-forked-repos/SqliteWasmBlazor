@@ -65,7 +65,7 @@ internal sealed class DbsValidatedImportRejectedTest
         byte[] foreignBytes;
         try
         {
-            foreignBytes = await _databaseService.ExportDatabaseAsync(ForeignDbName);
+            foreignBytes = await _databaseService.ExportDatabaseBytesAsync(ForeignDbName);
         }
         catch (Exception ex)
         {

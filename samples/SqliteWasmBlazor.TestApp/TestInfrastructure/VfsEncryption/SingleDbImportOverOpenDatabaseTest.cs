@@ -69,7 +69,7 @@ internal sealed class SingleDbImportOverOpenDatabaseTest
         {
             // Closes the DB for a consistent read — the reopen below is what
             // puts the handle back into the worker's cache.
-            snapshot = await _databaseService.ExportDatabaseAsync(dbName);
+            snapshot = await _databaseService.ExportDatabaseBytesAsync(dbName);
         }
         catch (Exception ex)
         {
@@ -77,7 +77,7 @@ internal sealed class SingleDbImportOverOpenDatabaseTest
         }
         if (snapshot.Length == 0)
         {
-            return "FAIL[Export]: ExportDatabaseAsync returned empty bytes";
+            return "FAIL[Export]: ExportDatabaseBytesAsync returned empty bytes";
         }
 
         // ---- Phase 2: rewrite the rows, leaving the DB open --------------

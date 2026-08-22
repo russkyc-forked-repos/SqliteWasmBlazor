@@ -10,7 +10,7 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure.VfsEncryption;
 ///
 /// 1. Have a length that is an exact multiple of the 4124-byte physical slot
 ///    size (SAHPool's 4096-byte per-file header is stripped by
-///    <c>ExportDatabaseAsync</c>).
+///    <c>ExportDatabaseRawAsync</c>).
 /// 2. Span at least two slots (pages) so we exercise boundary math.
 /// 3. Support a full read-back — if the logical→physical translation in
 ///    xFileSize / xTruncate were off by even one byte, SQLite would miscount
@@ -43,7 +43,7 @@ internal sealed class VfsPhysicalLayoutTest(
             await ctx.SaveChangesAsync();
         }
 
-        var bytes = await DatabaseService.ExportDatabaseAsync(EncryptedDatabaseName);
+        var bytes = await SqliteWasmWorkerBridge.Instance.ExportDatabaseRawAsync(EncryptedDatabaseName);
 
         if (bytes.Length == 0)
         {

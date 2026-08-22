@@ -42,7 +42,7 @@ internal class RawDatabaseImportWithBackupTest(IDbContextFactory<TodoDbContext> 
             await context.SaveChangesAsync();
         }
 
-        var exportedBytes = await DatabaseService.ExportDatabaseAsync(DbName);
+        var exportedBytes = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Re-open after export (export closes the DB)
         await using (var context = await Factory.CreateDbContextAsync())
@@ -87,7 +87,7 @@ internal class RawDatabaseImportWithBackupTest(IDbContextFactory<TodoDbContext> 
         }
 
         // Import the exported data
-        await DatabaseService.ImportDatabaseAsync(DbName, exportedBytes);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, exportedBytes);
 
         // Re-open
         await using (var context = await Factory.CreateDbContextAsync())

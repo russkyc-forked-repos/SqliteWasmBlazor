@@ -44,6 +44,13 @@ internal sealed class SqlQueryResult
     /// OPFS staging file name to hand to <c>downloadStagedExport</c>.
     /// </summary>
     public string? StagingFile { get; set; }
+    /// <summary>
+    /// Byte count of the staging file named by <see cref="StagingFile"/>.
+    /// This is the <em>plain</em> length, which on an encrypted pool is not
+    /// the source's on-disk size — a caller draining the file needs the
+    /// number it will actually read.
+    /// </summary>
+    public long FileSize { get; set; }
 }
 
 /// <summary>
@@ -53,7 +60,8 @@ internal sealed class SqlQueryResult
 /// surface lives in sibling partials:
 /// <list type="bullet">
 ///   <item><c>SetEncryptionKeyAsync</c> et al. — <c>.Encryption.cs</c></item>
-///   <item><see cref="ImportDatabaseAsync"/> et al. — <c>.Persistence.cs</c></item>
+///   <item><see cref="ImportRowsAsync"/> et al. — <c>.Persistence.cs</c></item>
+///   <item><see cref="ImportDatabaseFromStreamAsync"/> et al. — <c>.Streaming.cs</c></item>
 ///   <item><c>DeltaExportAsync</c> et al. — <c>.Delta.cs</c></item>
 /// </list>
 /// </summary>
@@ -723,6 +731,7 @@ internal sealed partial class SqliteWasmWorkerBridge : ISqliteWasmDatabaseServic
                     ManifestBody = response.ManifestBody,
                     ManifestSchemaVersion = response.ManifestSchemaVersion,
                     StagingFile = response.StagingFile,
+                    FileSize = response.FileSize,
                 };
 
                 tcs.TrySetResult(result);
@@ -1123,6 +1132,10 @@ internal sealed class WorkerResponse
     /// Set by <c>exportDbToStaging</c>, see <see cref="SqlQueryResult.StagingFile"/>.
     /// </summary>
     public string? StagingFile { get; set; }
+    /// <summary>
+    /// Set by <c>exportDbToStaging</c>, see <see cref="SqlQueryResult.FileSize"/>.
+    /// </summary>
+    public long FileSize { get; set; }
 }
 
 /// <summary>

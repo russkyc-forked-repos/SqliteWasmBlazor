@@ -34,14 +34,14 @@ internal class RawDatabaseImportThenExportTest(IDbContextFactory<TodoDbContext> 
             await context.SaveChangesAsync();
         }
 
-        var originalExport = await DatabaseService.ExportDatabaseAsync(DbName);
+        var originalExport = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         // Clear the DB and import the export
         await DatabaseService.DeleteDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, originalExport);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, originalExport);
 
         // Immediately export again (import → export chain)
-        var reExport = await DatabaseService.ExportDatabaseAsync(DbName);
+        var reExport = await DatabaseService.ExportDatabaseBytesAsync(DbName);
 
         if (reExport.Length == 0)
         {
@@ -50,7 +50,7 @@ internal class RawDatabaseImportThenExportTest(IDbContextFactory<TodoDbContext> 
 
         // Import the re-export into a clean DB and verify data integrity
         await DatabaseService.DeleteDatabaseAsync(DbName);
-        await DatabaseService.ImportDatabaseAsync(DbName, reExport);
+        await DatabaseService.ImportDatabaseBytesAsync(DbName, reExport);
 
         await using (var context = await Factory.CreateDbContextAsync())
         {

@@ -43,7 +43,7 @@ internal class RawDatabaseExportImportTest(IDbContextFactory<TodoDbContext> fact
         // (CreateDbContextAsync opens a new connection each time, so just dispose)
 
         // Export raw db
-        var exportedBytes = await DatabaseService.ExportDatabaseAsync("TestDb.db");
+        var exportedBytes = await DatabaseService.ExportDatabaseBytesAsync("TestDb.db");
 
         // Verify exported bytes start with SQLite header ("SQLite format 3\0")
         if (exportedBytes.Length < 16)
@@ -61,7 +61,7 @@ internal class RawDatabaseExportImportTest(IDbContextFactory<TodoDbContext> fact
         await DatabaseService.DeleteDatabaseAsync("TestDb.db");
 
         // Import raw db
-        await DatabaseService.ImportDatabaseAsync("TestDb.db", exportedBytes);
+        await DatabaseService.ImportDatabaseBytesAsync("TestDb.db", exportedBytes);
 
         // Re-open via new DbContext, verify 3 items with correct data
         await using (var context = await Factory.CreateDbContextAsync())

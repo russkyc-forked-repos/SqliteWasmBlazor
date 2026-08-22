@@ -32,8 +32,10 @@ import {
     importPoolStreamCommit,
 } from './vfs-prf/import-streamed';
 import {
+    deleteStagingFile,
     openExportStaging,
     readStagingFile,
+    readStagingSlice,
     sweepExportStaging,
     type ExportStagingFile,
     DECRYPT_TMP_SUFFIX,
@@ -480,9 +482,10 @@ async function importPoolStreamCommitHandler(
  * can re-import. Every chunk is written straight into an OPFS staging file
  * via a sync access handle, so JS heap peak per op stays ~1 MB and no bytes
  * accumulate main-thread-side regardless of DB size. Returns the staging
- * file name.
+ * file name and the plain byte count written into it.
  */
-async function exportDatabaseToStaging(dbName: string): Promise<string> {
+async function exportDatabaseToStaging(
+    dbName: string): Promise<{ stagingFile: string; fileSize: number }> {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
@@ -541,8 +544,12 @@ async function exportDatabaseToStaging(dbName: string): Promise<string> {
             }
         }
 
+        // position() is the plain byte count — what a reader draining the
+        // staging file will see, which is not the source's on-disk size
+        // when the pool is encrypted.
+        const plainSize = staging.position();
         staging.finish();
-        return staging.name;
+        return {stagingFile: staging.name, fileSize: plainSize};
     } catch (err) {
         await staging.abort();
         throw err;
@@ -848,7 +855,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // Plane-1-compatible request shape (base library's
             // ExportDatabaseToDownloadAsync). State-aware: Encrypted+
             // Unlocked decrypts to plain pages, Plain copies verbatim.
-            return {stagingFile: await exportDatabaseToStaging(database!)};
+            return await exportDatabaseToStaging(database!);
 
         case 'setGlobalEncryptionKey':
             // Install the worker-wide key. Every page I/O across every open
@@ -959,6 +966,17 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // decrypts to plain pages, writes back as plain. Bytes never
             // leave the worker.
             return await decryptDatabaseInPlace(database!);
+
+        case 'readStagingSlice':
+            return {
+                rawBinary: true,
+                data: await readStagingSlice(
+                    (data as any).name, (data as any).offset, (data as any).length),
+            };
+
+        case 'deleteStagingFile':
+            await deleteStagingFile((data as any).name);
+            return {success: true};
 
         case 'importRows':
             if (!binaryPayload) {

@@ -54,7 +54,7 @@ internal class RawDatabaseBackupRestoreOnFailureTest(IDbContextFactory<TodoDbCon
         await DatabaseService.CloseDatabaseAsync(DbName);
         await DatabaseService.RenameDatabaseAsync(DbName, BackupName);
 
-        // Step 3: Attempt import with invalid data. ImportDatabaseAsync
+        // Step 3: Attempt import with invalid data. ImportDatabaseRawAsync
         // auto-detects by the "SQLite format 3" magic and accepts opaque
         // bytes (required for encrypted-DB backup restore) — so the import
         // itself succeeds. The error surfaces on the next open attempt, at
@@ -62,7 +62,7 @@ internal class RawDatabaseBackupRestoreOnFailureTest(IDbContextFactory<TodoDbCon
         var invalidData = new byte[1024];
         Random.Shared.NextBytes(invalidData);
 
-        await DatabaseService.ImportDatabaseAsync(DbName, invalidData);
+        await SqliteWasmWorkerBridge.Instance.ImportDatabaseRawAsync(DbName, invalidData);
 
         try
         {
