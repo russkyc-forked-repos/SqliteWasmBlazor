@@ -34,14 +34,29 @@ The public API surface is intentionally kept minimal to reduce the risk of break
 
 ## What's New
 
-### 0.9.3-pre — Memory-flat exports, validated imports, `Disk` → `Pool`
+### 0.9.3-pre — Memory-flat file paths, validated imports, `Disk` → `Pool`
 
+- **Every file path is memory-flat, on the plain plane** —
+  `ISqliteWasmDatabaseService` now carries the whole set: one database or many,
+  in or out, to a `Stream` or straight to a download. None of them holds the
+  file in managed memory, so a 250 MB database transfers on a phone without the
+  Crypto package.
+
+  ```csharp
+  await DatabaseService.ExportDatabaseToDownloadAsync("TodoDb.db", "backup.db");
+  await DatabaseService.ExportDatabasesToDownloadAsync(names, "backup.dbs");
+  await DatabaseService.ExportDatabaseToStreamAsync("TodoDb.db", destination);
+  await DatabaseService.ImportDatabaseFromStreamAsync("TodoDb.db", src, size, validate);
+  await DatabaseService.ImportDatabasesFromStreamAsync(src, size, validate);
+  ```
+
+  The worker behind them is state-aware on its own: with the Crypto package
+  loaded it rekeys on the way in and decrypts on the way out, so the same calls
+  serve a plain pool and an encrypted one.
 - **Exports stage through OPFS** — the worker writes the bytes into a staging
   file through a synchronous access handle and the browser saves from that
   disk-backed `File`, so peak memory stays flat whatever the database weighs.
-  Covers `.db`, `.dbs` and `.eds`. New on the plain plane:
-  `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(name, filename)`
-  — a memory-flat download without the Crypto package.
+  Covers `.db`, `.dbs` and `.eds`.
 - **Large imports are pushed into the worker** — C# streams the picked file
   one chunk at a time instead of assembling it as a `Blob` first, so neither
   heap ever holds the whole database. That assembly is what made large `.db`
@@ -55,7 +70,8 @@ The public API surface is intentionally kept minimal to reduce the risk of break
   (`IHostDatabaseService.ValidateSchemaAsync`); a refusal renames the parks
   back, metadata-only, so what returns is byte-identical. Every successful
   import re-runs the host's migrations (`MigrateAsync`) and re-creates owned
-  databases the file omitted (`OwnedDatabases`).
+  databases the file omitted (`OwnedDatabases`) — inside the import path, so it
+  holds whether or not you use the drop-in UI.
 - **One scope per affordance** — the drop-in UI gives each database its own
   row (save it, replace it from a `.db`, empty it) and moves whole-pool
   operations to their own card. Pool-state preconditions now throw
@@ -155,20 +171,36 @@ and assurance summary: [`docs/security/`](docs/security/README.md).
 
   Also breaking in this release:
 
-  - `ISqliteWasmDatabaseService.ExportAllDatabasesAsync` and `ImportAllDatabasesAsync`
-    are gone — a whole pool returned as one managed `byte[]` is exactly the memory
-    profile this release removes. The streamed replacements,
-    `ExportDatabasesToDownloadAsync` / `ImportDatabasesFromStreamAsync`, live on
-    `IEncryptedSqliteWasmDatabaseService` in `SqliteWasmBlazor.Crypto`; that plane
-    handles plain pools too, so adding the package is the migration path.
+  - Every managed-`byte[]` file method on `ISqliteWasmDatabaseService` is gone —
+    holding a whole database in memory is exactly the profile this release removes.
+    The replacements are on the same interface, so nothing has to take another
+    package:
+
+    | Before | After |
+    |--------|-------|
+    | `ExportAllDatabasesAsync` | `ExportDatabasesToDownloadAsync` |
+    | `ImportAllDatabasesAsync` | `ImportDatabasesFromStreamAsync` |
+    | `ExportDatabaseAsync` | `ExportDatabaseToStreamAsync` (or `ExportDatabaseToDownloadAsync`) |
+    | `ImportDatabaseAsync` | `ImportDatabaseFromStreamAsync` |
+
+    `ExportDatabaseToStreamAsync` writes plain pages, the same bytes the download
+    path emits — where `ExportDatabaseAsync` returned what was physically on disk,
+    which on an encrypted pool was ciphertext only that pool could read. Tests that
+    want the bytes in hand pass a `MemoryStream`. `ImportDatabaseFromStreamAsync`
+    signals by exception instead of returning `PoolImportResult`.
   - `SqliteWasmBlazor.Components` no longer exposes
     `FileOperationsInterop.DownloadMessagePackFile`, for the same reason. Use
     `ExportDatabaseToDownloadAsync`.
   - `ImportDatabaseFromStreamAsync` and `ImportDatabasesFromStreamAsync` take a
     `validateImported` delegate **before** `cancellationToken`; callers that passed
     the token positionally must name it.
-  - `IHostDatabaseService` implementations must add `OwnedDatabases`, `MigrateAsync`
-    and `ValidateSchemaAsync`.
+  - `IHostDatabaseService` moved to `SqliteWasmBlazor` and now declares only
+    `OwnedDatabases`, `MigrateAsync` and `ValidateSchemaAsync` — its whole contract
+    was already written in base types. `IsAvailable` and `ResetAsync` are on
+    `IHostRecoveryService : IHostDatabaseService` in `SqliteWasmBlazor.Crypto.UI`,
+    which the panels resolve. Hosts implement the derived interface and register it
+    once with `AddHostRecoveryService<THost>()` (or `AddHostDatabaseService<THost>()`
+    with no UI); that binds one instance to both.
   - `EncryptionModel.DatabaseNames` is replaced by `Databases` (rows carrying `Owned`
     and `Present`), `ExportDatabase` (one row) joins `ExportDatabases` (bundle), and
     `ProposeDatabaseName` is gone with the free-text import target.
@@ -255,11 +287,18 @@ public interface ISqliteWasmDatabaseService
     Task RenameDatabaseAsync(string oldName, string newName, CancellationToken ct = default);
     Task CloseDatabaseAsync(string databaseName, CancellationToken ct = default);
 
-    // Raw .db file import/export
-    Task<PoolImportResult> ImportDatabaseAsync(string databaseName, byte[] data,
+    // File paths — every one memory-flat. One database or many, in or out.
+    Task ExportDatabaseToStreamAsync(string databaseName, Stream destination,
         CancellationToken ct = default);
-    Task<byte[]> ExportDatabaseAsync(string databaseName, CancellationToken ct = default);
     Task ExportDatabaseToDownloadAsync(string databaseName, string filename,
+        CancellationToken ct = default);
+    Task ExportDatabasesToDownloadAsync(IReadOnlyList<string> databaseNames,
+        string filename, CancellationToken ct = default);
+    Task ImportDatabaseFromStreamAsync(string databaseName, Stream stream, long size,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
+        CancellationToken ct = default);
+    Task ImportDatabasesFromStreamAsync(Stream envelopeStream, long envelopeSize,
+        Func<string, CancellationToken, ValueTask>? validateImported = null,
         CancellationToken ct = default);
 
     // V2 bulk row import (worker-side prepared statement loop)
@@ -283,24 +322,30 @@ public interface ISqliteWasmDatabaseService
         await context.Database.MigrateAsync();
     }
 
-    private async Task ExportAsync()
-    {
-        // Export raw .db file (closes DB for consistent snapshot, auto-reopens on next query)
-        byte[] data = await DatabaseService.ExportDatabaseAsync("MyApp.db");
-    }
-
     private async Task DownloadAsync()
     {
-        // Same snapshot, straight to a browser download — the worker stages the
-        // file in OPFS and the browser saves it from disk, so memory stays flat
-        // no matter how large the database is.
+        // Straight to a browser download — the worker stages the file in OPFS
+        // and the browser saves it from disk, so memory stays flat no matter
+        // how large the database is. Closes the DB for a consistent snapshot;
+        // the next query re-opens it.
         await DatabaseService.ExportDatabaseToDownloadAsync("MyApp.db", "backup.db");
     }
 
-    private async Task ImportAsync(byte[] data)
+    private async Task ExportAsync(Stream destination)
     {
-        // Import raw .db file (validates SQLite header)
-        await DatabaseService.ImportDatabaseAsync("MyApp.db", data);
+        // Same bytes, to a Stream you own. Nothing materialises the file —
+        // pass a MemoryStream if you want it in memory, and mean it.
+        await DatabaseService.ExportDatabaseToStreamAsync("MyApp.db", destination);
+    }
+
+    private async Task ImportAsync(IBrowserFile file)
+    {
+        // Streamed in one chunk at a time. `validateImported` (omitted here)
+        // parks what it replaces and hands you the imported database to
+        // inspect before it counts.
+        await using var stream = file.OpenReadStream(maxAllowedSize: file.Size);
+        await DatabaseService.ImportDatabaseFromStreamAsync(
+            "MyApp.db", stream, file.Size);
     }
 }
 ```

@@ -1,5 +1,11 @@
 # Plane re-homing: memory-safe I/O to base, encryption to Crypto
 
+> **Closed 2026-08-22.** Every goal shipped. What remains open is not in this
+> tree: the iPad re-verify (the device baseline attaches to the code, which
+> moved) and the plain-plane Playwright gap noted under Goal 3 — the suite
+> registers the Crypto plane, so base's own worker cases are bundled but
+> unexercised.
+
 The streamed import/export paths were developed on plane 2 because that is where
 the forked SAHPool VFS lived, not because they need encryption. The result is a
 public surface where a plain consumer cannot import a large database without
@@ -414,6 +420,32 @@ Goal 3 touches this only by renaming the call site from `Session.` to
 - `docs/crypto-vfs.md`, `docs/bulk-import-export.md`, `docs/faq.md`: re-point the
   import/export references at the base plane.
 - ROADMAP + memory update as part of the final commit.
+
+**DONE.** All five docs revised once, as a set:
+
+- **README** — the 0.9.3-pre block leads with the memory-flat surface as a plain-plane
+  capability and lists all five calls. The breaking-changes migration table now maps
+  four removed methods to replacements on the *same* interface; the "adding the package
+  is the migration path" sentence is gone. The `ISqliteWasmDatabaseService` reference
+  block and its usage snippets show the streamed shapes.
+- **CHANGELOG** — a new lead section, *Moving Databases Around Is a Plain-Plane Job*,
+  states the re-homing and the reasoning; the three `**Breaking**` blocks were rewritten
+  in place rather than layered. The older sections that reference the `byte[]` API in
+  *their own* release are untouched — that is history, and it was accurate then.
+- **`docs/advanced-features.md`** — "Raw Database Import/Export" is now "Moving
+  Databases In and Out", covering all five paths, the `validateImported` contract, the
+  plaintext-export disclosure, and the host seam. "Safe Import Pattern" no longer shows
+  a hand-rolled rename dance — it says why the built-in park/restore cannot be matched
+  by one.
+- **`docs/crypto-vfs.md`** — "Auto-detection on import" became "Opaque writes", since
+  the public paths take plain SQLite only and the auto-detecting write is now the
+  internal test seam. The after-the-import paragraph says the import path calls
+  `MigrateAsync` itself.
+- **`docs/faq.md`** — the export answer names the plain-plane surface and says no extra
+  package is needed.
+
+`docs/bulk-import-export.md` needed nothing: it documents `ImportRowsAsync`, which is a
+row path and never moved.
 
 ## Cross-cutting
 

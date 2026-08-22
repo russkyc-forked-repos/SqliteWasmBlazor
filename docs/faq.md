@@ -14,7 +14,13 @@ Mobile Chrome (Android 108+) and Safari (iOS 16.4+) both support OPFS with synch
 
 ## How do I export/backup my database?
 
-The database files are in OPFS at `/databases/YourDb.db`. SqliteWasmBlazor provides full export/import functionality via the `ISqliteWasmDatabaseService` interface. See the Demo app's TodoImportExport component for a complete implementation example with MessagePack serialization.
+The database files are in OPFS at `/databases/YourDb.db`. `ISqliteWasmDatabaseService` carries the whole file surface — one database or many, in or out, to a `Stream` or straight to a browser download — and none of it holds the file in managed memory, so a large database transfers on a phone:
+
+```csharp
+await DatabaseService.ExportDatabaseToDownloadAsync("TodoDb.db", "backup.db");
+```
+
+No extra package is needed; with `SqliteWasmBlazor.Crypto` loaded the same calls decrypt on the way out and re-encrypt on the way in. See [Moving Databases In and Out](advanced-features.md#moving-databases-in-and-out) for the full set, and the Demo app's encryption page for a working UI.
 
 ## Is this compatible with existing EF Core code?
 

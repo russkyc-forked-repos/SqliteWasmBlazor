@@ -356,14 +356,20 @@ the database's) and `Dbs_ValidatedImport_RejectedBySchemaCheck`.
 **After the import.** The bytes that landed decide what the pool holds;
 the schema the app expects is whatever its model says today. Hosts
 implement `IHostDatabaseService.MigrateAsync` to re-run migrations for
-the databases they own, and the encryption panel calls it after every
-successful import — which also re-creates an owned database an import
-omitted, before the next query opens a schema-less one in its place.
+the databases they own, and **the import paths call it themselves** — the
+`.eds` guided import included — so the reconcile happens whether or not
+the app uses the drop-in UI. It also re-creates an owned database an
+import omitted, before the next query opens a schema-less one in its
+place.
 
-## Auto-detection on import
+## Opaque writes
 
-`ImportDatabaseAsync` auto-detects ciphertext vs plaintext by
-inspecting the first 16 bytes:
+The public import paths take plain SQLite files only: the worker checks the
+format-3 magic and page alignment before it writes anything, so a truncated or
+crafted source is refused with the pool intact.
+
+The raw slot write underneath them accepts any bytes and auto-detects by
+inspecting the first 16:
 
 - `"SQLite format 3\0"` present → plain SQLite file, normal path with
   the byte-18 WAL-mode patch.
@@ -371,9 +377,11 @@ inspecting the first 16 bytes:
   header validation and the byte-18 patch are skipped because they
   would corrupt the AEAD tag at slot 0.
 
-Garbage bytes that are neither a valid SQLite file nor ciphertext will
-land in OPFS and fail on the next open (either `SQLITE_NOTADB` if no
-key is registered, or `SQLITE_IOERR` if one is and AEAD auth fails).
+That path is internal — it is how the VFS tests write tampered ciphertext back
+to prove AEAD catches it, and deliberate garbage to prove SQLite refuses to
+open it. Garbage that lands this way fails on the next open (either
+`SQLITE_NOTADB` if no key is registered, or `SQLITE_IOERR` if one is and AEAD
+auth fails).
 
 ## Mode-mismatch behaviour
 

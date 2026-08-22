@@ -7,6 +7,58 @@ All notable changes to SqliteWasmBlazor are documented in this file.
 ### A Note on the Development Delay
 > **A quick update from the maintainer:** You might have noticed a lack of updates over the past few weeks. My development pipeline was hit hard when Anthropic made their services more or less unusable for my workflow. That situation has since been resolved — development is back on **Claude (Opus 5 / Fable 5)** and fully on track again!
 
+### Moving Databases Around Is a Plain-Plane Job
+
+The streamed import/export paths were built on the encryption plane, because
+that is where the forked SAHPool VFS lived — not because moving a database
+needs a key. The result was a public surface where a plain consumer could not
+import a large database without taking `SqliteWasmBlazor.Crypto`, and where
+`ExportDatabaseToDownloadAsync` existed twice with two implementations.
+
+They now live on `ISqliteWasmDatabaseService`, which carries the whole
+symmetric set — one database or many, in or out, to a `Stream` or straight to a
+download — with no path that holds a file in managed memory:
+
+```csharp
+Task ExportDatabaseToDownloadAsync(string name, string filename, CT);
+Task ExportDatabasesToDownloadAsync(IReadOnlyList<string> names, string filename, CT);
+Task ExportDatabaseToStreamAsync(string name, Stream destination, CT);
+Task ImportDatabaseFromStreamAsync(string name, Stream src, long size, Func<...>? validate, CT);
+Task ImportDatabasesFromStreamAsync(Stream src, long size, Func<...>? validate, CT);
+```
+
+`IEncryptedSqliteWasmDatabaseService` keeps what is actually about encryption:
+the lifecycle (`Unlock` / `Lock` / `EnterEncrypted` / `LeaveEncrypted` /
+`ResetPool`) and the two `.eds` envelope paths.
+
+- **One worker, two behaviours, no branch at the call site.** The worker behind
+  these dispatches on whether a global key is installed: a plain pool writes and
+  reads plain pages, an unlocked encrypted pool rekeys on the way in and
+  decrypts on the way out. Both packages ship the same machinery — the `.dbs`
+  codec, the chunk-session pump, the park/restore replace and the staging
+  helpers moved into a shared `worker-common`, where encryption enters as an
+  injected transform rather than an `if`.
+- **The last `byte[]` file methods are gone.** `ExportDatabaseAsync` and
+  `ImportDatabaseAsync` materialised a whole database in managed memory.
+  `ExportDatabaseToStreamAsync` replaces the first — same bytes as the download
+  path, written into a `Stream` you own, so materialising is an explicit choice
+  you make by passing a `MemoryStream`.
+- **Migrate-after-import is part of the import.** The invariant "every
+  successful import re-runs the host's migrations and re-creates owned databases
+  the file omitted" was implemented in the drop-in encryption panel, so it held
+  only for hosts that used the UI. It now runs inside the import paths, the
+  guided `.eds` import included.
+- **The host seam split along the plane boundary.** `IHostDatabaseService` —
+  `OwnedDatabases`, `MigrateAsync`, `ValidateSchemaAsync` — is on
+  `SqliteWasmBlazor`, since its whole contract was already written in base
+  types. `IHostRecoveryService : IHostDatabaseService` adds `IsAvailable` and
+  `ResetAsync` for the panels that offer a way back from a broken boot. Hosts
+  write one class and register it once with `AddHostRecoveryService<THost>()`.
+
+Three packages are still three packages: `Crypto.UI` pulls MudBlazor and
+RxBlazorV2, and the crypto worker bundle is 3.7 MB. What moved is the placement
+of individual types, which had drifted.
+
 ### Large Imports on iOS: The File Goes Into the Worker, and a Park Is Never the Last Copy
 
 Importing a large `.db` on an iPad ended with `Failed to rename database from TodoDb.db.import-park to TodoDb.db`, no database under its own name, and a pool that stayed broken for the rest of the session. Small files were fine, which is the tell: this was about how much of the file existed at once.
@@ -29,24 +81,24 @@ Importing went through a single file picker whose extension silently decided how
 - **An imported file has to fit the database it is going into.** Nothing checked, so a TodoDb backup could be imported into NotesDb — and a `.dbs` bundle exported from another app could replace every database at once — leaving the app querying tables that were no longer there. Both import paths now take an optional `validateImported` delegate: what the import would replace is parked under a suffixed name, the incoming file is written under the database's own name, and the delegate opens it and decides. On refusal the imported files are deleted and the parks renamed back — metadata-only, so what returns is byte-identical. `IHostDatabaseService.ValidateSchemaAsync` is where a host wires in the existing `DbContext.ValidateImportedSchemaAsync`, which now throws `SchemaMismatchException` carrying the missing table names so the UI can say it in the user's language rather than pasting an English diagnostic into a German sentence.
   - Writing under the real name is not a detail: page AAD binds ciphertext to the database path, so a file written under a staging name would stop decrypting the moment it was moved there. `SingleDb_ValidatedImport_AcceptedOnEncryptedPool` covers that half; `SingleDb_ValidatedImport_RejectedBySchemaCheck` and `Dbs_ValidatedImport_RejectedBySchemaCheck` cover the refusals.
 - **Export is per row.** Saving one database is the row's own save button (a plain `.db` any SQLite tool opens); the tick boxes are for the bundle, whose button appears only once two or more are ticked and now says how many it will write. Emptying a database the app owns is a broom on its row — it comes back empty — while removing an entry nothing reads is a trash can.
-- **Imports reconcile the schema.** `IHostDatabaseService` gains `MigrateAsync` and `OwnedDatabases`. Every successful import re-runs the host's migrations, so a file carrying an older schema is brought up to date and an owned database the import omitted is re-created before the next query opens a schema-less one in its place. Deleting a database the app owns now empties it rather than leaving a hole.
+- **Imports reconcile the schema.** `IHostDatabaseService` gains `MigrateAsync` and `OwnedDatabases`, and the import paths call them themselves — so a file carrying an older schema is brought up to date and an owned database the import omitted is re-created before the next query opens a schema-less one in its place, whether or not the app uses the drop-in UI. Deleting a database the app owns now empties it rather than leaving a hole.
 - The state × operation matrix, the rollback guarantees behind each format, and the close-before-replace contract are documented in `docs/crypto-vfs.md`.
 
-**Breaking (`SqliteWasmBlazor.Crypto.UI`):** `IHostDatabaseService` implementations must add `OwnedDatabases`, `MigrateAsync` and `ValidateSchemaAsync`. `EncryptionModel.DatabaseNames` is replaced by `Databases` (rows carrying `Owned` / `Present`), `ExportDatabase` (per row) joins `ExportDatabases` (bundle, two or more), and `ProposeDatabaseName` is gone with the free-text import target.
+**Breaking (`SqliteWasmBlazor`):** the streamed file paths — `ExportDatabasesToDownloadAsync`, `ExportDatabaseToStreamAsync`, `ImportDatabaseFromStreamAsync`, `ImportDatabasesFromStreamAsync` — are on `ISqliteWasmDatabaseService`; the `byte[]` pair `ExportDatabaseAsync` / `ImportDatabaseAsync` is gone. `IHostDatabaseService` lives here now and declares `OwnedDatabases`, `MigrateAsync` and `ValidateSchemaAsync`. `DbContext.ValidateImportedSchemaAsync` throws `SchemaMismatchException` (still an `InvalidOperationException`) instead of a bare one; catch clauses keep working, and the new type carries `MissingTables`.
 
-**Breaking (`SqliteWasmBlazor.Crypto`):** `ImportDatabaseFromStreamAsync` and `ImportDatabasesFromStreamAsync` gain a `validateImported` parameter before `cancellationToken`. Callers passing the token positionally must name it.
+**Breaking (`SqliteWasmBlazor.Crypto`):** `IEncryptedSqliteWasmDatabaseService` no longer declares the plain file paths — they moved to `ISqliteWasmDatabaseService`, which every consumer already has. `ImportDatabaseFromStreamAsync` and `ImportDatabasesFromStreamAsync` gain a `validateImported` parameter before `cancellationToken`; callers passing the token positionally must name it.
 
-**Breaking (`SqliteWasmBlazor`):** `DbContext.ValidateImportedSchemaAsync` throws `SchemaMismatchException` (still an `InvalidOperationException`) instead of a bare one; catch clauses keep working, and the new type carries `MissingTables`.
+**Breaking (`SqliteWasmBlazor.Crypto.UI`):** hosts implement `IHostRecoveryService` (which extends the base `IHostDatabaseService`) and register it with `AddHostRecoveryService<THost>()`. `EncryptionModel.DatabaseNames` is replaced by `Databases` (rows carrying `Owned` / `Present`), `ExportDatabase` (per row) joins `ExportDatabases` (bundle, two or more), and `ProposeDatabaseName` is gone with the free-text import target.
 
 ### Memory-Flat Exports — OPFS Staging Replaces `byte[]` Downloads
 
 Exporting used to materialise the entire database as a `byte[]`, hand it across the JS boundary, and wrap it in a Blob. That is fine for a few megabytes and fatal on mobile, where Safari kills the page rather than serve a large one. Exports now stage through OPFS instead: the worker writes the bytes into a staging file via a synchronous access handle — the same primitive the import path already uses for rekey-on-write — and the browser saves from that disk-backed `File`. Blobs built from `ArrayBuffer`s are held in process memory by WebKit; a `File` backed by an OPFS entry is disk-backed in every engine, so peak memory stays flat regardless of database size.
 
 - Covers every export shape: single `.db`, the multi-DB `.dbs` envelope, and the encrypted-disk `.eds` envelope in `SqliteWasmBlazor.Crypto`.
-- **New on the plain plane:** `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(databaseName, filename)` — a memory-flat `.db` download without the Crypto package. The worker closes the database first for a consistent snapshot, so the next context re-opens it.
+- Every export shape is on `ISqliteWasmDatabaseService` — see *Moving Databases Around Is a Plain-Plane Job* above. The worker closes the database first for a consistent snapshot, so the next context re-opens it.
 - **Critical fix (export data loss):** uncheckpointed WAL data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
 - **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
-- **Breaking:** `ISqliteWasmDatabaseService.ExportAllDatabasesAsync` and `ImportAllDatabasesAsync` are deleted along with the rest of the `byte[]`-only paths — a whole pool returned as one managed array is the same profile in the multi-database shape. Use `IEncryptedSqliteWasmDatabaseService.ExportDatabasesToDownloadAsync` / `ImportDatabasesFromStreamAsync`.
+- **Breaking:** `ISqliteWasmDatabaseService.ExportAllDatabasesAsync` and `ImportAllDatabasesAsync` are deleted along with the rest of the `byte[]`-only paths — a whole pool returned as one managed array is the same profile in the multi-database shape. `ExportDatabasesToDownloadAsync` / `ImportDatabasesFromStreamAsync` replace them on the same interface.
 - Staging files are swept on worker start rather than after the click: an anchor download drains its `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
 - **Saving a `.db` or `.dbs` from an encrypted pool now asks first.** Both paths decrypt slot-by-slot on the way out — that is what makes the file one a SQLite tool can open — so the file that lands in the downloads folder is readable by anyone. The pool state said "encrypted" and the export said nothing, which is the wrong way round for the one moment content leaves the passkey's protection. `Confirm_ExportPlainSingle`, `Confirm_ExportPlainBundle` and `Btn_SaveUnencrypted` ship in `EncryptionModel`'s resources (en + de); hosts wire them through `ConfirmExecutionAsync`, the same way the reset and import confirmations already work. A plain pool raises no dialog — there is nothing to disclose.
 

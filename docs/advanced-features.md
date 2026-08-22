@@ -178,37 +178,90 @@ var expensive = await dbContext.Products
 
 EF Core automatically translates decimal operations to the appropriate `ef_*` functions, ensuring correct arithmetic in SQLite (which doesn't have native decimal support).
 
-## Raw Database Import/Export
+## Moving Databases In and Out
 
-Export and import complete SQLite .db files directly from/to OPFS via `ISqliteWasmDatabaseService`:
+`ISqliteWasmDatabaseService` carries the whole file surface — one database or
+many, in or out, to a `Stream` or straight to a browser download. **No path
+holds a database in managed memory.** That is not an optimisation: mobile
+Safari kills the page when a multi-hundred-megabyte export lands in memory, and
+a large import assembled on the main thread takes the pool's access handles
+down with it.
 
 ```csharp
 @inject ISqliteWasmDatabaseService DatabaseService
 
-// Export raw .db file
-byte[] data = await DatabaseService.ExportDatabaseAsync("TodoDb.db");
+// Straight to a download. The worker copies the database into an OPFS staging
+// file in slices and the browser saves from that disk-backed File.
+await DatabaseService.ExportDatabaseToDownloadAsync("TodoDb.db", "todo-backup.db");
 
-// Import raw .db file (validates SQLite header)
-await DatabaseService.ImportDatabaseAsync("TodoDb.db", data);
+// Several databases as one .dbs envelope (MessagePack [name, bytes] tuples).
+await DatabaseService.ExportDatabasesToDownloadAsync(names, "backup.dbs");
+
+// Same bytes as the download, into a Stream you own.
+await using var file = File.Create(path);
+await DatabaseService.ExportDatabaseToStreamAsync("TodoDb.db", file);
+
+// Import, one chunk at a time into the worker.
+await using var stream = picked.OpenReadStream(maxAllowedSize: picked.Size);
+await DatabaseService.ImportDatabaseFromStreamAsync(
+    "TodoDb.db", stream, picked.Size);
 ```
 
-Both operations close the database in the worker. The connection state tracking ensures EF Core automatically re-opens the database on the next query.
+Every one of these closes the database in the worker — exports for a consistent
+snapshot, imports because the slot is being replaced under it. Connection-state
+tracking re-opens it on the next EF Core query; there is no manual dance.
 
-### Downloading Without Loading the File
+With `SqliteWasmBlazor.Crypto` loaded the worker is state-aware and the calls do
+not change: a plain pool reads and writes plain pages, an unlocked encrypted
+pool decrypts on the way out and rekeys on the way in. A locked pool refuses
+with `PoolOperationRejectedException` — unlock first.
 
-`ExportDatabaseAsync` materialises the whole file as a `byte[]`, which is fine for
-small databases but is the wrong shape for a download — mobile Safari kills the page
-when a multi-hundred-megabyte export lands in memory. Use the staged download instead:
+> **Exports are plaintext.** On an encrypted pool these emit a plain `.db` any
+> SQLite tool can open, which is the point of an export but worth saying out
+> loud in your UI before the user clicks. The `.eds` envelope on
+> `IEncryptedSqliteWasmDatabaseService` is the encrypted-backup path.
+
+### Validating What an Import Brought
+
+Both import methods take an optional `validateImported` delegate. What the
+import would replace is parked under a suffixed name, the incoming file is
+written under the database's **real** name, and the delegate opens it and
+decides:
 
 ```csharp
-await DatabaseService.ExportDatabaseToDownloadAsync("TodoDb.db", "todo-backup.db");
+await DatabaseService.ImportDatabaseFromStreamAsync(
+    "TodoDb.db", stream, size,
+    async (imported, ct) =>
+    {
+        await using var ctx = await DbContextFactory.CreateDbContextAsync(ct);
+        await ctx.ValidateImportedSchemaAsync(ct);   // throws SchemaMismatchException
+    });
 ```
 
-The worker copies the database into an OPFS staging file in small slices and the
-browser saves it from that disk-backed file, so neither managed memory nor the
-main thread ever holds the payload. Peak memory is flat regardless of database size.
-Staging files are cleaned up on the next worker start (a download reads its file
-lazily, so it cannot be deleted at click time).
+Throw and the pool goes back exactly as it was — the parks are renamed back,
+metadata-only, so what returns is byte-identical. Return and the import counts:
+the parks are dropped and the host's migrations re-run, so a file carrying an
+older schema is brought up to date and an owned database the import omitted is
+re-created before the next query hits it.
+
+Writing under the real name is not a detail. On an encrypted pool, page AAD
+binds ciphertext to the database path, so a file written under a staging name
+would stop decrypting the moment it was moved.
+
+### Telling the Library Which Databases You Own
+
+`MigrateAsync` and the schema gate need something only the host knows — which
+databases the app opens, and what their schema is supposed to be. Implement
+`IHostDatabaseService` and register it once:
+
+```csharp
+builder.Services.AddHostDatabaseService<MyHostDatabaseService>();
+```
+
+Apps using `SqliteWasmBlazor.Crypto.UI` implement `IHostRecoveryService`
+instead — the same three members plus `IsAvailable` and `ResetAsync` for the
+panels' recovery affordance — and register with `AddHostRecoveryService<THost>()`,
+which binds one instance to both interfaces.
 
 ### Downloads Installed on a Home Screen
 
@@ -242,14 +295,9 @@ Table names are derived from EF model metadata — no hardcoded strings.
 
 ### Safe Import Pattern
 
-Use rename-based backup for atomic import with rollback:
-
-```csharp
-await DatabaseService.CloseDatabaseAsync("TodoDb.db");
-await DatabaseService.RenameDatabaseAsync("TodoDb.db", "TodoDb.backup.db");
-await DatabaseService.ImportDatabaseAsync("TodoDb.db", data);
-
-// Validate, then either delete backup (success) or restore it (failure)
-```
-
-See [Changelog](../CHANGELOG.md#raw-database-importexport) for full implementation details.
+There is no pattern to write: pass `validateImported` and the park-and-restore
+above happens inside the import. Rolling it by hand with
+`RenameDatabaseAsync` cannot match it — a rename onto an occupied name leaves
+the occupant's slot claimed but unreachable, and splitting the job into
+delete-then-rename leaves a window where the backup and the import that
+displaced it both stand with nothing to say which one is the database.
