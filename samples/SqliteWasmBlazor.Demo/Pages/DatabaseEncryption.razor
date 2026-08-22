@@ -171,13 +171,15 @@
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                             @* An absent database can't be exported — but it can
                                be imported into, which is why the row is here. *@
+                            @* Default size, matching the action buttons on
+                               the far side of the row; Dense trims the box's
+                               padding so the row keeps its height. *@
                             <MudCheckBox T="bool"
                                          Value="@Model.SelectedDatabases.Contains(row.Name)"
                                          ValueChanged="@(checkedNow => OnDatabaseSelectionChanged(row.Name, checkedNow))"
                                          Disabled="@(!row.Present)"
                                          Label="@row.Name"
-                                         Dense="true"
-                                         Size="Size.Small"/>
+                                         Dense="true"/>
                             @if (!row.Present)
                             {
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Warning">
@@ -191,6 +193,9 @@
                                 </MudChip>
                             }
                         </MudStack>
+                        @* The three actions carry no labels, so they are the
+                           row's only tap targets on a phone: default size,
+                           not Small. *@
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
                             @* Save this one database as a plain .db file —
                                the shape a SQLite tool opens directly. The
@@ -202,22 +207,32 @@
                                                     Icon="@Icons.Material.Filled.SaveAlt"
                                                     Color="Color.Default"
                                                     Disabled="@(!row.Present)"
-                                                    title="@Model.Localizer["Btn_ExportDatabase", row.Name]"
-                                                    Size="Size.Small"/>
+                                                    title="@Model.Localizer["Btn_ExportDatabase", row.Name]"/>
                             @* Per-row import: the file lands in this database,
                                so there is no name to type and no way to create
-                               a stray the app will never open. *@
+                               a stray the app will never open.
+
+                               MudFileUpload is an input control, and its root
+                               stacks whatever it holds in a column — left
+                               alone it lifts the button off the row's centre
+                               line. The flex utilities put it back on it. *@
                             <MudFileUpload T="IBrowserFile"
+                                           Class="flex-row align-center"
                                            Accept=".db,application/octet-stream"
                                            FilesChanged="@(file => HandleRowFilePickedAsync(row, file))">
                                 <CustomContent>
                                     <MudIconButton Icon="@Icons.Material.Filled.FileUpload"
                                                    Color="Color.Default"
-                                                   Size="Size.Small"
                                                    Disabled="@(!Model.ImportDatabase.CanExecute)"
                                                    title="@Model.Localizer["Btn_ImportIntoDatabase", row.Name]"
                                                    OnClick="@context.OpenFilePickerAsync"/>
                                 </CustomContent>
+                                @* The picked file is spent the moment it is
+                                   picked — confirm, import, done. The default
+                                   chip list would push into the row naming a
+                                   file that is already dealt with, so the
+                                   template is present and empty. *@
+                                <SelectedTemplate Context="picked"></SelectedTemplate>
                             </MudFileUpload>
                             @* Owned rows are emptied, not removed — the app
                                opens them by connection string, so they come
@@ -231,8 +246,7 @@
                                                     Icon="@(row.Owned ? Icons.Material.Filled.CleaningServices : Icons.Material.Filled.Delete)"
                                                     Color="Color.Error"
                                                     Disabled="@(!row.Present)"
-                                                    title="@(row.Owned ? Model.Localizer["Btn_ClearDatabase"] : Model.Localizer["Btn_DeleteDatabase"])"
-                                                    Size="Size.Small"/>
+                                                    title="@(row.Owned ? Model.Localizer["Btn_ClearDatabase"] : Model.Localizer["Btn_DeleteDatabase"])"/>
                         </MudStack>
                     </MudStack>
                 }
@@ -334,7 +348,13 @@
         </MudText>
         <MudFileUpload T="IBrowserFile"
                        Accept="@(Model.IsLocked ? ".eds,application/octet-stream" : ".eds,.dbs,application/octet-stream")"
-                       FilesChanged="@(file => HandleReplaceAllFilePickedAsync(file))"/>
+                       FilesChanged="@(file => HandleReplaceAllFilePickedAsync(file))">
+            @* Picking a file runs the whole import, so the default chip list
+               would linger under the button naming a file that has already
+               replaced the pool — or one the user waved away at the
+               confirmation. Present and empty, as on the rows above. *@
+            <SelectedTemplate Context="picked"></SelectedTemplate>
+        </MudFileUpload>
         <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
             @Model.Localizer["Hint_ImportFileSize"]
         </MudText>
