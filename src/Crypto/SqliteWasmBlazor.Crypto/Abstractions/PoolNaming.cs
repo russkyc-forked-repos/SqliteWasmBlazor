@@ -23,10 +23,15 @@ public static class PoolNaming
     /// validator refuses. On success the park is dropped.
     /// </para>
     /// <para>
-    /// A park outlives the import only if the tab dies mid-flight; the next
-    /// import sweeps whatever it finds. UI listing pool content should hide
-    /// these entries — <see cref="IsImportPark"/> identifies them — since
-    /// nothing opens them and they exist for seconds at a time.
+    /// A park outlives the import only if the tab dies mid-flight or the
+    /// platform closes the pool's access handles under it. Whichever end
+    /// finds it first puts it back: the worker restores an orphan at init,
+    /// and <c>SweepImportParksAsync</c> restores one before the next import
+    /// starts. A park is only ever dropped while the database it was taken
+    /// from is present — until then it <em>is</em> that database. UI
+    /// listing pool content should hide these entries —
+    /// <see cref="IsImportPark"/> identifies them — since nothing opens
+    /// them and they normally exist for seconds at a time.
     /// </para>
     /// </summary>
     public const string ImportParkSuffix = ".import-park";
@@ -50,5 +55,25 @@ public static class PoolNaming
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
         return $"{databaseName}{ImportParkSuffix}";
+    }
+
+    /// <summary>
+    /// The database <paramref name="parkName"/> holds the previous content
+    /// of — the inverse of <see cref="ImportParkFor"/>.
+    /// </summary>
+    /// <param name="parkName">A park name, e.g. <c>TodoDb.db.import-park</c>.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="parkName"/> is not a park name.
+    /// </exception>
+    public static string DatabaseNameForPark(string parkName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parkName);
+        if (!IsImportPark(parkName))
+        {
+            throw new ArgumentException(
+                $"'{parkName}' is not a park name.", nameof(parkName));
+        }
+
+        return parkName[..^ImportParkSuffix.Length];
     }
 }

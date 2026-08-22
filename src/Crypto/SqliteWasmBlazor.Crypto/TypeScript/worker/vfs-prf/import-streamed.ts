@@ -26,7 +26,11 @@ import {
     decryptChaCha20Poly1305,
     clearBytes,
 } from '@sqlitewasmblazor/crypto-core';
-import { buildPageAad } from './aad.js';
+import {buildPageAad} from './aad.js';
+import {
+    POOL_IMPORT_TMP_SUFFIX,
+    SINGLE_IMPORT_TMP_SUFFIX,
+} from './pool-naming.js';
 import {
     BufferedStreamReader,
     readArrayHeader,
@@ -80,10 +84,15 @@ export type PoolImportResultCode = typeof PoolImportResult[keyof typeof PoolImpo
 
 interface PoolUtilLike {
     listDatabases(): string[];
+
     getFileNames(): string[];
+
     importDb(path: string, data: Uint8Array, opaque?: boolean): unknown;
+
     writeFileSlice(name: string, offset: number, bytes: Uint8Array): void;
+
     atomicReplaceFile(srcName: string, dstName: string): true;
+
     unlink(filename: string): boolean;
 }
 
@@ -94,9 +103,13 @@ const SQLITE_MAGIC_HEADER = Uint8Array.from([
 ]);
 
 function hasSqliteMagic(bytes: Uint8Array): boolean {
-    if (bytes.length < SQLITE_MAGIC_HEADER.length) { return false; }
+    if (bytes.length < SQLITE_MAGIC_HEADER.length) {
+        return false;
+    }
     for (let i = 0; i < SQLITE_MAGIC_HEADER.length; i++) {
-        if (bytes[i] !== SQLITE_MAGIC_HEADER[i]) { return false; }
+        if (bytes[i] !== SQLITE_MAGIC_HEADER[i]) {
+            return false;
+        }
     }
     return true;
 }
@@ -137,11 +150,14 @@ export async function importDatabaseFromBlob(
     }
 
     const dbPath = `/databases/${dbName}`;
-    const tempPath = `${dbPath}.single-import-tmp`;
+    const tempPath = `${dbPath}${SINGLE_IMPORT_TMP_SUFFIX}`;
     const totalSlots = blob.size / PLAIN_SLOT_SIZE;
 
     if (poolUtil.getFileNames().includes(tempPath)) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        try {
+            poolUtil.unlink(tempPath);
+        } catch { /* best-effort */
+        }
     }
 
     const CHUNK_SLOTS = 256;
@@ -177,14 +193,19 @@ export async function importDatabaseFromBlob(
                         encryptedChunk!);
                 } finally {
                     clearBytes(plainChunk);
-                    if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                    if (encryptedChunk !== null) {
+                        clearBytes(encryptedChunk);
+                    }
                 }
             }
         }
 
         poolUtil.atomicReplaceFile(tempPath, dbPath);
     } catch (err) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        try {
+            poolUtil.unlink(tempPath);
+        } catch { /* best-effort */
+        }
         throw err;
     } finally {
         reader.releaseLock();
@@ -245,7 +266,7 @@ function decryptSlot(slot: Uint8Array, key: Uint8Array, aad: Uint8Array): Uint8A
     const cipherPlusTag = new Uint8Array(SECTOR_SIZE + PAGE_TAG_LEN);
     cipherPlusTag.set(ct, 0);
     cipherPlusTag.set(tag, SECTOR_SIZE);
-    return decryptChaCha20Poly1305({ ciphertext: cipherPlusTag, nonce }, key, aad);
+    return decryptChaCha20Poly1305({ciphertext: cipherPlusTag, nonce}, key, aad);
 }
 
 /**
@@ -378,9 +399,12 @@ export async function importPoolStreamCommit(
                     `importPoolStreamed[commit]: file '${name}' length ${binLen} is not a positive multiple of slot size ${PHYSICAL_SLOT_SIZE}`);
             }
             const dbPath = `/databases/${name}`;
-            const tempPath = `${dbPath}.import-tmp`;
+            const tempPath = `${dbPath}${POOL_IMPORT_TMP_SUFFIX}`;
             if (poolUtil.getFileNames().includes(tempPath)) {
-                try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+                try {
+                    poolUtil.unlink(tempPath);
+                } catch { /* best-effort */
+                }
             }
             tempPaths.push(tempPath);
             const totalSlots = binLen / PHYSICAL_SLOT_SIZE;
@@ -407,13 +431,13 @@ export async function importPoolStreamCommit(
                     chunkBuf = null;
                 }
             }
-            pendingPromotions.push({ tempPath, dbPath, name });
+            pendingPromotions.push({tempPath, dbPath, name});
         }
         // Every file decrypted, rekeyed and staged — promote them all.
         // Doing this only after the full envelope has been processed means
         // a mid-envelope failure (truncation, AEAD, write error) never
         // leaves the pool with a partial mix of old and new DBs.
-        for (const { tempPath, dbPath, name } of pendingPromotions) {
+        for (const {tempPath, dbPath, name} of pendingPromotions) {
             poolUtil.atomicReplaceFile(tempPath, dbPath);
         }
     } catch (error) {
@@ -422,7 +446,10 @@ export async function importPoolStreamCommit(
         // a failure inside the promotion loop itself (rename error) keeps
         // already-promoted dbPaths and unlinks the rest.
         for (const tempPath of tempPaths) {
-            try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+            try {
+                poolUtil.unlink(tempPath);
+            } catch { /* best-effort */
+            }
         }
         throw error;
     } finally {

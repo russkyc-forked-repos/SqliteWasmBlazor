@@ -34,9 +34,9 @@ import {
     decryptChaCha20Poly1305,
     clearBytes,
 } from '@sqlitewasmblazor/crypto-core';
-import { getGlobalKey, hasGlobalKey } from './key-registry.js';
-import { buildPageAad } from './aad.js';
-import { MANIFEST_OFFSET, MANIFEST_LENGTH } from './manifest.js';
+import {getGlobalKey, hasGlobalKey} from './key-registry.js';
+import {buildPageAad} from './aad.js';
+import {MANIFEST_OFFSET, MANIFEST_LENGTH} from './manifest.js';
 
 // ==========================================================================
 // Types — loose because sqlite-wasm has no shipped TypeScript declarations.
@@ -66,32 +66,58 @@ export type VfsKeyVerifyResult = 'noExistingDb' | 'match' | 'wrongKey';
 export interface PrfPoolUtil {
     vfsName: string;
     OpfsSAHPoolDb?: new (...args: any[]) => any;
+
     addCapacity(n: number): Promise<number>;
+
     reduceCapacity(n: number): Promise<number>;
+
     getCapacity(): number;
+
     getFileCount(): number;
+
     getFileNames(): string[];
+
     reserveMinimumCapacity(min: number): Promise<number>;
+
+    /**
+     * Re-acquire every slot handle after the platform closed them (WebKit
+     * reclaiming the storage layer under memory pressure). Rebuilds the
+     * path mapping from the slots' own headers. Throws while any file is
+     * open — the caller closes first.
+     */
+    recoverAccessHandles(): Promise<number>;
+
     exportFile(name: string): Uint8Array;
+
     importDb(name: string, bytes: Uint8Array | ArrayBuffer, opaque?: boolean): number | Promise<number>;
+
     /** Data-region byte count of <paramref name="name"/>'s SAH (excludes header sector). */
     getFileSize(name: string): number;
+
     /** Read a slice of the data region. Throws on unknown name or out-of-range request. */
     exportFileSlice(name: string, offset: number, length: number): Uint8Array;
+
     /** Write a slice; lazy-allocates a fresh SAH slot when name is unmapped. */
     writeFileSlice(name: string, offset: number, bytes: Uint8Array): void;
+
     /** Atomic-promote srcName → dstName (drops dstName's SAH if any, renames src). */
     atomicReplaceFile(srcName: string, dstName: string): true;
+
     wipeFiles(): Promise<void>;
+
     unlink(filename: string): boolean;
+
     renameFile(oldPath: string, newPath: string): true;
+
     verifyEncryptionKey(path: string): VfsKeyVerifyResult;
+
     /**
      * Names of every main-DB file currently present in the SAHPool —
      * filters out journal/WAL/SHM siblings. Path-stripped: returns just
      * <c>"MyDb.db"</c>, not <c>"/databases/MyDb.db"</c>.
      */
     listDatabases(): string[];
+
     /**
      * Read the 500-byte disk-manifest region (offset 524..1023 within the
      * SAHPool slot's 4096-byte plaintext header sector) for the given DB
@@ -100,6 +126,7 @@ export interface PrfPoolUtil {
      * this method only provides the raw byte range.
      */
     readManifestSlot(path: string): Uint8Array;
+
     /**
      * Overwrite bytes 524..1023 of the SAHPool slot's header sector for
      * the given DB path. Caller passes the fully-formed 500-byte manifest
@@ -107,9 +134,13 @@ export interface PrfPoolUtil {
      * length mismatch or unknown path.
      */
     writeManifestSlot(path: string, region: Uint8Array): void;
+
     removeVfs(): Promise<boolean>;
+
     pauseVfs(): PrfPoolUtil;
+
     unpauseVfs(): Promise<PrfPoolUtil>;
+
     isPaused(): boolean;
 }
 
@@ -229,7 +260,8 @@ export async function installOpfsSAHPoolVfs(
                 pool.log('VFS initialized.');
                 return util as unknown as PrfPoolUtil;
             } catch (e) {
-                await pool.removeVfs().catch(() => {});
+                await pool.removeVfs().catch(() => {
+                });
                 throw e;
             }
         })
@@ -256,7 +288,7 @@ function toss(...args: any[]): never {
 async function apiVersionCheck(): Promise<true> {
     const dh = await navigator.storage.getDirectory();
     const fn = '.opfs-sahpool-sync-check-' + getRandomName();
-    const fh = await dh.getFileHandle(fn, { create: true });
+    const fh = await dh.getFileHandle(fn, {create: true});
     const ah = await fh.createSyncAccessHandle();
     const close = (ah as any).close();
     await close;
@@ -292,7 +324,15 @@ class OpfsSAHPool {
     private mapFilenameToSAH = new Map<string, FileSystemSyncAccessHandle>();
     private availableSAH = new Set<FileSystemSyncAccessHandle>();
     private mapS3FileToOFile = new Map<number, OFile>();
-    private apBody = new Uint8Array(HEADER_CORPUS_SIZE);
+    // Header sector staging buffer: path corpus + flags, then the digest of
+    // both. One buffer rather than two so the header reaches the platform in
+    // a single write — a handle that dies between a corpus write and its
+    // digest write leaves a slot whose digest no longer matches, and the
+    // next acquireAccessHandles disassociates (and truncates) exactly that
+    // slot. That is a parked database lost to a torn 8-byte write.
+    private apHeader = new Uint8Array(HEADER_CORPUS_SIZE + HEADER_DIGEST_SIZE);
+    private apBody = this.apHeader.subarray(0, HEADER_CORPUS_SIZE);
+    private apDigest: Uint32Array;
     private dvBody: DataView;
     private cVfs: any; // sqlite3_vfs struct
     private cIoMethods: any; // sqlite3_io_methods struct
@@ -311,6 +351,8 @@ class OpfsSAHPool {
         this.vfsName = options.name || 'opfs-sahpool';
         this.vfsDir = options.directory || '.' + this.vfsName;
         this.dvBody = new DataView(this.apBody.buffer, this.apBody.byteOffset);
+        this.apDigest = new Uint32Array(
+            this.apHeader.buffer, HEADER_OFFSET_DIGEST, HEADER_DIGEST_SIZE / 4);
         this.loggers = [sqlite3.config.error, sqlite3.config.warn, sqlite3.config.log];
 
         this.persistentFileTypes =
@@ -326,7 +368,7 @@ class OpfsSAHPool {
         this.cIoMethods = new this.capi.sqlite3_io_methods();
         this.cIoMethods.$iVersion = 1;
         sqlite3.vfs.installVfs({
-            io: { struct: this.cIoMethods, methods: this.buildIoMethods() },
+            io: {struct: this.cIoMethods, methods: this.buildIoMethods()},
         });
         this.cVfs = this.createOpfsVfs();
         setPoolForVfs(this.cVfs.pointer, this);
@@ -334,7 +376,8 @@ class OpfsSAHPool {
         this.isReady = this.reset(!!options.clearOnInit).then(() => {
             if (this.$error) throw this.$error;
             if (!this.getCapacity()) {
-                return this.addCapacity(options.initialCapacity ?? 6).then(() => {});
+                return this.addCapacity(options.initialCapacity ?? 6).then(() => {
+                });
             }
         });
     }
@@ -344,12 +387,15 @@ class OpfsSAHPool {
     private logImpl(level: number, ...args: any[]) {
         if (this.verbosity > level) this.loggers[level](this.vfsName + ':', ...args);
     }
+
     log(...args: any[]) {
         this.logImpl(2, ...args);
     }
+
     warn(...args: any[]) {
         this.logImpl(1, ...args);
     }
+
     error(...args: any[]) {
         this.logImpl(0, ...args);
     }
@@ -357,12 +403,15 @@ class OpfsSAHPool {
     getVfs() {
         return this.cVfs;
     }
+
     getCapacity() {
         return this.mapSAHToName.size;
     }
+
     getFileCount() {
         return this.mapFilenameToSAH.size;
     }
+
     getFileNames() {
         return Array.from(this.mapFilenameToSAH.keys());
     }
@@ -372,6 +421,7 @@ class OpfsSAHPool {
     getOFileForS3File(pFile: number) {
         return this.mapS3FileToOFile.get(pFile);
     }
+
     mapS3FileToOFileSet(pFile: number, file: OFile | false) {
         if (file) {
             this.mapS3FileToOFile.set(pFile, file);
@@ -381,12 +431,15 @@ class OpfsSAHPool {
             setPoolForPFile(pFile, null);
         }
     }
+
     hasFilename(name: string) {
         return this.mapFilenameToSAH.has(name);
     }
+
     getSAHForPath(path: string) {
         return this.mapFilenameToSAH.get(path);
     }
+
     nextAvailableSAH(): FileSystemSyncAccessHandle | undefined {
         const [rc] = this.availableSAH.keys();
         return rc;
@@ -397,7 +450,7 @@ class OpfsSAHPool {
     async addCapacity(n: number) {
         for (let i = 0; i < n; ++i) {
             const name = getRandomName();
-            const h = await this.dhOpaque.getFileHandle(name, { create: true });
+            const h = await this.dhOpaque.getFileHandle(name, {create: true});
             const ah = await h.createSyncAccessHandle();
             this.mapSAHToName.set(ah, name);
             this.setAssociatedPath(ah, '', 0);
@@ -420,10 +473,45 @@ class OpfsSAHPool {
     }
 
     releaseAccessHandles() {
-        for (const ah of this.mapSAHToName.keys()) ah.close();
+        for (const ah of this.mapSAHToName.keys()) {
+            // A handle the platform already closed underneath us throws here.
+            // Nothing about that changes what release has to do to the rest
+            // of the pool, and an unreleased slot cannot be re-acquired.
+            try {
+                ah.close();
+            } catch (e) {
+                this.warn('close() failed while releasing an access handle:', e);
+            }
+        }
         this.mapSAHToName.clear();
         this.mapFilenameToSAH.clear();
         this.availableSAH.clear();
+    }
+
+    /**
+     * Re-acquire every slot handle after the platform closed them out from
+     * under the pool — the WebKit failure mode where the storage layer is
+     * reclaimed while the page lives on, after which every SAH call throws
+     * `InvalidStateError: AccessHandle is closed` and the pool is dead for
+     * the rest of the session.
+     *
+     * The path mapping is rebuilt from each slot's own header, so what the
+     * pool knows after recovery is exactly what is on disk. Refuses while
+     * any file is open: an OFile captured its SAH at xOpen time, and a
+     * re-acquired pool can hand that slot to a different path — the same
+     * aliasing the close-before-slot-swap rule exists to prevent.
+     */
+    async recoverAccessHandles() {
+        if (this.mapS3FileToOFile.size > 0) {
+            toss(
+                'recoverAccessHandles: refusing to re-acquire while',
+                this.mapS3FileToOFile.size,
+                'file(s) are open — close them first.'
+            );
+        }
+        this.releaseAccessHandles();
+        await this.acquireAccessHandles(false);
+        return this.getCapacity();
     }
 
     async acquireAccessHandles(clearFiles = false) {
@@ -456,7 +544,17 @@ class OpfsSAHPool {
     }
 
     getAssociatedPath(sah: FileSystemSyncAccessHandle): string {
-        sah.read(this.apBody, { at: 0 });
+        // Corpus and digest in one read, so a slot too short to hold a whole
+        // header cannot leave the previous slot's bytes standing in the
+        // staging buffer — that reads back as a valid header and maps a
+        // second path onto the same slot. A short slot is an unfinished
+        // addCapacity: no path, nothing to keep.
+        const nRead = sah.read(this.apHeader, {at: 0});
+        if (nRead !== this.apHeader.byteLength) {
+            this.apHeader.fill(0);
+            this.setAssociatedPath(sah, '', 0);
+            return '';
+        }
         const flags = this.dvBody.getUint32(HEADER_OFFSET_FLAGS);
         if (
             this.apBody[0] &&
@@ -471,10 +569,8 @@ class OpfsSAHPool {
             return '';
         }
 
-        const fileDigest = new Uint32Array(HEADER_DIGEST_SIZE / 4);
-        sah.read(fileDigest, { at: HEADER_OFFSET_DIGEST });
         const compDigest = this.computeDigest(this.apBody, flags);
-        if (fileDigest.every((v, i) => v === compDigest[i])) {
+        if (this.apDigest.every((v, i) => v === compDigest[i])) {
             const pathBytes = this.apBody.findIndex((v) => 0 === v);
             if (0 === pathBytes) {
                 sah.truncate(HEADER_OFFSET_DATA);
@@ -493,9 +589,10 @@ class OpfsSAHPool {
         if (path && flags) flags |= this.flagComputeDigestV2;
         this.apBody.fill(0, enc.written, HEADER_MAX_PATH_SIZE);
         this.dvBody.setUint32(HEADER_OFFSET_FLAGS, flags);
-        const digest = this.computeDigest(this.apBody, flags);
-        sah.write(this.apBody, { at: 0 });
-        sah.write(digest, { at: HEADER_OFFSET_DIGEST });
+        this.apDigest.set(this.computeDigest(this.apBody, flags));
+        // One write for corpus + digest — see the apHeader declaration for
+        // what a torn header costs.
+        sah.write(this.apHeader, {at: 0});
         sah.flush();
 
         if (path) {
@@ -510,7 +607,7 @@ class OpfsSAHPool {
     }
 
     clearManifestRegion(sah: FileSystemSyncAccessHandle): void {
-        sah.write(new Uint8Array(MANIFEST_LENGTH), { at: MANIFEST_OFFSET });
+        sah.write(new Uint8Array(MANIFEST_LENGTH), {at: MANIFEST_OFFSET});
     }
 
     computeDigest(byteArray: Uint8Array, fileFlags: number) {
@@ -533,7 +630,7 @@ class OpfsSAHPool {
         for (const d of this.vfsDir.split('/')) {
             if (d) {
                 prev = h;
-                h = await h.getDirectoryHandle(d, { create: true });
+                h = await h.getDirectoryHandle(d, {create: true});
             }
         }
         this.dhVfsRoot = h;
@@ -572,7 +669,7 @@ class OpfsSAHPool {
     renameFile(oldPath: string, newPath: string): true {
         const sah = this.mapFilenameToSAH.get(oldPath);
         if (!sah) toss('File not found:', oldPath);
-        sah.read(this.apBody, { at: 0 });
+        sah.read(this.apBody, {at: 0});
         const flags = this.dvBody.getUint32(HEADER_OFFSET_FLAGS);
         this.mapFilenameToSAH.delete(oldPath);
         this.setAssociatedPath(sah, newPath, flags);
@@ -604,7 +701,7 @@ class OpfsSAHPool {
         if (!key) return 'noExistingDb';
 
         const slot = new Uint8Array(PHYSICAL_SLOT_SIZE);
-        const nRead = sah.read(slot, { at: HEADER_OFFSET_DATA });
+        const nRead = sah.read(slot, {at: HEADER_OFFSET_DATA});
         if (nRead < PHYSICAL_SLOT_SIZE) return 'noExistingDb';
 
         const ciphertext = slot.subarray(0, PAGE_PLAINTEXT_LEN);
@@ -620,7 +717,7 @@ class OpfsSAHPool {
         let slot0pt: Uint8Array | undefined;
         try {
             slot0pt = decryptChaCha20Poly1305(
-                { ciphertext: cipherPlusTag, nonce },
+                {ciphertext: cipherPlusTag, nonce},
                 key,
                 aad
             );
@@ -628,7 +725,9 @@ class OpfsSAHPool {
         } catch {
             return 'wrongKey';
         } finally {
-            if (slot0pt) { clearBytes(slot0pt); }
+            if (slot0pt) {
+                clearBytes(slot0pt);
+            }
             clearBytes(cipherPlusTag);
             clearBytes(slot);
         }
@@ -644,7 +743,7 @@ class OpfsSAHPool {
         const sah = this.mapFilenameToSAH.get(path);
         if (!sah) toss('readManifestSlot: file not found:', path);
         const region = new Uint8Array(MANIFEST_LENGTH);
-        sah!.read(region, { at: MANIFEST_OFFSET });
+        sah!.read(region, {at: MANIFEST_OFFSET});
         return region;
     }
 
@@ -664,7 +763,7 @@ class OpfsSAHPool {
         }
         const sah = this.mapFilenameToSAH.get(path);
         if (!sah) toss('writeManifestSlot: file not found:', path);
-        sah!.write(region, { at: MANIFEST_OFFSET });
+        sah!.write(region, {at: MANIFEST_OFFSET});
         sah!.flush();
     }
 
@@ -676,6 +775,7 @@ class OpfsSAHPool {
         this.$error = e;
         return code;
     }
+
     popErr() {
         const rc = this.$error;
         this.$error = undefined;
@@ -713,7 +813,7 @@ class OpfsSAHPool {
         const n = sah!.getSize() - HEADER_OFFSET_DATA;
         const b = new Uint8Array(n > 0 ? n : 0);
         if (n > 0) {
-            const nRead = sah!.read(b, { at: HEADER_OFFSET_DATA });
+            const nRead = sah!.read(b, {at: HEADER_OFFSET_DATA});
             if (nRead !== n) toss('Expected to read ' + n + ' bytes but read ' + nRead + '.');
         }
         return b;
@@ -759,7 +859,7 @@ class OpfsSAHPool {
         }
         const buf = new Uint8Array(length);
         if (length > 0) {
-            const nRead = sah!.read(buf, { at: HEADER_OFFSET_DATA + offset });
+            const nRead = sah!.read(buf, {at: HEADER_OFFSET_DATA + offset});
             if (nRead !== length) {
                 toss('exportFileSlice: short read', nRead, 'of', length);
             }
@@ -790,7 +890,7 @@ class OpfsSAHPool {
         if (offset < 0) {
             toss('writeFileSlice: offset must be >= 0, got', offset);
         }
-        const nWrote = sah.write(bytes, { at: HEADER_OFFSET_DATA + offset });
+        const nWrote = sah.write(bytes, {at: HEADER_OFFSET_DATA + offset});
         if (nWrote !== bytes.byteLength) {
             toss('writeFileSlice: short write', nWrote, 'of', bytes.byteLength);
         }
@@ -831,7 +931,7 @@ class OpfsSAHPool {
                     this.util.affirmDbHeader(chunk);
                     checkedHeader = true;
                 }
-                sah.write(chunk, { at: HEADER_OFFSET_DATA + nWrote });
+                sah.write(chunk, {at: HEADER_OFFSET_DATA + nWrote});
                 nWrote += chunk.byteLength;
             }
             if (nWrote < 512 || 0 !== nWrote % 512) {
@@ -839,10 +939,10 @@ class OpfsSAHPool {
             }
             if (!checkedHeader) {
                 const header = new Uint8Array(20);
-                sah.read(header, { at: 0 });
+                sah.read(header, {at: 0});
                 this.util.affirmDbHeader(header);
             }
-            sah.write(new Uint8Array([1, 1]), { at: HEADER_OFFSET_DATA + 18 });
+            sah.write(new Uint8Array([1, 1]), {at: HEADER_OFFSET_DATA + 18});
         } catch (e) {
             this.setAssociatedPath(sah, '', 0);
             throw e;
@@ -885,13 +985,13 @@ class OpfsSAHPool {
                 }
             }
         }
-        const nWrote = sah.write(bytes as Uint8Array, { at: HEADER_OFFSET_DATA });
+        const nWrote = sah.write(bytes as Uint8Array, {at: HEADER_OFFSET_DATA});
         if (nWrote !== n) {
             this.setAssociatedPath(sah, '', 0);
             toss('Expected to write ' + n + ' bytes but wrote ' + nWrote + '.');
         } else {
             if (!skipFormatChecks) {
-                sah.write(new Uint8Array([1, 1]), { at: HEADER_OFFSET_DATA + 18 });
+                sah.write(new Uint8Array([1, 1]), {at: HEADER_OFFSET_DATA + 18});
             }
             this.clearManifestRegion(sah);
             this.setAssociatedPath(sah, name, this.capi.SQLITE_OPEN_MAIN_DB);
@@ -908,10 +1008,10 @@ class OpfsSAHPool {
         delete initPromises[this.vfsName];
         try {
             this.releaseAccessHandles();
-            await this.dhVfsRoot.removeEntry(OPAQUE_DIR_NAME, { recursive: true });
+            await this.dhVfsRoot.removeEntry(OPAQUE_DIR_NAME, {recursive: true});
             (this as any).dhOpaque = undefined;
             if (this.dhVfsParent) {
-                await this.dhVfsParent.removeEntry(this.dhVfsRoot.name, { recursive: true });
+                await this.dhVfsParent.removeEntry(this.dhVfsRoot.name, {recursive: true});
             }
             (this as any).dhVfsRoot = undefined;
             (this as any).dhVfsParent = undefined;
@@ -1030,7 +1130,7 @@ class OpfsSAHPool {
                     if (key === undefined) {
                         const nRead = file.sah.read(
                             wasm.heap8u().subarray(Number(pDest), Number(pDest) + n),
-                            { at: HEADER_OFFSET_DATA + off }
+                            {at: HEADER_OFFSET_DATA + off}
                         );
                         if (nRead < n) {
                             wasm.heap8u().fill(0, Number(pDest) + nRead, Number(pDest) + n);
@@ -1088,7 +1188,7 @@ class OpfsSAHPool {
                     if (key === undefined) {
                         const nBytes = file.sah.write(
                             wasm.heap8u().subarray(Number(pSrc), Number(pSrc) + n),
-                            { at: HEADER_OFFSET_DATA + off }
+                            {at: HEADER_OFFSET_DATA + off}
                         );
                         return n === nBytes ? 0 : pool.storeErr(new Error('short write'), capi.SQLITE_IOERR)!;
                     }
@@ -1163,7 +1263,7 @@ class OpfsSAHPool {
             let plaintext: Uint8Array | undefined;
             try {
                 plaintext = decryptChaCha20Poly1305(
-                    { ciphertext: cipherPlusTag, nonce },
+                    {ciphertext: cipherPlusTag, nonce},
                     key,
                     aad
                 );
@@ -1175,7 +1275,9 @@ class OpfsSAHPool {
                 destPtr += bytesFromSlot;
                 cursor = thisSliceEnd;
             } finally {
-                if (plaintext) { clearBytes(plaintext); }
+                if (plaintext) {
+                    clearBytes(plaintext);
+                }
                 clearBytes(cipherPlusTag);
             }
         }
@@ -1259,7 +1361,7 @@ class OpfsSAHPool {
 
     private readSlotPlaintextOrZero(file: OFile, key: Uint8Array, slotIndex: number): Uint8Array {
         const physicalSlotStart = HEADER_OFFSET_DATA + slotIndex * PHYSICAL_SLOT_SIZE;
-        const nRead = file.sah.read(this.slotScratch, { at: physicalSlotStart });
+        const nRead = file.sah.read(this.slotScratch, {at: physicalSlotStart});
         if (nRead < PHYSICAL_SLOT_SIZE) {
             // No existing data → zero-initialized plaintext.
             this.plaintextScratch.fill(0);
@@ -1278,14 +1380,16 @@ class OpfsSAHPool {
         let pt: Uint8Array | undefined;
         try {
             pt = decryptChaCha20Poly1305(
-                { ciphertext: cipherPlusTag, nonce },
+                {ciphertext: cipherPlusTag, nonce},
                 key,
                 aad
             );
             this.plaintextScratch.set(pt, 0);
             return this.plaintextScratch;
         } finally {
-            if (pt) { clearBytes(pt); }
+            if (pt) {
+                clearBytes(pt);
+            }
             clearBytes(cipherPlusTag);
         }
     }
@@ -1432,7 +1536,7 @@ class OpfsSAHPool {
         if (!opfsVfs.$xSleep && !vfsMethods.xSleep) {
             vfsMethods.xSleep = () => 0;
         }
-        sqlite3.vfs.installVfs({ vfs: { struct: opfsVfs, methods: vfsMethods } });
+        sqlite3.vfs.installVfs({vfs: {struct: opfsVfs, methods: vfsMethods}});
         return opfsVfs;
     }
 }
@@ -1454,25 +1558,36 @@ class OpfsSAHPoolUtil {
     async addCapacity(n: number) {
         return this.p.addCapacity(n);
     }
+
     async reduceCapacity(n: number) {
         return this.p.reduceCapacity(n);
     }
+
     getCapacity() {
         return this.p.getCapacity();
     }
+
     getFileCount() {
         return this.p.getFileCount();
     }
+
     getFileNames() {
         return this.p.getFileNames();
     }
+
     async reserveMinimumCapacity(min: number) {
         const c = this.p.getCapacity();
         return c < min ? this.p.addCapacity(min - c) : c;
     }
+
+    async recoverAccessHandles() {
+        return this.p.recoverAccessHandles();
+    }
+
     exportFile(name: string) {
         return this.p.exportFile(name);
     }
+
     importDb(
         name: string,
         bytes: Uint8Array | ArrayBuffer | ((...a: any[]) => any),
@@ -1480,50 +1595,65 @@ class OpfsSAHPoolUtil {
     ) {
         return this.p.importDb(name, bytes, opaque);
     }
+
     getFileSize(name: string) {
         return this.p.getFileSize(name);
     }
+
     exportFileSlice(name: string, offset: number, length: number) {
         return this.p.exportFileSlice(name, offset, length);
     }
+
     writeFileSlice(name: string, offset: number, bytes: Uint8Array) {
         this.p.writeFileSlice(name, offset, bytes);
     }
+
     atomicReplaceFile(srcName: string, dstName: string) {
         return this.p.atomicReplaceFile(srcName, dstName);
     }
+
     async wipeFiles() {
         await this.p.reset(true);
     }
+
     unlink(filename: string) {
         return this.p.deletePath(filename);
     }
+
     renameFile(oldPath: string, newPath: string) {
         return this.p.renameFile(oldPath, newPath);
     }
+
     verifyEncryptionKey(path: string) {
         return this.p.verifyEncryptionKey(path);
     }
+
     async removeVfs() {
         return this.p.removeVfs();
     }
+
     pauseVfs() {
         this.p.pauseVfs();
         return this as unknown as PrfPoolUtil;
     }
+
     async unpauseVfs() {
         await this.p.unpauseVfs();
         return this as unknown as PrfPoolUtil;
     }
+
     isPaused() {
         return this.p.isPaused();
     }
+
     listDatabases() {
         return this.p.listDatabases();
     }
+
     readManifestSlot(path: string) {
         return this.p.readManifestSlot(path);
     }
+
     writeManifestSlot(path: string, region: Uint8Array) {
         return this.p.writeManifestSlot(path, region);
     }
@@ -1552,6 +1682,7 @@ function setPoolForVfs(pVfs: number, pool: OpfsSAHPool | null) {
     if (pool) mapVfsToPool.set(pVfs, pool);
     else mapVfsToPool.delete(pVfs);
 }
+
 function setPoolForPFile(pFile: number, pool: OpfsSAHPool | null) {
     if (pool) mapSqlite3FileToPool.set(pFile, pool);
     else mapSqlite3FileToPool.delete(pFile);
@@ -1559,4 +1690,4 @@ function setPoolForPFile(pFile: number, pool: OpfsSAHPool | null) {
 
 // Silences the unused-reference lint without exposing internals.
 // getPoolForVfs / getPoolForPFile are reserved for future VFS introspection.
-export const __internal = { mapVfsToPool, mapSqlite3FileToPool };
+export const __internal = {mapVfsToPool, mapSqlite3FileToPool};

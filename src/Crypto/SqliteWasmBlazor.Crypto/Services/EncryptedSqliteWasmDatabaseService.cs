@@ -87,12 +87,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         // SCHEMA_INCOMPATIBLE, FAILED, TIMEOUT) — those need user action
         // beyond unlock/lock and shouldn't be silently overwritten.
         if (_status.State is DbInitState.TAB_LOCKED
-                            or DbInitState.SCHEMA_INCOMPATIBLE
-                            or DbInitState.TIMEOUT
-                            or DbInitState.FAILED)
+            or DbInitState.SCHEMA_INCOMPATIBLE
+            or DbInitState.TIMEOUT
+            or DbInitState.FAILED)
         {
             return;
         }
+
         _reporter.Report(state, failure);
     }
 
@@ -139,6 +140,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     _bridge.SetPoolLocked(false);
                     return new EncryptedPoolState(true, true, expectedForHeal);
                 }
+
                 _isUnlocked = false;
                 _bridge.SetPoolLocked(true);
                 return new EncryptedPoolState(true, false, null);
@@ -177,6 +179,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             {
                 await WriteManifestAsync(expected, cancellationToken);
             }
+
             _bridge.SetPoolLocked(false);
             return new EncryptedPoolState(true, true, expected);
         }
@@ -223,6 +226,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             // landed under a current-schema parser).
             return (ManifestState.MALFORMED, null);
         }
+
         return (ManifestState.PRESENT, decoded.CredentialId ?? string.Empty);
     }
 
@@ -241,6 +245,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "credentialId must be non-empty when writing the disk manifest.",
                 nameof(credentialId));
         }
+
         var body = new PoolManifestBody
         {
             CredentialId = credentialId,
@@ -277,6 +282,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         {
             await VerifyUnlockedManifestAsync(allowAbsentForEmptyPool: false, cancellationToken);
         }
+
         ReportDbState(DbInitState.READY);
     }
 
@@ -361,6 +367,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 $"key must be exactly 32 bytes, got {key.Length}", nameof(key));
         }
+
         if (string.IsNullOrWhiteSpace(credentialId))
         {
             throw new ArgumentException(
@@ -560,6 +567,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 "filename must be a non-empty string.", nameof(filename));
         }
+
         var ok = await WithPubkeyExportEnvelopeAsync(
             recipientX25519PublicKeyBase64,
             recipientCredentialId,
@@ -616,8 +624,10 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                         $"ExportPoolToPubkeyBytesAsync: ReadExportBytes returned {read} at " +
                         $"offset {offset} of {size}.");
                 }
+
                 offset += read;
             }
+
             return envelope;
         }
         finally
@@ -646,6 +656,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "recipientX25519PublicKeyBase64 must be a non-empty Base64 X25519 pubkey.",
                 nameof(recipientX25519PublicKeyBase64));
         }
+
         if (string.IsNullOrWhiteSpace(recipientCredentialId))
         {
             throw new ArgumentException(
@@ -666,6 +677,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "recipientX25519PublicKeyBase64 is not valid Base64.",
                 nameof(recipientX25519PublicKeyBase64), ex);
         }
+
         if (recipientPubBytes.Length != 32)
         {
             throw new ArgumentException(
@@ -696,6 +708,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     $"Pubkey export: ECIES wrap of K_wrap failed " +
                     $"({wrappedResult.ErrorCode}).");
             }
+
             var wrapped = wrappedResult.Value;
 
             var metadata = new
@@ -744,6 +757,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new InvalidOperationException(
                 "Blob session id space exhausted (int overflow) — reload the application.");
         }
+
         return id;
     }
 
@@ -773,12 +787,14 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 $"envelopeSize must be positive, got {envelopeSize}", nameof(envelopeSize));
         }
+
         if (string.IsNullOrWhiteSpace(credentialId))
         {
             throw new ArgumentException(
                 "credentialId must be a non-empty Base64 WebAuthn credentialId.",
                 nameof(credentialId));
         }
+
         if (vfsKey.Length != 32)
         {
             throw new ArgumentException(
@@ -822,11 +838,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                             $"ImportPoolGuidedFromStreamAsync: stream ended at {totalRead} " +
                             $"of {envelopeSize} bytes; envelope is truncated.");
                     }
+
                     if (headerCopy.Length < 4096)
                     {
                         var keep = (int)Math.Min(read, 4096 - headerCopy.Length);
                         headerCopy.Write(buf, 0, keep);
                     }
+
                     totalRead += read;
                     bool isLast = totalRead == envelopeSize;
                     SqliteWasmWorkerBridge.BlobSessionAppend(
@@ -848,11 +866,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 throw new InvalidOperationException(
                     $"ImportPoolGuidedFromStreamAsync: unsupported envelope Version={header.Version} (expected 3).");
             }
+
             if (string.IsNullOrEmpty(header.CredentialIdHint))
             {
                 throw new InvalidOperationException(
                     "ImportPoolGuidedFromStreamAsync: envelope is missing CredentialIdHint.");
             }
+
             if (!string.Equals(header.CredentialIdHint, credentialId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -872,6 +892,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                     $"({unwrapResult.ErrorCode}). The envelope may be sealed for a different " +
                     $"recipient pubkey than the one this passkey derives.");
             }
+
             wrapKey = unwrapResult.Value;
             if (wrapKey.Length != 32)
             {
@@ -916,6 +937,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             {
                 CryptographicOperations.ZeroMemory(wrapKey);
             }
+
             // Idempotent on every exit — success, AEAD failure, exception.
             // The JS-side parts list is dropped so the browser can GC the
             // underlying Blob storage.
@@ -944,11 +966,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 "databaseName must be non-empty.", nameof(databaseName));
         }
+
         if (string.IsNullOrWhiteSpace(filename))
         {
             throw new ArgumentException(
                 "filename must be non-empty.", nameof(filename));
         }
+
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
@@ -992,11 +1016,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 "databaseNames must be non-empty.", nameof(databaseNames));
         }
+
         if (string.IsNullOrWhiteSpace(filename))
         {
             throw new ArgumentException(
                 "filename must be non-empty.", nameof(filename));
         }
+
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
@@ -1006,6 +1032,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 "Unlock first; without globalKey the worker can't decrypt slots " +
                 "back to plain pages.");
         }
+
         if (databaseNames.Count == 1)
         {
             await ExportDatabaseToDownloadAsync(
@@ -1056,6 +1083,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 $"envelopeSize must be positive, got {envelopeSize}.",
                 nameof(envelopeSize));
         }
+
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
@@ -1081,10 +1109,15 @@ internal sealed class EncryptedSqliteWasmDatabaseService
         }
 
         await SweepImportParksAsync(cancellationToken);
-        var replaced = await _bridge.ListDatabasesAsync(cancellationToken);
+        // A park the sweep left standing belongs to a database that is
+        // present; it is not itself one, and parking it would produce a
+        // park of a park. This import's own parking pass replaces it.
+        var replaced = (await _bridge.ListDatabasesAsync(cancellationToken))
+            .Where(name => !PoolNaming.IsImportPark(name))
+            .ToArray();
         foreach (var name in replaced)
         {
-            await _bridge.RenameDatabaseAsync(
+            await _encryptedBridge.ReplaceDatabaseAsync(
                 name, PoolNaming.ImportParkFor(name), cancellationToken);
         }
 
@@ -1095,20 +1128,26 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                 envelopeStream, envelopeSize, keepExisting: true, cancellationToken);
             // Everything unparked is what the envelope brought — the pool
             // was emptied of its own names by the parking pass above.
-            imported = [.. (await _bridge.ListDatabasesAsync(cancellationToken))
-                .Where(name => !PoolNaming.IsImportPark(name))];
+            imported =
+            [
+                .. (await _bridge.ListDatabasesAsync(cancellationToken))
+                .Where(name => !PoolNaming.IsImportPark(name))
+            ];
             foreach (var name in imported)
             {
                 await validateImported(name, cancellationToken);
             }
         }
-        catch
+        catch (Exception importFailure)
         {
-            foreach (var name in imported)
+            var rollbackFailure = await UndoPoolImportAsync(
+                replaced, imported, cancellationToken);
+            if (rollbackFailure is not null)
             {
-                await _bridge.DeleteDatabaseAsync(name, cancellationToken);
+                throw RollbackFailed(
+                    "Import of the database envelope", importFailure, rollbackFailure);
             }
-            await RestoreImportParksAsync(replaced, cancellationToken);
+
             throw;
         }
 
@@ -1118,6 +1157,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             await _bridge.DeleteDatabaseAsync(
                 PoolNaming.ImportParkFor(name), cancellationToken);
         }
+
         ReportDbState(DbInitState.READY);
     }
 
@@ -1152,6 +1192,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                             $"ImportDatabasesFromStreamAsync: stream ended at {totalRead} " +
                             $"of {envelopeSize} bytes; envelope is truncated.");
                     }
+
                     totalRead += read;
                     bool isLast = totalRead == envelopeSize;
                     SqliteWasmWorkerBridge.BlobSessionAppend(
@@ -1178,36 +1219,129 @@ internal sealed class EncryptedSqliteWasmDatabaseService
     }
 
     /// <summary>
-    /// Put parked content back under its own name. Called when a validated
-    /// import is refused — the renames are metadata-only, so what comes
-    /// back is byte-identical to what was parked, page AAD included.
+    /// Undo a refused whole-envelope import: everything the envelope brought
+    /// that did not displace a database of its own is dropped, and every
+    /// park goes back over what took its name. The replaces are
+    /// metadata-only, so what comes back is byte-identical to what was
+    /// parked, page AAD included.
+    ///
+    /// <para>
+    /// Every entry is attempted even after one fails — a database that can
+    /// still be put back should be, whatever happened to the one before it.
+    /// The failures travel back together; <c>null</c> means the pool is back
+    /// to how it was.
+    /// </para>
     /// </summary>
-    private async Task RestoreImportParksAsync(
-        IReadOnlyList<string> names, CancellationToken cancellationToken)
+    private async Task<Exception?> UndoPoolImportAsync(
+        IReadOnlyList<string> parked,
+        IReadOnlyList<string> imported,
+        CancellationToken cancellationToken)
     {
-        foreach (var name in names)
+        var parkedNames = new HashSet<string>(parked, StringComparer.Ordinal);
+        List<Exception>? failures = null;
+        foreach (var name in imported.Where(name => !parkedNames.Contains(name)))
         {
-            await _bridge.RenameDatabaseAsync(
-                PoolNaming.ImportParkFor(name), name, cancellationToken);
+            try
+            {
+                await _bridge.DeleteDatabaseAsync(name, cancellationToken);
+            }
+            catch (Exception dropFailure)
+            {
+                (failures ??= []).Add(dropFailure);
+            }
         }
+
+        foreach (var name in parked)
+        {
+            try
+            {
+                await _encryptedBridge.ReplaceDatabaseAsync(
+                    PoolNaming.ImportParkFor(name), name, cancellationToken);
+            }
+            catch (Exception restoreFailure)
+            {
+                (failures ??= []).Add(restoreFailure);
+            }
+        }
+
+        return failures is null ? null : new AggregateException(failures);
     }
 
     /// <summary>
-    /// Drop parks a previous import left behind. Only a tab that died
-    /// mid-import can leave one; sweeping at the start of the next import
-    /// keeps them from colliding with its own parking pass.
+    /// Settle parks a previous import left behind, so this import's own
+    /// parking pass starts from a clean pool. A park outlives its import
+    /// when the tab dies mid-flight or the pool's access handles are closed
+    /// under the rollback.
+    ///
+    /// <para>
+    /// A park whose database is absent is the only copy of that database —
+    /// the restore that would have put it back never ran — so it goes back
+    /// under its own name. A park whose database is present is left alone:
+    /// the names cannot say whether it outlived a finished import or a
+    /// rollback that got half-way, and this import's own parking pass
+    /// replaces it in a moment either way. Nothing here deletes a park.
+    /// </para>
     /// </summary>
     private async Task SweepImportParksAsync(CancellationToken cancellationToken)
     {
         var pool = await _bridge.ListDatabasesAsync(cancellationToken);
+        var present = new HashSet<string>(
+            pool.Where(name => !PoolNaming.IsImportPark(name)), StringComparer.Ordinal);
         foreach (var name in pool)
         {
-            if (PoolNaming.IsImportPark(name))
+            if (!PoolNaming.IsImportPark(name))
             {
-                await _bridge.DeleteDatabaseAsync(name, cancellationToken);
+                continue;
+            }
+
+            var parkedFor = PoolNaming.DatabaseNameForPark(name);
+            if (present.Add(parkedFor))
+            {
+                await _encryptedBridge.ReplaceDatabaseAsync(
+                    name, parkedFor, cancellationToken);
             }
         }
     }
+
+    /// <summary>
+    /// Undo a refused import of a single database: the park goes back over
+    /// what arrived in one replace, or — when the import was creating the
+    /// database rather than replacing one — what arrived is dropped.
+    /// Returns the failure that stopped the rollback, or <c>null</c> when
+    /// the pool is back to how it was.
+    /// </summary>
+    private async Task<Exception?> UndoImportAsync(
+        string databaseName, bool replaced, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (replaced)
+            {
+                await _encryptedBridge.ReplaceDatabaseAsync(
+                    PoolNaming.ImportParkFor(databaseName), databaseName, cancellationToken);
+            }
+            else
+            {
+                await _bridge.DeleteDatabaseAsync(databaseName, cancellationToken);
+            }
+            return null;
+        }
+        catch (Exception rollbackFailure)
+        {
+            return rollbackFailure;
+        }
+    }
+
+    /// <summary>
+    /// The exception a refused import propagates when its rollback could
+    /// not finish either — both failures, and where the data is.
+    /// </summary>
+    private static AggregateException RollbackFailed(
+        string what, Exception importFailure, Exception rollbackFailure) =>
+        new($"{what} was refused and the previous content could not be put back. " +
+            $"It is parked under the \"{PoolNaming.ImportParkSuffix}\" suffix and goes " +
+            $"back under its own name when this app next starts.",
+            importFailure, rollbackFailure);
 
     /// <summary>
     /// Streaming single-DB plain import — the right primitive for "I have
@@ -1241,11 +1375,13 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new ArgumentException(
                 "databaseName must be non-empty.", nameof(databaseName));
         }
+
         if (size <= 0)
         {
             throw new ArgumentException(
                 $"size must be positive, got {size}.", nameof(size));
         }
+
         var current = await GetStateAsync(cancellationToken);
         if (current.Encrypted && !current.Unlocked)
         {
@@ -1278,7 +1414,8 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             .Contains(databaseName, StringComparer.Ordinal);
         if (replaced)
         {
-            await _bridge.RenameDatabaseAsync(databaseName, parked, cancellationToken);
+            await _encryptedBridge.ReplaceDatabaseAsync(
+                databaseName, parked, cancellationToken);
         }
 
         try
@@ -1286,13 +1423,16 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             await StreamIntoDatabaseAsync(databaseName, stream, size, cancellationToken);
             await validateImported(databaseName, cancellationToken);
         }
-        catch
+        catch (Exception importFailure)
         {
-            await _bridge.DeleteDatabaseAsync(databaseName, cancellationToken);
-            if (replaced)
+            var rollbackFailure = await UndoImportAsync(
+                databaseName, replaced, cancellationToken);
+            if (rollbackFailure is not null)
             {
-                await _bridge.RenameDatabaseAsync(parked, databaseName, cancellationToken);
+                throw RollbackFailed(
+                    $"Import of '{databaseName}'", importFailure, rollbackFailure);
             }
+
             throw;
         }
 
@@ -1333,6 +1473,7 @@ internal sealed class EncryptedSqliteWasmDatabaseService
                             $"ImportDatabaseFromStreamAsync: stream ended at {totalRead} " +
                             $"of {size} bytes; source is truncated.");
                     }
+
                     totalRead += read;
                     bool isLast = totalRead == size;
                     SqliteWasmWorkerBridge.BlobSessionAppend(
@@ -1393,24 +1534,26 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             throw new InvalidOperationException(
                 $"PeekEnvelopeHeader: expected envelope array(8), got array({arrLen}).");
         }
+
         var version = reader.ReadInt32();
         var aadVersion = reader.ReadString()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: AadVersion is null.");
+                         ?? throw new InvalidOperationException("PeekEnvelopeHeader: AadVersion is null.");
         var prfSaltSeq = reader.ReadBytes()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: PrfSalt is missing.");
+                         ?? throw new InvalidOperationException("PeekEnvelopeHeader: PrfSalt is missing.");
         if (prfSaltSeq.Length != 32)
         {
             throw new InvalidOperationException(
                 $"PeekEnvelopeHeader: PrfSalt must be 32 bytes, got {prfSaltSeq.Length}.");
         }
+
         var ephPub = reader.ReadString()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: EphemeralPublicKey is null.");
+                     ?? throw new InvalidOperationException("PeekEnvelopeHeader: EphemeralPublicKey is null.");
         var wrapCt = reader.ReadString()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyCiphertext is null.");
+                     ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyCiphertext is null.");
         var wrapNonce = reader.ReadString()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyNonce is null.");
+                        ?? throw new InvalidOperationException("PeekEnvelopeHeader: WrappedContentKeyNonce is null.");
         var credIdHint = reader.ReadString()
-            ?? throw new InvalidOperationException("PeekEnvelopeHeader: CredentialIdHint is null.");
+                         ?? throw new InvalidOperationException("PeekEnvelopeHeader: CredentialIdHint is null.");
         // Files array tail is intentionally not consumed — the streaming
         // worker reads it directly off the JS-side Blob.
         return new EnvelopeHeader
@@ -1444,13 +1587,14 @@ internal sealed class EncryptedSqliteWasmDatabaseService
             // Truncated / malformed prefix → no hint available.
             return ValueTask.FromResult<string?>(null);
         }
+
         if (header.Version != 3 || string.IsNullOrEmpty(header.CredentialIdHint))
         {
             return ValueTask.FromResult<string?>(null);
         }
+
         return ValueTask.FromResult<string?>(header.CredentialIdHint);
     }
-
 }
 
 [MessagePackObject(AllowPrivate = true)]
@@ -1462,6 +1606,7 @@ internal sealed class PoolManifestBody
     [Key(1)]
     public string? PublicKeyFingerprint { get; set; }
 }
+
 /// <summary>
 /// Pool-wide disk-manifest state surfaced by
 /// <see cref="EncryptedSqliteWasmDatabaseService.ReadManifestAsync"/>.
@@ -1471,12 +1616,16 @@ internal enum ManifestState
 {
     /// <summary>No DB carries the manifest magic — disk is Plain.</summary>
     ABSENT,
+
     /// <summary>Every DB carries an identical, structurally-valid manifest.</summary>
     PRESENT,
+
     /// <summary>DBs carry different manifest bytes — corruption / partial import.</summary>
     MISMATCH,
+
     /// <summary>HMAC verification failed (verifyMac=true was passed).</summary>
     TAMPERED,
+
     /// <summary>Magic present but layout decode failed — corruption.</summary>
     MALFORMED,
 }

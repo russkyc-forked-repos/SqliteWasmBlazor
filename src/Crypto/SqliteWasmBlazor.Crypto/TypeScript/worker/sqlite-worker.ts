@@ -3,7 +3,7 @@
 // SAHPool provides synchronous OPFS access in worker context
 
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { pack, unpack } from 'msgpackr';
+import {pack, unpack} from 'msgpackr';
 import {
     logger,
     registerEFCoreFunctions,
@@ -12,16 +12,22 @@ import {
     setSqlite3, setPoolUtil, setBaseHref,
     bulkInsertRows, type BulkInsertHeader,
 } from '@sqlitewasmblazor/worker-common';
-import { deltaExportEncrypted, deltaImportEncrypted, bulkRotateKey } from './crypto-delta';
-import { installOpfsSAHPoolVfs as installPrfVfs } from './vfs-prf/sahpool-prf-vfs';
+import {deltaExportEncrypted, deltaImportEncrypted, bulkRotateKey} from './crypto-delta';
+import {installOpfsSAHPoolVfs as installPrfVfs} from './vfs-prf/sahpool-prf-vfs';
 import {
     hasGlobalKey,
     snapshotGlobalKey,
     setGlobalKey,
     clearGlobalKey,
 } from './vfs-prf/key-registry';
-import { rekeySlots } from './vfs-prf/rekey';
-import { clearBytes } from '@sqlitewasmblazor/crypto-core';
+import {rekeySlots} from './vfs-prf/rekey';
+import {
+    DECRYPT_TMP_SUFFIX,
+    ENCRYPT_TMP_SUFFIX,
+    MULTI_IMPORT_TMP_SUFFIX,
+    planPoolSweep,
+} from './vfs-prf/pool-naming';
+import {clearBytes} from '@sqlitewasmblazor/crypto-core';
 import {
     readPoolManifestOp,
     writePoolManifestOp,
@@ -33,7 +39,7 @@ import {
     importDatabaseFromBlob,
     assertImportFileCount,
 } from './vfs-prf/import-streamed';
-import { openExportStaging, sweepExportStaging } from '@sqlitewasmblazor/worker-common';
+import {openExportStaging, sweepExportStaging} from '@sqlitewasmblazor/worker-common';
 import {
     BufferedStreamReader,
     readArrayHeader,
@@ -106,6 +112,30 @@ function convertBigInt(value: any): any {
         return converted;
     }
     return value;
+}
+
+/**
+ * Carry out what {@link planPoolSweep} decided about the entries a session
+ * that died mid-flight left behind — see there for why a park goes back
+ * and a temp slot goes away.
+ */
+function sweepUnfinishedPoolEntries(): void {
+    if (!poolUtil) {
+        throw new Error('sweepUnfinishedPoolEntries: pool not installed');
+    }
+    for (const action of planPoolSweep(poolUtil.listDatabases())) {
+        if (action.kind === 'restore') {
+            poolUtil.renameFile(
+                `/databases/${action.park}`, `/databases/${action.database}`);
+            logger.warn(
+                MODULE_NAME,
+                `Restored ${action.database} from ${action.park} — an import replaced ` +
+                `it and never finished.`);
+            continue;
+        }
+        poolUtil.unlink(`/databases/${action.name}`);
+        logger.warn(MODULE_NAME, `Dropped unfinished write ${action.name}.`);
+    }
 }
 
 // Initialize sqlite-wasm with OPFS SAHPool
@@ -199,11 +229,14 @@ async function initializeSQLite() {
             logger.warn(MODULE_NAME, 'export-staging sweep failed:', err);
         }
 
+        // Put back what a session that died mid-import could not.
+        sweepUnfinishedPoolEntries();
+
         logger.info(MODULE_NAME, 'OPFS SAHPool VFS installed successfully');
         logger.debug(MODULE_NAME, 'Available VFS:', sqlite3.capi.sqlite3_vfs_find(null));
 
         // Signal ready to main thread
-        self.postMessage({ type: 'ready' });
+        self.postMessage({type: 'ready'});
         logger.info(MODULE_NAME, 'Ready!');
     } catch (error) {
         logger.error(MODULE_NAME, 'Initialization failed:', error);
@@ -215,7 +248,11 @@ async function initializeSQLite() {
 }
 
 // Handle messages from main thread
-self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel'; level: number } | { type: 'init'; baseHref: string; assetRoot?: string }>) => {
+self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel'; level: number } | {
+    type: 'init';
+    baseHref: string;
+    assetRoot?: string
+}>) => {
     // Handle initialization with base href and asset root
     if ('type' in event.data && event.data.type === 'init' && 'baseHref' in event.data) {
         baseHref = event.data.baseHref;
@@ -255,7 +292,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest | { type: 'setLogLevel
     }
 
     // Handle regular requests
-    const { id, data, binaryPayload, binaryHeader } = event.data as WorkerRequest;
+    const {id, data, binaryPayload, binaryHeader} = event.data as WorkerRequest;
 
     try {
         const result = await handleRequest(data, binaryPayload, binaryHeader);
@@ -406,7 +443,7 @@ async function importPoolStreamPreflightHandler(
     } finally {
         clearBytes(kWrap);
     }
-    self.postMessage({ streamId, streamDone: true, result });
+    self.postMessage({streamId, streamDone: true, result});
 }
 
 /**
@@ -437,7 +474,7 @@ async function importPoolStreamCommitHandler(
         clearBytes(kWrap);
         clearBytes(globalKey);
     }
-    self.postMessage({ streamId, streamDone: true, result: 0 });
+    self.postMessage({streamId, streamDone: true, result: 0});
 }
 
 /**
@@ -458,7 +495,7 @@ async function exportDatabaseToStagingHandler(
     dbName: string,
 ): Promise<void> {
     const stagingFile = await exportDatabaseToStagingCore(dbName);
-    self.postMessage({ streamId, streamDone: true, stagingFile });
+    self.postMessage({streamId, streamDone: true, stagingFile});
 }
 
 /**
@@ -517,8 +554,12 @@ async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
                 }
                 staging.write(plainChunk!);
             } finally {
-                if (sourceChunk !== null) { clearBytes(sourceChunk); }
-                if (plainChunk !== null) { clearBytes(plainChunk); }
+                if (sourceChunk !== null) {
+                    clearBytes(sourceChunk);
+                }
+                if (plainChunk !== null) {
+                    clearBytes(plainChunk);
+                }
             }
         }
 
@@ -528,7 +569,9 @@ async function exportDatabaseToStagingCore(dbName: string): Promise<string> {
         await staging.abort();
         throw err;
     } finally {
-        if (globalKey !== undefined) { clearBytes(globalKey); }
+        if (globalKey !== undefined) {
+            clearBytes(globalKey);
+        }
     }
 }
 
@@ -621,19 +664,25 @@ async function exportDatabasesToStagingHandler(
                     }
                     staging.write(plainChunk!);
                 } finally {
-                    if (sourceChunk !== null) { clearBytes(sourceChunk); }
-                    if (plainChunk !== null) { clearBytes(plainChunk); }
+                    if (sourceChunk !== null) {
+                        clearBytes(sourceChunk);
+                    }
+                    if (plainChunk !== null) {
+                        clearBytes(plainChunk);
+                    }
                 }
             }
         }
 
         staging.finish();
-        self.postMessage({ streamId, streamDone: true, stagingFile: staging.name });
+        self.postMessage({streamId, streamDone: true, stagingFile: staging.name});
     } catch (err) {
         await staging.abort();
         throw err;
     } finally {
-        if (globalKey !== undefined) { clearBytes(globalKey); }
+        if (globalKey !== undefined) {
+            clearBytes(globalKey);
+        }
     }
 }
 
@@ -722,7 +771,10 @@ async function importDatabasesFromSessionHandler(
     if (!keepExisting) {
         const existing = poolUtil.listDatabases();
         for (const name of existing) {
-            try { poolUtil.unlink(`/databases/${name}`); } catch { /* best-effort */ }
+            try {
+                poolUtil.unlink(`/databases/${name}`);
+            } catch { /* best-effort */
+            }
         }
     }
 
@@ -745,9 +797,12 @@ async function importDatabasesFromSessionHandler(
                     `is not a non-zero multiple of ${PLAIN_SLOT_SIZE}.`);
             }
             const dbPath = `/databases/${name}`;
-            const tempPath = `${dbPath}.multi-import-tmp`;
+            const tempPath = `${dbPath}${MULTI_IMPORT_TMP_SUFFIX}`;
             if (poolUtil.getFileNames().includes(tempPath)) {
-                try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+                try {
+                    poolUtil.unlink(tempPath);
+                } catch { /* best-effort */
+                }
             }
             const totalSlots = plainSize / PLAIN_SLOT_SIZE;
 
@@ -773,7 +828,9 @@ async function importDatabasesFromSessionHandler(
                             tempPath, slotBase * ENCRYPTED_SLOT_SIZE, encryptedChunk!);
                     } finally {
                         clearBytes(plainChunk);
-                        if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                        if (encryptedChunk !== null) {
+                            clearBytes(encryptedChunk);
+                        }
                     }
                 } else {
                     try {
@@ -788,10 +845,12 @@ async function importDatabasesFromSessionHandler(
             poolUtil.atomicReplaceFile(tempPath, dbPath);
         }
 
-        self.postMessage({ streamId, streamDone: true, result: 0 });
+        self.postMessage({streamId, streamDone: true, result: 0});
     } finally {
         reader.releaseLock();
-        if (globalKey !== undefined) { clearBytes(globalKey); }
+        if (globalKey !== undefined) {
+            clearBytes(globalKey);
+        }
     }
 }
 
@@ -831,7 +890,7 @@ async function importDatabaseFromSessionHandler(
     } else {
         await importDatabaseFromBlob(blob, dbName, poolUtil, undefined, undefined);
     }
-    self.postMessage({ streamId, streamDone: true, result: 0 });
+    self.postMessage({streamId, streamDone: true, result: 0});
 }
 
 /**
@@ -898,15 +957,19 @@ async function exportPoolToStagingHandler(streamId: number, kWrap: Uint8Array): 
                     rekeyedChunk = rekeySlots(sourceChunk!, dbPath, globalKey, kWrap, slotBase);
                     staging.write(rekeyedChunk);
                 } finally {
-                    if (sourceChunk !== null) { clearBytes(sourceChunk); }
-                    if (rekeyedChunk !== null) { clearBytes(rekeyedChunk); }
+                    if (sourceChunk !== null) {
+                        clearBytes(sourceChunk);
+                    }
+                    if (rekeyedChunk !== null) {
+                        clearBytes(rekeyedChunk);
+                    }
                 }
             }
-            files.push({ name, offset: fileOffset, size: staging.position() - fileOffset });
+            files.push({name, offset: fileOffset, size: staging.position() - fileOffset});
         }
 
         staging.finish();
-        self.postMessage({ streamId, streamDone: true, stagingFile: staging.name, files });
+        self.postMessage({streamId, streamDone: true, stagingFile: staging.name, files});
     } catch (err) {
         await staging.abort();
         throw err;
@@ -917,7 +980,7 @@ async function exportPoolToStagingHandler(streamId: number, kWrap: Uint8Array): 
 }
 
 async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayBuffer, binaryHeader?: ArrayBuffer) {
-    const { type, database, sql, parameters } = data;
+    const {type, database, sql, parameters} = data;
 
     switch (type) {
         case 'open':
@@ -930,7 +993,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // Plane-1-compatible request shape (base library's
             // ExportDatabaseToDownloadAsync). State-aware: Encrypted+
             // Unlocked decrypts to plain pages, Plain copies verbatim.
-            return { stagingFile: await exportDatabaseToStagingCore(database!) };
+            return {stagingFile: await exportDatabaseToStagingCore(database!)};
 
         case 'setGlobalEncryptionKey':
             // Install the worker-wide key. Every page I/O across every open
@@ -952,7 +1015,7 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
             // these to encrypt-in-place / decrypt-in-place every DB.
             // Returns bare names (no /databases/ prefix), no journal/WAL
             // siblings, no .vfs-lock.
-            return { databases: poolUtil.listDatabases() };
+            return {databases: poolUtil.listDatabases()};
 
         case 'execute':
             // When binaryPayload is present, blob params carry
@@ -975,15 +1038,18 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
         case 'rename':
             return await renameDatabase(database!, (data as any).newName);
 
-          case 'importDb':
-              if (!binaryPayload) {
-                  throw new Error('importDb requires binaryPayload');
-              }
-              return await importDatabase(
-                  database!,
-                  new Uint8Array(binaryPayload),
-                  (data as any).opaque === true
-              );
+        case 'replaceDb':
+            return await replaceDatabase(database!, (data as any).targetName);
+
+        case 'importDb':
+            if (!binaryPayload) {
+                throw new Error('importDb requires binaryPayload');
+            }
+            return await importDatabase(
+                database!,
+                new Uint8Array(binaryPayload),
+                (data as any).opaque === true
+            );
 
         case 'exportDb': {
             // Plane-1 contract (ISqliteWasmDatabaseService.ExportDatabaseAsync):
@@ -1175,7 +1241,7 @@ async function openDatabase(dbName: string) {
         registerEFCoreFunctions(db, sqlite3);
     }
 
-    return { success: true };
+    return {success: true};
 }
 
 /**
@@ -1200,7 +1266,7 @@ async function setGlobalEncryptionKeyOp(key: Uint8Array) {
     }
     setGlobalKey(key);
     logger.debug(MODULE_NAME, `Installed global encryption key`);
-    return { success: true };
+    return {success: true};
 }
 
 /**
@@ -1214,7 +1280,7 @@ async function clearGlobalEncryptionKeyOp() {
     }
     clearGlobalKey();
     logger.debug(MODULE_NAME, `Cleared global encryption key`);
-    return { success: true };
+    return {success: true};
 }
 
 /**
@@ -1332,14 +1398,13 @@ function convertParametersForBinding(
     for (const [key, paramData] of Object.entries(parameters)) {
         // Handle new format with type metadata
         if (paramData && typeof paramData === 'object' && 'value' in paramData && 'type' in paramData) {
-            const { value, type } = paramData;
+            const {value, type} = paramData;
 
             if (value === null || value === undefined) {
                 converted[key] = null;
                 logger.debug(MODULE_NAME, `[PARAM] ${key}: null`);
-            }
-            else if (type === 'blob' && binaryPayload && value && typeof value === 'object'
-                     && typeof value.__blobOffset === 'number' && typeof value.__blobLength === 'number') {
+            } else if (type === 'blob' && binaryPayload && value && typeof value === 'object'
+                && typeof value.__blobOffset === 'number' && typeof value.__blobLength === 'number') {
                 // Blob bytes carried in the binary attachment, not Base64.
                 // Slice (not subarray-view-passthrough) so SQLite binding owns
                 // an independent buffer — binaryPayload's underlying ArrayBuffer
@@ -1350,8 +1415,7 @@ function convertParametersForBinding(
                 bytes.set(binaryPayload.subarray(offset, offset + length));
                 converted[key] = bytes;
                 logger.debug(MODULE_NAME, `[PARAM] ${key}: blob (${length} bytes from binary attachment @ ${offset})`);
-            }
-            else if (type === 'blob' && typeof value === 'string') {
+            } else if (type === 'blob' && typeof value === 'string') {
                 // Legacy fallback — Base64-encoded blob in the JSON message.
                 try {
                     const binaryString = atob(value);
@@ -1365,14 +1429,12 @@ function convertParametersForBinding(
                     logger.error(MODULE_NAME, `[PARAM] Failed to decode blob ${key}:`, e);
                     converted[key] = value;
                 }
-            }
-            else {
+            } else {
                 // For text, integer, real - use value as-is
                 converted[key] = value;
                 logger.debug(MODULE_NAME, `[PARAM] ${key}: ${type} = ${typeof value === 'string' && value.length > 50 ? value.substring(0, 50) + '...' : value}`);
             }
-        }
-        else {
+        } else {
             // Fallback for old format (backwards compatibility)
             logger.warn(MODULE_NAME, `[PARAM] ${key}: using legacy format (no type metadata)`);
             converted[key] = paramData;
@@ -1487,8 +1549,7 @@ async function executeSql(
             if (hasReturning && result && result.length > 0) {
                 // For UPDATE/DELETE with RETURNING, the presence of a result row means success
                 rowsAffected = result.length;
-            }
-            else {
+            } else {
                 // For INSERT without RETURNING, or any statement without RETURNING
                 rowsAffected = db.changes();
             }
@@ -1526,7 +1587,74 @@ async function closeDatabase(dbName: string) {
         // ClearEncryptionKeyAsync at session boundaries.
         logger.info(MODULE_NAME, `Closed database: ${dbName}`);
     }
-    return { success: true };
+    return {success: true};
+}
+
+/**
+ * True for the DOMException a sync access handle throws once the platform
+ * has closed it ("AccessHandle is closed"). WebKit reclaims the storage
+ * layer under memory pressure while the page lives on, and from that
+ * moment every pool call fails the same way — including the rename that
+ * would put a parked database back.
+ */
+function isClosedHandleError(error: unknown): boolean {
+    return error instanceof DOMException && error.name === 'InvalidStateError';
+}
+
+/**
+ * Re-acquire the pool's access handles after the platform closed them.
+ *
+ * Open databases go first: a connection whose SAH is dead cannot close
+ * cleanly, so each close is best-effort and the cache entry is dropped
+ * either way. C# reopens on demand — its open-set mirror is an
+ * optimisation, never the authority (OpenDatabaseAsync always reaches the
+ * worker). The pool rebuilds its path mapping from the slot headers, so
+ * what it knows afterwards is what is actually on disk.
+ */
+async function recoverPoolAccessHandles(): Promise<void> {
+    if (!poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    for (const [dbName, db] of [...openDatabases.entries()]) {
+        try {
+            db.close();
+        } catch (err) {
+            logger.warn(MODULE_NAME, `close during handle recovery failed for ${dbName}:`, err);
+        }
+        openDatabases.delete(dbName);
+        pragmasSet.delete(dbName);
+    }
+    await poolUtil.recoverAccessHandles();
+    logger.warn(
+        MODULE_NAME,
+        `Re-acquired pool access handles after the platform closed them; ` +
+        `${poolUtil.listDatabases().length} database(s) in the pool.`);
+}
+
+/**
+ * Run a pool metadata operation, and if the platform has closed the access
+ * handles, re-acquire them and run it once more.
+ *
+ * Only for operations that are a single header update — rename, unlink.
+ * Those either happened or did not, so a retry is a retry and not a second
+ * half-write. Chunked body writes are deliberately not wrapped: their
+ * source stream is already consumed, and their temp slot is discarded by
+ * the caller's own rollback.
+ */
+async function withHandleRecovery<T>(what: string, op: () => T): Promise<T> {
+    try {
+        return op();
+    } catch (error) {
+        if (!isClosedHandleError(error)) {
+            throw error;
+        }
+        logger.warn(
+            MODULE_NAME,
+            `${what}: pool access handles were closed by the platform — re-acquiring`,
+            error);
+        await recoverPoolAccessHandles();
+        return op();
+    }
 }
 
 async function checkDatabaseExists(dbName: string) {
@@ -1537,7 +1665,7 @@ async function checkDatabaseExists(dbName: string) {
     try {
         // Check if database is currently open
         if (openDatabases.has(dbName)) {
-            return { rowsAffected: 1 };  // exists
+            return {rowsAffected: 1};  // exists
         }
 
         // Check if database file exists in OPFS SAHPool
@@ -1548,21 +1676,21 @@ async function checkDatabaseExists(dbName: string) {
         if (poolUtil.getFileNames) {
             const files = await poolUtil.getFileNames();
             const exists = files.includes(dbPath);
-            return { rowsAffected: exists ? 1 : 0 };
+            return {rowsAffected: exists ? 1 : 0};
         }
 
         // Fallback: try to open database to check if it exists
         try {
             const testDb = new poolUtil.OpfsSAHPoolDb(dbPath);
             testDb.close();
-            return { rowsAffected: 1 };  // exists
+            return {rowsAffected: 1};  // exists
         } catch {
-            return { rowsAffected: 0 };  // doesn't exist
+            return {rowsAffected: 0};  // doesn't exist
         }
     } catch (error) {
         logger.error(MODULE_NAME, `Failed to check database ${dbName}:`, error);
         // On error, assume it doesn't exist
-        return { rowsAffected: 0 };
+        return {rowsAffected: 0};
     }
 }
 
@@ -1580,7 +1708,8 @@ async function deleteDatabase(dbName: string) {
 
         // Use unlink to delete a specific database file (not wipeFiles which deletes ALL databases!)
         if (poolUtil.unlink) {
-            const deleted = poolUtil.unlink(dbPath);
+            const deleted = await withHandleRecovery(
+                `delete ${dbName}`, () => poolUtil!.unlink(dbPath));
             if (deleted) {
                 logger.info(MODULE_NAME, `✓ Deleted database: ${dbName}`);
             } else {
@@ -1590,7 +1719,7 @@ async function deleteDatabase(dbName: string) {
             logger.warn(MODULE_NAME, `unlink not available, database may persist`);
         }
 
-        return { success: true };
+        return {success: true};
     } catch (error) {
         logger.error(MODULE_NAME, `Failed to delete database ${dbName}:`, error);
         throw error;
@@ -1613,7 +1742,36 @@ async function exportDatabaseVerbatim(dbName: string) {
     await closeDatabase(dbName);
     const raw: Uint8Array = poolUtil.exportFile(dbPath);
     logger.info(MODULE_NAME, `✓ Exported verbatim ${dbName}: ${raw.length}B`);
-    return { rawBinary: true, data: raw };
+    return {rawBinary: true, data: raw};
+}
+
+/**
+ * Put <paramref name="sourceName"/> in <paramref name="targetName"/>'s
+ * place: the target's slot is freed and the source's slot re-tagged with
+ * the target's path, in one pool metadata update. No bytes are copied.
+ *
+ * This is what park/restore needs and a plain rename cannot give it. A
+ * rename onto an occupied name silently drops the occupant's slot out of
+ * the path map — it stays claimed and its bytes stay unreachable — and
+ * splitting it into delete-then-rename opens a window where a failure
+ * between the two leaves both the park and what it was meant to replace
+ * standing, with nothing left to say which one is the database.
+ */
+async function replaceDatabase(sourceName: string, targetName: string) {
+    if (!sqlite3 || !poolUtil) {
+        throw new Error('SQLite not initialized');
+    }
+    // Both slots change identity here; an OFile that captured either SAH at
+    // xOpen keeps serving pages from a slot that now belongs to the other
+    // path. C# reopens on demand.
+    await closeDatabase(sourceName);
+    await closeDatabase(targetName);
+    await withHandleRecovery(
+        `replace ${targetName} with ${sourceName}`,
+        () => poolUtil!.atomicReplaceFile(
+            `/databases/${sourceName}`, `/databases/${targetName}`));
+    logger.info(MODULE_NAME, `✓ Replaced ${targetName} with ${sourceName}`);
+    return {success: true};
 }
 
 async function renameDatabase(oldName: string, newName: string) {
@@ -1644,7 +1802,9 @@ async function renameDatabase(oldName: string, newName: string) {
         logger.debug(MODULE_NAME, `Renaming database file in OPFS: ${oldPath} -> ${newPath}`);
 
         try {
-            poolUtil.renameFile(oldPath, newPath);
+            await withHandleRecovery(
+                `rename ${oldName} → ${newName}`,
+                () => poolUtil!.renameFile(oldPath, newPath));
             logger.info(MODULE_NAME, `✓ Successfully renamed database from ${oldName} to ${newName} (metadata-only, no file copy)`);
 
             // Debug: Verify rename worked
@@ -1657,7 +1817,7 @@ async function renameDatabase(oldName: string, newName: string) {
             throw new Error(`Failed to rename database from ${oldName} to ${newName}: ${renameError}`);
         }
 
-        return { success: true };
+        return {success: true};
     } catch (error) {
         logger.error(MODULE_NAME, `Failed to rename database from ${oldName} to ${newName}:`, error);
         throw error;
@@ -1690,7 +1850,7 @@ async function importDatabase(dbName: string, data: Uint8Array, opaque = false) 
                     `Refused opaque import of ${dbName}: existing DB at ${dbPath}; caller must wipe first`,
                 );
                 // VfsImportResult.EXISTING_DB_REFUSED = 2
-                return { rowsAffected: 2 };
+                return {rowsAffected: 2};
             }
         }
 
@@ -1720,7 +1880,7 @@ async function importDatabase(dbName: string, data: Uint8Array, opaque = false) 
                     `Verify-on-write rejected import of ${dbName}: AEAD failed on slot 0; rolled back`,
                 );
                 // VfsImportResult.WRONG_KEY = 1
-                return { rowsAffected: 1 };
+                return {rowsAffected: 1};
             }
             logger.debug(
                 MODULE_NAME,
@@ -1731,7 +1891,7 @@ async function importDatabase(dbName: string, data: Uint8Array, opaque = false) 
         logger.info(MODULE_NAME, `✓ Imported database: ${dbName} (${data.length} bytes)`);
 
         // VfsImportResult.OK = 0
-        return { rowsAffected: 0 };
+        return {rowsAffected: 0};
     } catch (error) {
         logger.error(MODULE_NAME, `Failed to import database ${dbName}:`, error);
         throw error;
@@ -1815,7 +1975,7 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
     }
 
     const dbPath = `/databases/${dbName}`;
-    const tempPath = `${dbPath}.encrypt-tmp`;
+    const tempPath = `${dbPath}${ENCRYPT_TMP_SUFFIX}`;
 
     // Install-K-first ordering (D.1): a globalKey is already registered
     // before this loop runs — the caller (EnterEncryptedAsync) installed
@@ -1865,7 +2025,10 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
     // Clean up any leftover temp slot from a prior crashed attempt before
     // we start writing. unlink is no-op on missing paths.
     if (poolUtil.getFileNames().includes(tempPath)) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        try {
+            poolUtil.unlink(tempPath);
+        } catch { /* best-effort */
+        }
     }
 
     try {
@@ -1883,8 +2046,12 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
                 poolUtil.writeFileSlice(tempPath, encryptedOffset, encryptedChunk!);
             } finally {
                 // plainChunk is sensitive plaintext — wipe.
-                if (plainChunk !== null) { clearBytes(plainChunk); }
-                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                if (plainChunk !== null) {
+                    clearBytes(plainChunk);
+                }
+                if (encryptedChunk !== null) {
+                    clearBytes(encryptedChunk);
+                }
             }
         }
 
@@ -1898,11 +2065,14 @@ async function encryptDatabaseInPlace(dbName: string, key: Uint8Array) {
             `✓ Encrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
 
-        return { rowsAffected: 0 };
+        return {rowsAffected: 0};
     } catch (err) {
         // Mid-loop or post-rename failure: drop the temp slot if it still
         // has data. The real path is untouched until atomicReplaceFile.
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        try {
+            poolUtil.unlink(tempPath);
+        } catch { /* best-effort */
+        }
         throw err;
     }
 }
@@ -1921,7 +2091,7 @@ async function decryptDatabaseInPlace(dbName: string) {
     }
 
     const dbPath = `/databases/${dbName}`;
-    const tempPath = `${dbPath}.decrypt-tmp`;
+    const tempPath = `${dbPath}${DECRYPT_TMP_SUFFIX}`;
 
     if (!hasGlobalKey()) {
         throw new Error(
@@ -1958,7 +2128,10 @@ async function decryptDatabaseInPlace(dbName: string) {
         const totalSlots = fileSize / ENCRYPTED_SLOT_SIZE;
 
         if (poolUtil.getFileNames().includes(tempPath)) {
-            try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+            try {
+                poolUtil.unlink(tempPath);
+            } catch { /* best-effort */
+            }
         }
 
         for (let slotBase = 0; slotBase < totalSlots; slotBase += CHUNK_SLOTS) {
@@ -1974,9 +2147,13 @@ async function decryptDatabaseInPlace(dbName: string) {
                 plainChunk = rekeySlots(encryptedChunk!, dbPath, sourceKey, undefined, slotBase);
                 poolUtil.writeFileSlice(tempPath, plainOffset, plainChunk!);
             } finally {
-                if (encryptedChunk !== null) { clearBytes(encryptedChunk); }
+                if (encryptedChunk !== null) {
+                    clearBytes(encryptedChunk);
+                }
                 // plainChunk is sensitive plaintext — wipe.
-                if (plainChunk !== null) { clearBytes(plainChunk); }
+                if (plainChunk !== null) {
+                    clearBytes(plainChunk);
+                }
             }
         }
 
@@ -1987,9 +2164,12 @@ async function decryptDatabaseInPlace(dbName: string) {
             `✓ Decrypted in place ${dbName}: ${fileSize}B (${totalSlots} slots) chunked`,
         );
 
-        return { rowsAffected: 0 };
+        return {rowsAffected: 0};
     } catch (err) {
-        try { poolUtil.unlink(tempPath); } catch { /* best-effort */ }
+        try {
+            poolUtil.unlink(tempPath);
+        } catch { /* best-effort */
+        }
         throw err;
     } finally {
         // K_old (snapshot) — wipe so it doesn't linger past the op.

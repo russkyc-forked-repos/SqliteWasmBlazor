@@ -137,6 +137,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
                 throw new InvalidOperationException(
                     $"Worker returned unexpected in-place rekey outcome code {result.RowsAffected}");
             }
+
             // Worker closes the DB during in-place conversion for a stable
             // OPFS snapshot; force the next DbContext open to re-enter xOpen.
             _bridge.MarkDatabaseClosed(databaseName);
@@ -165,6 +166,7 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
             throw new InvalidOperationException(
                 $"Worker returned unexpected in-place decrypt outcome code {result.RowsAffected}");
         }
+
         _bridge.MarkDatabaseClosed(databaseName);
     }
 
@@ -226,5 +228,37 @@ internal sealed partial class EncryptedSqliteWasmWorkerBridge
     {
         var request = new { type = "clearPoolManifest" };
         await _bridge.SendRequestAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Put <paramref name="sourceName"/> in <paramref name="targetName"/>'s
+    /// place — the target's pool slot is freed and the source's slot takes
+    /// over its name, in one metadata update. No bytes are copied and no
+    /// intermediate state exists: either the source is the target now, or
+    /// nothing moved.
+    ///
+    /// <para>
+    /// This is the park/restore primitive.
+    /// <see cref="ISqliteWasmDatabaseService.RenameDatabaseAsync"/> cannot
+    /// stand in for it: renaming onto a name the pool already holds leaves
+    /// the occupant's slot claimed but unreachable, and splitting the job
+    /// into delete-then-rename leaves a park and the import that displaced
+    /// it standing side by side if the pool fails in between — with nothing
+    /// left to say which of the two is the database.
+    /// </para>
+    /// </summary>
+    /// <param name="sourceName">Entry that takes over the target's name.</param>
+    /// <param name="targetName">Name to place it under; its content is dropped.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    internal async Task ReplaceDatabaseAsync(
+        string sourceName,
+        string targetName,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new { type = "replaceDb", database = sourceName, targetName };
+        await _bridge.SendRequestAsync(request, cancellationToken);
+        // The worker closes both to swap the slots; keep the C# mirror in step.
+        _bridge.MarkDatabaseClosed(sourceName);
+        _bridge.MarkDatabaseClosed(targetName);
     }
 }
