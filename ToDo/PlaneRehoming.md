@@ -61,15 +61,32 @@ with the two write-side methods, mirroring exactly what the patch already does
 for the read side: the pool class *and* the `OpfsSAHPoolUtil` facade both get the
 member (the existing patch adds `getFileSize` / `exportFileSlice` in both places).
 
-- **Precedent:** the read-side pair was added the same way for the same reason.
-- **Also needed: `recoverAccessHandles`.** It lives on the forked PRF pool only.
-  `withHandleRecovery` wraps exactly the three ops Goal 3 relocates (rename,
-  unlink, `replaceDb`), so without it base's park/restore has no defence when the
-  platform closes the access handles. Either the patch grows a third member or
-  park/restore on base is unprotected — decide here, not in Goal 3.
-- **Verify:** base worker vitest; a cold `npm install` + `npx patch-package` run.
-- **Risk:** the patch is against a pinned `3.53.0-build1`. A sqlite-wasm bump
-  re-rolls it — same exposure the repo already carries.
+**DONE.** `writeFileSlice`, `atomicReplaceFile` and `recoverAccessHandles` are in
+the patch, on the pool class and the `OpfsSAHPoolUtil` facade both, matching how
+the read-side pair was already added. `recoverAccessHandles` came along because
+`withHandleRecovery` wraps exactly the three ops Goal 3 relocates (rename, unlink,
+`replaceDb`) — without it base park/restore would have no defence when the
+platform closes handles.
+
+Two things the port turned up:
+
+- The fork calls the open-file map `mapS3FileToOFile`; in the vendor that name is
+  a **method** and the field is `#mapS3FileToOFile_`. Copying the fork verbatim
+  fails the esbuild private-name check. The vendor's own `pauseVfs` guard uses
+  the underscored field — match that.
+- **`patches/` was not an input to `BuildTypeScriptBundles`.** `_TsSrc` globbed
+  `**/*.ts` and `package.json` only, so editing the vendor patch left the stamp
+  current and the bundle kept the previous vendor code with nothing to say so —
+  the exact Inputs/Outputs trap this repo has hit before. Fixed in
+  `SqliteWasmBlazor.csproj`; verified by touching the patch and watching
+  `npm run build` re-run.
+
+Verified: patch re-applies clean, typecheck, eslint, 12/12 base TS tests, and all
+six primitives present in the built worker bundle.
+
+- **Standing risk:** the patch is against a pinned `3.53.0-build1`. A sqlite-wasm
+  bump re-rolls it — the same exposure the read-side pair already carried, now
+  twice the surface.
 
 ### Goal 2 — Move the plane-neutral worker machinery into `worker-common`
 

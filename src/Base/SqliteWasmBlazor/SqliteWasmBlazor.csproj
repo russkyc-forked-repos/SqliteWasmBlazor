@@ -187,7 +187,12 @@
   </Target>
 
   <ItemGroup>
-    <_TsSrc Include="TypeScript/**/*.ts;TypeScript/package.json;TypeScript-Common/**/*.ts;TypeScript-Common/package.json;TypeScript-Crypto/**/*.ts;TypeScript-Crypto/package.json"
+    <!-- patches/ belongs here: the vendor SAHPool is patched on the way in
+         (npm run build runs patch-package first), so its .patch file is a
+         source of the bundle exactly like a .ts file is. Left out, editing
+         the patch leaves the stamp current and the bundle keeps the previous
+         vendor code with nothing to say so. -->
+    <_TsSrc Include="TypeScript/**/*.ts;TypeScript/package.json;TypeScript/patches/**;TypeScript-Common/**/*.ts;TypeScript-Common/package.json;TypeScript-Crypto/**/*.ts;TypeScript-Crypto/package.json"
             Exclude="TypeScript/node_modules/**;TypeScript-Common/node_modules/**;TypeScript-Crypto/node_modules/**" />
   </ItemGroup>
 
