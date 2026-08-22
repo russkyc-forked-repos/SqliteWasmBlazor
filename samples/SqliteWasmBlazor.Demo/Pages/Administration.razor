@@ -15,23 +15,23 @@
 
 <PageTitle>Administration</PageTitle>
 
-@if (_isGenerating)
+@if (Model.GenerateTestData.Executing)
 {
     <MudOverlay Visible="true" ZIndex="9999" DarkBackground="true" LockScroll="true" Absolute="false">
         <MudPaper Class="pa-8" Elevation="8" Style="max-width: 400px;">
             <MudStack Spacing="4" AlignItems="AlignItems.Center">
                 <MudText Typo="Typo.h6" Align="Align.Center">Generating Test Data</MudText>
                 <MudProgressLinear Color="Color.Primary"
-                                   Value="@GenerateProgressPercent"
+                                   Value="@Model.GenerateProgressPercent"
                                    Size="Size.Large"
                                    Rounded="true"
                                    Class="mud-width-full" />
                 <MudText Typo="Typo.body2" Align="Align.Center" Color="Color.Secondary">
-                    @_generateProgress.ToString("N0") / @_generatedFakeEntries.ToString("N0") entries
+                    @Model.GenerateProgress.ToString("N0") / @Model.EntryCount.ToString("N0") entries
                 </MudText>
                 <MudButton Variant="Variant.Outlined"
                            Color="Color.Error"
-                           OnClick="CancelGenerate"
+                           OnClick="@(() => Model.GenerateTestData.Cancel())"
                            StartIcon="@Icons.Material.Filled.Cancel"
                            Size="Size.Small">
                     Cancel
@@ -69,12 +69,12 @@
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
                     <MudSelect T="int"
-                               @bind-Value="_generatedFakeEntries"
+                               @bind-Value="Model.EntryCount"
                                Label="Number of Entries"
                                Variant="Variant.Outlined"
                                Dense="true"
                                FullWidth="true"
-                               Disabled="_isGenerating">
+                               Disabled="@Model.GenerateTestData.Executing">
                         <MudSelectItem Value="10">10</MudSelectItem>
                         <MudSelectItem Value="100">100</MudSelectItem>
                         <MudSelectItem Value="1000">1,000</MudSelectItem>
@@ -85,24 +85,13 @@
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Secondary"
-                               OnClick="CreateTestDataAsync"
-                               StartIcon="@Icons.Material.Filled.PlayArrow"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
+                    <MudButtonAsyncRx Command="@Model.GenerateTestData"
+                                      Variant="Variant.Filled"
+                                      Color="Color.Secondary"
+                                      StartIcon="@Icons.Material.Filled.PlayArrow"
+                                      FullWidth="true">
                         Generate
-                    </MudButton>
-                </MudItem>
-                <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Error"
-                               OnClick="ClearAllDataAsync"
-                               StartIcon="@Icons.Material.Filled.DeleteSweep"
-                               FullWidth="true"
-                               Disabled="_isGenerating">
-                        Clear All
-                    </MudButton>
+                    </MudButtonAsyncRx>
                 </MudItem>
                 <MudItem xs="12" sm="6" md="3" Class="d-flex align-center">
                     <MudButtonAsyncRx Command="@Model.Optimize"
@@ -110,7 +99,7 @@
                                       Color="Color.Info"
                                       StartIcon="@Icons.Material.Filled.Tune"
                                       FullWidth="true"
-                                      Disabled="_isGenerating">
+                                      Disabled="@Model.GenerateTestData.Executing">
                         Optimize FTS5
                     </MudButtonAsyncRx>
                 </MudItem>
@@ -122,7 +111,7 @@
                                       Color="Color.Secondary"
                                       StartIcon="@Icons.Material.Filled.Build"
                                       FullWidth="true"
-                                      Disabled="_isGenerating">
+                                      Disabled="@Model.GenerateTestData.Executing">
                         Rebuild FTS5 Index
                     </MudButtonAsyncRx>
                 </MudItem>
@@ -132,16 +121,16 @@
                                       Color="Color.Primary"
                                       StartIcon="@Icons.Material.Filled.VerifiedUser"
                                       FullWidth="true"
-                                      Disabled="_isGenerating">
+                                      Disabled="@Model.GenerateTestData.Executing">
                         Check FTS5 Integrity
                     </MudButtonAsyncRx>
                 </MudItem>
             </MudGrid>
 
-            @if (!string.IsNullOrEmpty(_performanceInfo))
+            @if (!string.IsNullOrEmpty(Model.PerformanceInfo))
             {
                 <MudAlert Severity="Severity.Success" Variant="Variant.Outlined">
-                    @_performanceInfo
+                    @Model.PerformanceInfo
                 </MudAlert>
             }
         </MudStack>
@@ -177,145 +166,6 @@
 </MudContainer>
 
 @code {
-    private string _performanceInfo = string.Empty;
-    private bool _isGenerating;
-    private int _generatedFakeEntries = 100;
-    private int _generateProgress;
-    private CancellationTokenSource? _generateCts;
-
-    private double GenerateProgressPercent =>
-        _generatedFakeEntries > 0 ? (double)_generateProgress / _generatedFakeEntries * 100 : 0;
-
-    private static readonly string[] TaskPrefixes = ["Task", "Work", "Project", "Meeting", "Call", "Email", "Review", "Plan", "Design", "Test"];
-    private static readonly string[] TaskTypes = ["urgent", "important", "routine", "followup", "research", "development", "documentation", "deployment"];
-    private static readonly Random Random = new();
-
-    private void CancelGenerate()
-    {
-        _generateCts?.Cancel();
-    }
-
-    private async Task CreateTestDataAsync()
-    {
-        _isGenerating = true;
-        _generateProgress = 0;
-        _performanceInfo = string.Empty;
-        _generateCts?.Dispose();
-        _generateCts = new CancellationTokenSource();
-        StateHasChanged();
-
-        var cancellationToken = _generateCts.Token;
-        var stopwatch = Stopwatch.StartNew();
-
-        await using var context = await DbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        // Generate and insert in batches to keep memory bounded
-        const int batchSize = 10000;
-        var totalInserted = 0;
-
-        try
-        {
-            for (var batchStart = 0; batchStart < _generatedFakeEntries; batchStart += batchSize)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var count = Math.Min(batchSize, _generatedFakeEntries - batchStart);
-
-                // Generate batch
-                var header = MessagePackFileHeaderV2.Create<TodoItemDto>(
-                    tableName: "TodoItems",
-                    primaryKeyColumn: "Id",
-                    recordCount: count,
-                    mode: 0);
-
-                using var stream = new MemoryStream();
-                MessagePackSerializer.Serialize(stream, header);
-
-                for (var i = 0; i < count; i++)
-                {
-                    var prefix = TaskPrefixes[Random.Next(TaskPrefixes.Length)];
-                    var type = TaskTypes[Random.Next(TaskTypes.Length)];
-
-                    var dto = new TodoItemDto
-                    {
-                        Id = Guid.NewGuid(),
-                        Title = $"{prefix} #{batchStart + i + 1}",
-                        Description = $"{type} task - {Guid.NewGuid()}",
-                        UpdatedAt = DateTime.UtcNow,
-                        IsCompleted = Random.Next(100) < 30
-                    };
-
-                    MessagePackSerializer.Serialize(stream, dto);
-                }
-
-                await DatabaseService.ImportRowsAsync("TodoDb.db", stream.ToArray(), cancellationToken: cancellationToken);
-                totalInserted += count;
-                _generateProgress = totalInserted;
-
-                StateHasChanged();
-                await Task.Yield();
-            }
-
-            stopwatch.Stop();
-
-            var itemsPerSecond = _generatedFakeEntries / stopwatch.Elapsed.TotalSeconds;
-            _performanceInfo = $"Generated {_generatedFakeEntries:N0} entries in {stopwatch.ElapsedMilliseconds}ms ({itemsPerSecond:F0} items/sec) — {(totalInserted + batchSize - 1) / batchSize} batches";
-            _isGenerating = false;
-
-            StateHasChanged();
-            Snackbar.Add($"Generated {_generatedFakeEntries:N0} entries in {stopwatch.ElapsedMilliseconds}ms", Severity.Success);
-        }
-        catch (OperationCanceledException)
-        {
-            _isGenerating = false;
-            _performanceInfo = $"Cancelled after {totalInserted:N0} entries";
-            Snackbar.Add($"Generation cancelled after {totalInserted:N0} entries", Severity.Warning);
-            return;
-        }
-        catch (Exception ex)
-        {
-            _isGenerating = false;
-            Snackbar.Add($"Generation failed: {ex.Message}", Severity.Error);
-            throw;
-        }
-
-        // Optimize FTS5 index after bulk inserts (outside transaction to avoid rollback issues)
-        try
-        {
-            await context.OptimizeTodoItemFts5IndexAsync(cancellationToken: cancellationToken);
-        }
-        catch
-        {
-            // FTS5 might be missing/corrupted after import - try to rebuild it
-            try
-            {
-                Snackbar.Add("FTS5 index missing or corrupted - rebuilding...", Severity.Warning);
-                await context.RebuildTodoItemFts5IndexAsync(cancellationToken: cancellationToken);
-                Snackbar.Add("FTS5 index rebuilt successfully", Severity.Success);
-            }
-            catch (Exception rebuildEx)
-            {
-                // If rebuild fails, log but don't fail the entire operation
-                Snackbar.Add($"FTS5 rebuild failed: {rebuildEx.Message}. Use 'Rebuild FTS5 Index' button.", Severity.Warning);
-            }
-        }
-    }
-
-    private async Task ClearAllDataAsync()
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        await using var context = await DbContextFactory.CreateDbContextAsync();
-        await context.Database.ExecuteSqlRawAsync("DELETE FROM TodoItems");
-
-        // Rebuild FTS5 index after bulk delete to ensure index is synchronized
-        await context.RebuildTodoItemFts5IndexAsync();
-
-        stopwatch.Stop();
-
-        _performanceInfo = $"All data cleared in {stopwatch.ElapsedMilliseconds}ms";
-        Snackbar.Add($"All todos deleted in {stopwatch.ElapsedMilliseconds}ms", Severity.Warning);
-    }
-
     /// <summary>
     /// Confirmation gate for <c>EncryptionModel.Reset</c>. Wired into
     /// <c>MudButtonAsyncRx.ConfirmExecutionAsync</c>: the command runs only
