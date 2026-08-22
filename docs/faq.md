@@ -49,7 +49,7 @@ All modern browsers (2023+) support OPFS with Synchronous Access Handles, includ
 
 ## What SQLite version is used?
 
-SqliteWasmBlazor uses the official sqlite-wasm build (currently 3.50.4) from the SQLite project.
+SqliteWasmBlazor uses the official sqlite-wasm build (currently 3.53.0) from the SQLite project.
 
 ## Can I use raw SQL?
 

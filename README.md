@@ -34,6 +34,47 @@ The public API surface is intentionally kept minimal to reduce the risk of break
 
 ## What's New
 
+### 0.9.3-pre — Memory-flat exports, validated imports, `Disk` → `Pool`
+
+- **Exports stage through OPFS** — the worker writes the bytes into a staging
+  file through a synchronous access handle and the browser saves from that
+  disk-backed `File`, so peak memory stays flat whatever the database weighs.
+  Covers `.db`, `.dbs` and `.eds`. New on the plain plane:
+  `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(name, filename)`
+  — a memory-flat download without the Crypto package.
+- **Large imports are pushed into the worker** — C# streams the picked file
+  one chunk at a time instead of assembling it as a `Blob` first, so neither
+  heap ever holds the whole database. That assembly is what made large `.db`
+  imports fail on iPadOS with `AccessHandle is closed`.
+- **What an import replaces is parked, never overwritten** — park and restore
+  are one pool-level replace instead of delete-then-rename, and a park whose
+  database is missing is restored (at the next import, and at worker init)
+  rather than swept.
+- **Imports are validated before they count** — the incoming file is written
+  under the database's real name, opened, and checked by the host
+  (`IHostDatabaseService.ValidateSchemaAsync`); a refusal renames the parks
+  back, metadata-only, so what returns is byte-identical. Every successful
+  import re-runs the host's migrations (`MigrateAsync`) and re-creates owned
+  databases the file omitted (`OwnedDatabases`).
+- **One scope per affordance** — the drop-in UI gives each database its own
+  row (save it, replace it from a `.db`, empty it) and moves whole-pool
+  operations to their own card. Pool-state preconditions now throw
+  `PoolOperationRejectedException` with a typed `Reason`, so a host can say
+  what the pool needs instead of printing a primitive's diagnostic.
+- **Bulk-imported `Guid` keys are EF-addressable** — `ImportRowsAsync` writes
+  uppercase TEXT for every `Guid`, whatever the declared column type.
+  **Action required:** rows written by an earlier bulk import cannot be
+  reached by primary key and have to be re-imported.
+- **SQL command logging is opt-in** via `SqliteWasmOptions.EnableCommandSqlLogging`,
+  so schema and parameter values no longer reach the browser console in
+  production ([#18](https://github.com/b-straub/SqliteWasmBlazor/issues/18)).
+- **XML documentation ships with the packages** — the public API is documented
+  end to end and `CS1591` is an error, so IntelliSense works against the NuGet
+  packages.
+- **`Disk` → `Pool` across the public API** — what gets encrypted, locked and
+  bound to a passkey is an OPFS SAHPool of databases, not a disk. The `.db` /
+  `.dbs` / `.eds` extensions are unchanged. See [Breaking Changes](#breaking-changes).
+
 ### Passkey-derived encryption (Plane 2)
 
 Optional at-rest encryption for OPFS-backed SQLite databases. The host opts
@@ -50,9 +91,10 @@ registered the entire encryption layer engages:
   authentication. Cross-database and cross-slot page swaps are rejected on
   read; legacy or wrong-version ciphertext is rejected outright.
 - **WebAuthn-PRF key derivation** — the global key is derived from a
-  passkey via the WebAuthn PRF extension through
-  [BlazorPRF](https://github.com/b-straub/BlazorPRF). No password, no
-  client-side key file; the authenticator does the unlock.
+  passkey via the WebAuthn PRF extension, using the absorbed
+  [BlazorPRF](https://github.com/b-straub/BlazorPRF) primitives that now ship
+  inside `SqliteWasmBlazor.Crypto`. No password, no client-side key file; the
+  authenticator does the unlock.
 - **Verified unlock, not silent** — a slot-0 AEAD probe gates unlock, and a
   manifest MAC binds the stored pool state to the credential. Wrong key, wrong
   credential, or tampered manifest fail loudly before any decryption hits
@@ -76,7 +118,8 @@ registered the entire encryption layer engages:
   that need to run without a browser.
 - **Formally verified** — 3 Tamarin theories under `docs/formal/vfs-tamarin/`
   cover per-slot AEAD soundness, in-place lifecycle, and key-cache /
-  manifest unlock. 36 lemmas, all verified.
+  manifest unlock. 74 lemmas, all verified; `docs/formal/verify.sh` runs the
+  gate, `docs/formal/mutation-check.sh` checks the models still bite.
 
 Full reference: [`docs/crypto-vfs.md`](docs/crypto-vfs.md). Threat model
 and assurance summary: [`docs/security/`](docs/security/README.md).
@@ -91,6 +134,51 @@ and assurance summary: [`docs/security/`](docs/security/README.md).
 - **Real-World Sample** - Check out the [Datasync TodoApp](https://github.com/b-straub/Datasync/tree/main/samples/todoapp-blazor-wasm-offline) for offline-first data synchronization with SqliteWasmBlazor
 
 ## Breaking Changes
+
+- **v0.9.3-pre** — the unit of encryption is a *pool* of databases, not a *disk*.
+  Every `Disk`-named public symbol is renamed; the `.db` / `.dbs` / `.eds` file
+  extensions are unchanged (renaming those would orphan existing backups).
+
+  | Before | After |
+  |--------|-------|
+  | `EncryptedDiskState` | `EncryptedPoolState` |
+  | `DiskImportResult` | `PoolImportResult` |
+  | `DiskLockedException` | `PoolLockedException` |
+  | `ResetDiskAsync` | `ResetPoolAsync` |
+  | `ImportDiskGuidedFromStreamAsync` | `ImportPoolGuidedFromStreamAsync` |
+  | `ExportDiskToPubkeyAndDownloadAsync` | `ExportPoolToPubkeyAndDownloadAsync` |
+  | `UseEncryptedDiskLifecycle()` | `UseEncryptedPoolLifecycle()` |
+  | `EncryptionModel.ImportDisk` / `ExportDiskBackup` / `ExportDiskForRecipient` | `ImportPool` / `ExportPoolBackup` / `ExportPoolForRecipient` |
+
+  The worker message protocol is renamed on both sides at once, so anyone driving
+  the worker directly is affected; consumers who only use the C# API are not.
+
+  Also breaking in this release:
+
+  - `ISqliteWasmDatabaseService.ExportAllDatabasesAsync` and `ImportAllDatabasesAsync`
+    are gone — a whole pool returned as one managed `byte[]` is exactly the memory
+    profile this release removes. The streamed replacements,
+    `ExportDatabasesToDownloadAsync` / `ImportDatabasesFromStreamAsync`, live on
+    `IEncryptedSqliteWasmDatabaseService` in `SqliteWasmBlazor.Crypto`; that plane
+    handles plain pools too, so adding the package is the migration path.
+  - `SqliteWasmBlazor.Components` no longer exposes
+    `FileOperationsInterop.DownloadMessagePackFile`, for the same reason. Use
+    `ExportDatabaseToDownloadAsync`.
+  - `ImportDatabaseFromStreamAsync` and `ImportDatabasesFromStreamAsync` take a
+    `validateImported` delegate **before** `cancellationToken`; callers that passed
+    the token positionally must name it.
+  - `IHostDatabaseService` implementations must add `OwnedDatabases`, `MigrateAsync`
+    and `ValidateSchemaAsync`.
+  - `EncryptionModel.DatabaseNames` is replaced by `Databases` (rows carrying `Owned`
+    and `Present`), `ExportDatabase` (one row) joins `ExportDatabases` (bundle), and
+    `ProposeDatabaseName` is gone with the free-text import target.
+  - `DbContext.ValidateImportedSchemaAsync` throws `SchemaMismatchException` — still an
+    `InvalidOperationException`, so existing catch clauses keep working — carrying
+    `MissingTables` so a host can phrase the refusal in the user's language.
+  - SQL command logging is off unless `SqliteWasmOptions.EnableCommandSqlLogging` is set.
+  - `SqliteWasmBlazor.Crypto.UI` needs `RxBlazorV2.MudBlazor` **1.2.6 or newer**: below
+    that a command's execution state never reaches the UI, so async buttons show no
+    progress and `Disabled` never follows `CanExecute`.
 
 - **v0.9.0-pre** — CSP hardening: removed the inline `data:text/javascript` import that
   auto-detected `<base href>`. The worker URL is now built from `SqliteWasmOptions.BaseHref`
@@ -137,7 +225,7 @@ Unlike other Blazor WASM database solutions that use in-memory storage or Indexe
 
 - **True Filesystem Storage** - Uses OPFS (Origin Private File System) with synchronous access handles
 - **Full EF Core Support** - Complete ADO.NET provider with migrations, relationships, and LINQ
-- **Real SQLite Engine** - Official sqlite-wasm (3.50.4) running in Web Worker
+- **Real SQLite Engine** - Official sqlite-wasm (3.53.0) running in Web Worker
 - **Persistent Data** - Survives page refreshes, browser restarts, and even browser updates
 - **No Server Required** - Everything runs client-side in the browser
 
@@ -161,22 +249,21 @@ The primary interface for database operations outside of EF Core:
 public interface ISqliteWasmDatabaseService
 {
     // Database management
+    Task<IReadOnlyList<string>> ListDatabasesAsync(CancellationToken ct = default);
     Task<bool> ExistsDatabaseAsync(string databaseName, CancellationToken ct = default);
     Task DeleteDatabaseAsync(string databaseName, CancellationToken ct = default);
     Task RenameDatabaseAsync(string oldName, string newName, CancellationToken ct = default);
     Task CloseDatabaseAsync(string databaseName, CancellationToken ct = default);
 
     // Raw .db file import/export
-    Task ImportDatabaseAsync(string databaseName, byte[] data, CancellationToken ct = default);
+    Task<PoolImportResult> ImportDatabaseAsync(string databaseName, byte[] data,
+        CancellationToken ct = default);
     Task<byte[]> ExportDatabaseAsync(string databaseName, CancellationToken ct = default);
     Task ExportDatabaseToDownloadAsync(string databaseName, string filename,
         CancellationToken ct = default);
 
-    // V2 bulk import/export (worker-side prepared statement loops)
-    Task<int> BulkImportAsync(string databaseName, byte[] payload,
-        ConflictResolutionStrategy conflictStrategy = ConflictResolutionStrategy.None,
-        CancellationToken ct = default);
-    Task<byte[]> BulkExportAsync(string databaseName, BulkExportMetadata metadata,
+    // V2 bulk row import (worker-side prepared statement loop)
+    Task<int> ImportRowsAsync(string databaseName, byte[] data,
         CancellationToken ct = default);
 }
 ```
@@ -228,6 +315,8 @@ public interface ISqliteWasmDatabaseService
 | `SqliteWasmParameter` | ADO.NET `DbParameter` for query parameters |
 | `SqliteWasmTransaction` | ADO.NET `DbTransaction` for transaction support |
 | `IDbInitializationStatus` | Tracks database initialization state and errors |
+| `PoolImportResult` | Outcome of a raw `.db` import (`OK`, `WRONG_KEY`, `EXISTING_DB_REFUSED`) |
+| `SchemaMismatchException` | Thrown by `ValidateImportedSchemaAsync`; carries `MissingTables` |
 
 All internal implementation details (worker bridge, serialization, etc.) are encapsulated and not part of the public API.
 
@@ -239,10 +328,18 @@ All internal implementation details (worker bridge, serialization, etc.) are enc
 dotnet add package SqliteWasmBlazor --prerelease
 ```
 
+Optional at-rest encryption and its drop-in UI are separate packages — add them only
+if you need them:
+
+```bash
+dotnet add package SqliteWasmBlazor.Crypto --prerelease     # encrypted VFS
+dotnet add package SqliteWasmBlazor.Crypto.UI --prerelease  # auth / encryption panels
+```
+
 Or install a specific version:
 
 ```bash
-dotnet add package SqliteWasmBlazor --version 0.6.5-pre
+dotnet add package SqliteWasmBlazor --version 0.9.3-pre
 ```
 
 Visit [NuGet.org](https://www.nuget.org/packages/SqliteWasmBlazor) for the latest version.
@@ -250,7 +347,7 @@ Visit [NuGet.org](https://www.nuget.org/packages/SqliteWasmBlazor) for the lates
 ### From Source
 
 ```bash
-git clone https://github.com/bernisoft/SqliteWasmBlazor.git
+git clone https://github.com/b-straub/SqliteWasmBlazor.git
 cd SqliteWasmBlazor
 dotnet build
 ```
@@ -409,6 +506,7 @@ var expensive = await dbContext.Products
 | [Bulk Import/Export](docs/bulk-import-export.md) | V2 format, multi-part export, delta sync, type conversions |
 | [Encrypted VFS](docs/crypto-vfs.md) | At-rest encryption: ChaCha20-Poly1305, PRF-derived keys, threat model |
 | [Security](docs/security/README.md) | Threat model + assurance summary + Tamarin proofs |
+| [Formal Models](docs/formal/README.md) | The Tamarin theories themselves, plus `verify.sh` / `mutation-check.sh` |
 | [Recommended Patterns](docs/patterns.md) | Multi-view pattern, data initialization best practices |
 | [FAQ](docs/faq.md) | Common questions and browser support |
 | [Changelog](CHANGELOG.md) | Release notes and version history |
@@ -441,7 +539,12 @@ All modern browsers (2023+) support OPFS with Synchronous Access Handles, includ
 - [x] V2 worker-side bulk import/export with prepared statement loops
 - [x] Multi-part export for large databases
 - [x] Seed Server API for cloud-based database provisioning
+- [x] At-rest encryption with passkey-derived keys (`SqliteWasmBlazor.Crypto`)
+- [x] Drop-in authentication / encryption UI (`SqliteWasmBlazor.Crypto.UI`)
+- [x] Memory-flat exports and streamed imports (OPFS staging, mobile-safe)
+- [x] Machine-checked Tamarin models for the encryption lifecycle
 - [ ] Stable NuGet package release
+- [ ] CryptoSync — end-to-end encrypted multi-device delta sync
 - [ ] Server-side delta generation from SQLite databases
 
 ## Contributing

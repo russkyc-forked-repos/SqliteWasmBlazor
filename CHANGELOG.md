@@ -46,6 +46,7 @@ Exporting used to materialise the entire database as a `byte[]`, hand it across 
 - **New on the plain plane:** `ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync(databaseName, filename)` — a memory-flat `.db` download without the Crypto package. The worker closes the database first for a consistent snapshot, so the next context re-opens it.
 - **Critical fix (export data loss):** uncheckpointed WAL data was silently omitted from encrypted disk exports. The worker now forces a proper VFS checkpoint before exporting.
 - **Breaking:** `SqliteWasmBlazor.Components` no longer exposes `FileOperationsInterop.DownloadMessagePackFile` — the byte-array download it provided is exactly the memory profile this release removes. Use the staged export instead.
+- **Breaking:** `ISqliteWasmDatabaseService.ExportAllDatabasesAsync` and `ImportAllDatabasesAsync` are deleted along with the rest of the `byte[]`-only paths — a whole pool returned as one managed array is the same profile in the multi-database shape. Use `IEncryptedSqliteWasmDatabaseService.ExportDatabasesToDownloadAsync` / `ImportDatabasesFromStreamAsync`.
 - Staging files are swept on worker start rather than after the click: an anchor download drains its `File` lazily, so deleting the entry at click time would corrupt the download. Retention is bounded to one session.
 
 ### Installed Web Apps: Saying What iOS Is About to Do
@@ -126,6 +127,14 @@ data, and the button now says so before it is clicked.
 
 100% formal verification of the cryptographic state transitions and key lifecycle invariants using the Tamarin Prover.
 
+### Progress Is Visible While an Import or Export Runs
+
+A large database takes long enough that a screen where nothing changes reads as a screen where nothing is happening. `RxBlazorV2.MudBlazor` moves to **1.2.6**, which carries the fix that lets a command's execution state reach the UI at all: a command published only its observed-property list when `Executing` changed, which for a command with no trigger is the generator's empty placeholder that no component filter matches — so no async button ever spun and no `Disabled` ever followed `CanExecute`.
+
+With that in place the demo's export buttons show their own progress, and the imports — which run from a file picker's callback rather than a button press — get the affordance spelled out: a row's upload button switches to the same in-progress mark its neighbours use and refuses a second file while the first is still going in, and the replace-everything card carries an indeterminate bar with its picker disabled. `StatusDisplay` runs with `ShortVisibility` so a finished import's message does not sit in the app bar for the rest of the session.
+
+**Consumers of `SqliteWasmBlazor.Crypto.UI` should move to `RxBlazorV2.MudBlazor` 1.2.6 or newer** — below that, the panels' async buttons give no feedback.
+
 ### Other Fixes
 
 - **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
@@ -133,7 +142,7 @@ data, and the button now says so before it is clicked.
 
 ### Dependencies & Tooling
 
-- .NET / EF Core `10.0.11`, MudBlazor `9.8.0`, MessagePack `3.1.8`, R3 `1.3.1`, Playwright `1.62.0`, Test SDK `18.9.0`, xunit.runner.visualstudio `4.0.0`, PolySharp `1.16.0`, BouncyCastle `2.7.0`, SourceLink `10.0.400`.
+- .NET / EF Core `10.0.11`, MudBlazor `9.8.0`, RxBlazorV2.MudBlazor `1.2.6`, MessagePack `3.1.8`, R3 `1.3.1`, Playwright `1.62.0`, Test SDK `18.9.0`, xunit.runner.visualstudio `4.0.0`, PolySharp `1.16.0`, BouncyCastle `2.7.0`, SourceLink `10.0.400`.
 - Build now targets the .NET SDK `10.0.400` band (`global.json`), on runtime `10.0.11`.
 - Roslyn (`Microsoft.CodeAnalysis.*`) moves to `5.6.0` — the newest published Roslyn, and below the `5.9.0` compiler the SDK ships, so generators and analyzers never ask for a Roslyn newer than the one loading them.
 - TypeScript `6.0.3`, ESLint `10.8.1` + typescript-eslint `8.67.0`, msgpackr `2.0.5`, esbuild `0.28.2`, vitest `4.1.10`.
