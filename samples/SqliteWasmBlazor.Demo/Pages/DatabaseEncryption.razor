@@ -221,9 +221,18 @@
                                            Accept=".db,application/octet-stream"
                                            FilesChanged="@(file => HandleRowFilePickedAsync(row, file))">
                                 <CustomContent>
-                                    <MudIconButton Icon="@Icons.Material.Filled.FileUpload"
-                                                   Color="Color.Default"
-                                                   Disabled="@(!Model.ImportDatabase.CanExecute)"
+                                    @* Not an AsyncRx button — the command runs
+                                       from the picker's callback, not a press —
+                                       so the executing look is spelled out here.
+                                       Same icon and colour the Rx buttons on
+                                       this row switch to, so a row that is busy
+                                       reads the same whichever button started
+                                       it. *@
+                                    <MudIconButton Icon="@(Model.ImportDatabase.Executing
+                                                             ? Icons.Material.Filled.Refresh
+                                                             : Icons.Material.Filled.FileUpload)"
+                                                   Color="@(Model.ImportDatabase.Executing ? Color.Warning : Color.Default)"
+                                                   Disabled="@(!Model.ImportDatabase.CanExecute || Model.ImportDatabase.Executing)"
                                                    title="@Model.Localizer["Btn_ImportIntoDatabase", row.Name]"
                                                    OnClick="@context.OpenFilePickerAsync"/>
                                 </CustomContent>
@@ -346,7 +355,15 @@
                 ? Model.Localizer["Hint_ReplaceAllKinds_Locked"]
                 : Model.Localizer["Hint_ReplaceAllKinds"])
         </MudText>
+        @* Both of these replace the whole pool and take as long as the file
+           is big. The picker's own button cannot show that — the import
+           starts from its callback — so the card carries the sign. *@
+        @if (Model.ImportPool.Executing || Model.ImportDatabases.Executing)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-2"/>
+        }
         <MudFileUpload T="IBrowserFile"
+                       Disabled="@(Model.ImportPool.Executing || Model.ImportDatabases.Executing)"
                        Accept="@(Model.IsLocked ? ".eds,application/octet-stream" : ".eds,.dbs,application/octet-stream")"
                        FilesChanged="@(file => HandleReplaceAllFilePickedAsync(file))">
             @* Picking a file runs the whole import, so the default chip list
