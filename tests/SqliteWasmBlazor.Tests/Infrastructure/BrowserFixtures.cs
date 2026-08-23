@@ -56,6 +56,32 @@ public class ChromiumFixture : WaFixtureBase, IWaFixture
     }
 }
 
+/// <summary>
+/// Runs the plain-safe half of the suite against the <b>plain</b> worker
+/// bundle. The TestApp references SqliteWasmBlazor.Crypto, so every other
+/// fixture boots the Crypto bundle and base's own worker cases — replaceDb,
+/// the import sessions, the streaming export/import handlers, the init park
+/// sweep — ship without ever executing. `?plane=plain` leaves the Crypto
+/// services unregistered so the bridge stays on the base bundle.
+/// </summary>
+public class PlainPlaneFixture : WaFixtureBase, IWaFixture
+{
+    public IWaFixture.BrowserType Type => IWaFixture.BrowserType.CHROMIUM;
+    public int Port => PortNumber;
+    public bool OnePass => true;
+    public bool Headless => true;
+    public string Query => "?plane=plain";
+
+    private static int PortNumber => 7055;
+
+    public PlainPlaneFixture() : base(PortNumber) { }
+
+    public async Task InitializeAsync()
+    {
+        await InitializeAsync(Type, OnePass, Headless, Query);
+    }
+}
+
 // Firefox and WebKit tests disabled due to Playwright compatibility issues
 // Firefox: Working in browser but disabled for now
 // WebKit: Out of memory errors in Playwright (works fine in Safari)

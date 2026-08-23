@@ -2,10 +2,21 @@ diff --git a/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs b/node_modules/
 index 6475875..2385c1f 100644
 --- a/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs
 +++ b/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs
-@@ -15085,6 +15085,70 @@ async function sqlite3InitModule(moduleArg = {}) {
+@@ -15085,6 +15085,81 @@ async function sqlite3InitModule(moduleArg = {}) {
  				
  				Returns the 2nd argument.
  				*/
++				listDatabases() {
++					const out = [];
++					for (const path of this.#mapFilenameToSAH.keys()) {
++						if (!path.startsWith('/databases/')) continue;
++						const name = path.slice('/databases/'.length);
++						if (name.length === 0) continue;
++						if (name.endsWith('-journal') || name.endsWith('-wal') || name.endsWith('-shm')) continue;
++						out.push(name);
++					}
++					return out;
++				}
 +				getFileSize(name) {
 +					const sah = this.#mapFilenameToSAH.get(name) || toss('File not found:', name);
 +					const n = sah.getSize() - HEADER_OFFSET_DATA;
@@ -73,10 +84,13 @@ index 6475875..2385c1f 100644
  				storeErr(e, code) {
  					if (e) {
  						e.sqlite3Rc = code || capi.SQLITE_IOERR;
-@@ -15336,6 +15400,24 @@ async function sqlite3InitModule(moduleArg = {}) {
+@@ -15336,6 +15411,27 @@ async function sqlite3InitModule(moduleArg = {}) {
  				unlink(filename) {
  					return this.#p.deletePath(filename);
  				}
++				listDatabases() {
++					return this.#p.listDatabases();
++				}
 +				getFileSize(name) {
 +					return this.#p.getFileSize(name);
 +				}

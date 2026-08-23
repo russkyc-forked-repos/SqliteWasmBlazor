@@ -19,4 +19,11 @@ public interface IWaFixture
     public int Port { get; }
     public bool OnePass { get; }
     public bool Headless { get; }
+
+    /// <summary>
+    /// Query appended to every navigation, including the empty string. The
+    /// TestApp reads <c>?plane=plain</c> here to boot the plain worker bundle
+    /// instead of the Crypto one.
+    /// </summary>
+    public string Query => string.Empty;
 }

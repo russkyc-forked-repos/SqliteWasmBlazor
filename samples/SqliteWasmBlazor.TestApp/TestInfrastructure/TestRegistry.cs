@@ -3,13 +3,27 @@ namespace SqliteWasmBlazor.TestApp.TestInfrastructure;
 /// <summary>
 /// Single source of truth for test-case names. Both <see cref="TestFactory"/>
 /// (the TestApp Blazor dispatcher) and <c>SqliteWasmTestBase</c> (the
-/// Playwright host xUnit Theory) consume this list. Adding or removing a
-/// test means updating this list and the matching <c>Add(...)</c> line in
+/// Playwright host xUnit Theory) consume these lists. Adding or removing a
+/// test means updating the matching list here and the <c>Add(...)</c> line in
 /// <see cref="TestFactory"/>; drift is asserted at TestFactory construction.
+///
+/// <para>
+/// The split is which worker bundle a test needs. <see cref="PlainPlaneNames"/>
+/// runs against either — the TestApp boots the plain bundle when the URL says
+/// <c>?plane=plain</c>, which is the only way base's own worker cases
+/// (<c>replaceDb</c>, the import sessions, the streaming handlers) are ever
+/// executed: with the Crypto package registered the bridge points at that
+/// bundle instead. <see cref="CryptoPlaneNames"/> needs the encrypted VFS and
+/// runs only there.
+/// </para>
 /// </summary>
 public static class TestRegistry
 {
-    public static readonly IReadOnlyList<string> AllNames =
+    /// <summary>
+    /// Tests that need nothing beyond <c>AddSqliteWasm</c>. Run twice: once
+    /// against each worker bundle.
+    /// </summary>
+    public static readonly IReadOnlyList<string> PlainPlaneNames =
     [
         // Type Marshalling
         "AllTypes_RoundTrip",
@@ -77,9 +91,7 @@ public static class TestRegistry
 
         // Raw Database Import/Export
         "ExportImport_RawDatabase",
-        "ImportRawDatabase_InvalidFile",
         "ImportRawDatabase_WithBackup",
-        "ImportRawDatabase_BackupRestoreOnFailure",
         "ExportRawDatabase_ReOpenAfterExport",
         "ExportRawDatabase_StagedDownload",
         "ImportRawDatabase_IntoNewDatabase",
@@ -93,6 +105,22 @@ public static class TestRegistry
         // Checkpoints
         "RestoreToCheckpoint_Basic",
         "RestoreToCheckpoint_WithDeltaReapply",
+
+    ];
+
+    /// <summary>
+    /// Tests that need the Crypto worker bundle: the encrypted VFS, or the
+    /// forked pool's opaque slot write.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CryptoPlaneNames =
+    [
+        // Opaque writes — the raw slot write that accepts non-SQLite bytes.
+        // Plane 2 forks the pool for it so ciphertext survives import; the
+        // vendor pool this plane runs validates the header and refuses, which
+        // is right for a pool with no ciphertext in it. These two exercise the
+        // corrupt-file recovery flow through that seam.
+        "ImportRawDatabase_InvalidFile",
+        "ImportRawDatabase_BackupRestoreOnFailure",
 
         // VFS Encryption
         "VFS_EncryptedRoundTrip",
@@ -121,11 +149,22 @@ public static class TestRegistry
         "PoolImport_GuidedCrossKey_StreamingRoundTrip",
     ];
 
+    /// <summary>Every test, in the order the Crypto-plane run executes them.</summary>
+    public static readonly IReadOnlyList<string> AllNames =
+        [.. PlainPlaneNames, .. CryptoPlaneNames];
+
     /// <summary>
-    /// xUnit <c>[MemberData]</c> adapter for the names list. Each row is a
+    /// xUnit <c>[MemberData]</c> adapter for the full list. Each row is a
     /// single-element <c>object[]</c> consumed by the Playwright <c>[Theory]</c>
-    /// in <c>SqliteWasmTestBase</c>.
+    /// in <c>ChromiumTest</c>.
     /// </summary>
     public static IEnumerable<object[]> NamesAsTheoryData =>
         AllNames.Select(name => new object[] { name });
+
+    /// <summary>
+    /// Same adapter for the plain-plane subset, consumed by
+    /// <c>PlainPlaneTest</c>.
+    /// </summary>
+    public static IEnumerable<object[]> PlainNamesAsTheoryData =>
+        PlainPlaneNames.Select(name => new object[] { name });
 }

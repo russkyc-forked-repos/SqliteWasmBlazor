@@ -78,8 +78,18 @@ builder.Services.AddDbContextFactory<PrfVfsTestContext>(options =>
 var baseHref = new Uri(builder.HostEnvironment.BaseAddress).AbsolutePath;
 builder.Services.AddSqliteWasm(o => o.BaseHref = baseHref);
 
+// Which worker bundle this run boots. `?plane=plain` leaves the Crypto
+// services unregistered, so the bridge stays on _content/SqliteWasmBlazor/ —
+// the only way base's own worker cases (replaceDb, the import sessions, the
+// streaming export/import handlers, the init park sweep) are ever executed.
+// The plain-safe tests then run against them unchanged.
+await TestPlane.ResolveAsync(baseHref);
+
 // Register SqliteWasmBlazor.Crypto services (SubtleCrypto + @awasm/noble)
-builder.Services.AddSqliteWasmBlazorCrypto(configure: o => o.BaseHref = baseHref);
+if (!TestPlane.IsPlain)
+{
+    builder.Services.AddSqliteWasmBlazorCrypto(configure: o => o.BaseHref = baseHref);
+}
 
 // Counting host seam — ImportReconcilesHostSchemaTest asserts that the
 // import paths reconcile the host's schema themselves. Declares no owned
@@ -93,10 +103,13 @@ builder.Services.AddSingleton<IHostDatabaseService>(
 
 // Short TTL keeps the PRF session-expiry E2E test fast. Post-auth ops in
 // the other Facts complete inside 1-2s, so 5s leaves comfortable margin.
-builder.Services.Configure<SqliteWasmBlazor.Crypto.Configuration.KeyCacheOptions>(o =>
+if (!TestPlane.IsPlain)
 {
-    o.TtlMs = 5000;
-});
+    builder.Services.Configure<SqliteWasmBlazor.Crypto.Configuration.KeyCacheOptions>(o =>
+    {
+        o.TtlMs = 5000;
+    });
+}
 
 var host = builder.Build();
 
@@ -113,9 +126,11 @@ await host.Services.InitializeSqliteWasmAsync();
 // because each Playwright BrowserContext gets a fresh OPFS profile;
 // interactive use across F5 sees Encrypted and we leave the disk alone.
 {
-    var session = host.Services.GetRequiredService<IEncryptedSqliteWasmDatabaseService>();
-    var poolState = await session.GetStateAsync();
-    if (!poolState.Encrypted)
+    // On the plain plane there is no manifest and nothing to preserve, so the
+    // clean-recreate below is unconditional.
+    var session = host.Services.GetService<IEncryptedSqliteWasmDatabaseService>();
+    var poolState = session is null ? null : await session.GetStateAsync();
+    if (poolState is null or { Encrypted: false })
     {
         using var scope = host.Services.CreateScope();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TodoDbContext>>();

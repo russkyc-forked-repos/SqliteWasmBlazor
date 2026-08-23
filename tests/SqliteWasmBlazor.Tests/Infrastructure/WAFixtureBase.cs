@@ -26,7 +26,8 @@ public class WaFixtureBase : WebApplicationFactory<TestHost.Program>
         UseKestrel(port);
     }
 
-    protected async Task InitializeAsync(IWaFixture.BrowserType browserType, bool onePass, bool headless)
+    protected async Task InitializeAsync(
+        IWaFixture.BrowserType browserType, bool onePass, bool headless, string query = "")
     {
         PlaywrightInstaller.EnsureInstalled();
 
@@ -126,7 +127,7 @@ public class WaFixtureBase : WebApplicationFactory<TestHost.Program>
                 Timeout = timeout
             };
 
-            await Page.GotoAsync($"http://localhost:{_port}/Tests");
+            await Page.GotoAsync($"http://localhost:{_port}/Tests{query}");
 
             await Page.WaitForSelectorAsync("text=All Tests Completed", waitForSelectorOptions);
         }

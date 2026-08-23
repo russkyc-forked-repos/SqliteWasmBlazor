@@ -20,9 +20,12 @@ public abstract class SqliteWasmTestBase(IWaFixture fixture, ITestOutputHelper o
         await _fixture.InitializeAsync();
     }
 
-    [Theory]
-    [MemberData(nameof(TestRegistry.NamesAsTheoryData), MemberType = typeof(TestRegistry))]
-    public async Task TestCaseAsync(string name)
+    /// <summary>
+    /// Assert one test case's result label. Not a <c>[Theory]</c> itself —
+    /// each derived class declares its own over the name list its fixture's
+    /// plane actually runs.
+    /// </summary>
+    protected async Task RunCaseAsync(string name)
     {
         Assert.NotNull(_fixture.Page);
 
@@ -55,7 +58,8 @@ public abstract class SqliteWasmTestBase(IWaFixture fixture, ITestOutputHelper o
 
         if (!_fixture.OnePass)
         {
-            await _fixture.Page.GotoAsync($"http://localhost:{_fixture.Port}/Tests/{name}");
+            await _fixture.Page.GotoAsync(
+                $"http://localhost:{_fixture.Port}/Tests/{name}{_fixture.Query}");
         }
 
         var options = new LocatorAssertionsToBeVisibleOptions()
@@ -74,6 +78,19 @@ public abstract class SqliteWasmTestBase(IWaFixture fixture, ITestOutputHelper o
             .Locator($"text=SqliteWasm -> {name}: OK")
             .Or(_fixture.Page.Locator($"text=SqliteWasm -> {name}: SKIPPED"));
 
-        await Assertions.Expect(resultLocator).ToBeVisibleAsync(options);
+        // A harness failure — a TestFactory/TestRegistry drift, a DI resolve
+        // that threw — renders as the runner's error banner and no labels at
+        // all. Waiting only on the label turns that into every case burning
+        // its full timeout, which reads as a hang rather than the one-line
+        // misconfiguration it is. Waiting on either lets the banner fail the
+        // first case immediately, with its text.
+        var errorLocator = _fixture.Page.Locator("#test-harness-error");
+
+        await Assertions.Expect(resultLocator.Or(errorLocator)).ToBeVisibleAsync(options);
+
+        if (await errorLocator.IsVisibleAsync())
+        {
+            Assert.Fail($"Test harness failed to run: {await errorLocator.InnerTextAsync()}");
+        }
     }
 }

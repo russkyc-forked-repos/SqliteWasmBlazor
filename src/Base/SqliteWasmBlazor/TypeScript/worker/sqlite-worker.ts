@@ -407,11 +407,16 @@ async function handleRequest(data: WorkerRequest['data'], binaryPayload?: ArrayB
               if (!binaryPayload) {
                   throw new Error('importDb requires binaryPayload');
               }
-              return await importDatabase(
-                  database!,
-                  new Uint8Array(binaryPayload),
-                  (data as any).opaque === true
-              );
+              // Opaque input is ciphertext of a PRF-VFS database, which this
+              // plane has no key for and no concept of. Refuse it by name
+              // rather than handing non-SQLite bytes to the vendor pool and
+              // surfacing its header-check message.
+              if ((data as any).opaque === true) {
+                  throw new Error(
+                      'importDb opaque=true requires SqliteWasmBlazor.Crypto. ' +
+                      'Plane-1 worker imports plain SQLite files only.');
+              }
+              return await importDatabase(database!, new Uint8Array(binaryPayload));
 
           case 'exportDb': {
             // Plane 1 only handles VERBATIM export — raw OPFS bytes
@@ -1032,73 +1037,28 @@ async function importDatabasesFromSessionOp(
     });
 }
 
-async function importDatabase(dbName: string, data: Uint8Array, opaque = false) {
+async function importDatabase(dbName: string, data: Uint8Array) {
     if (!sqlite3 || !poolUtil) {
         throw new Error('SQLite not initialized');
     }
 
     try {
-        logger.info(
-            MODULE_NAME,
-            `Importing database ${dbName} (${data.length} bytes${opaque ? ', opaque' : ''})`
-        );
+        logger.info(MODULE_NAME, `Importing database ${dbName} (${data.length} bytes)`);
 
         const dbPath = `/databases/${dbName}`;
 
-        // For opaque (encrypted) imports, refuse to overwrite an existing DB.
-        // Rolling back a partial overwrite would require a backup-and-restore
-        // dance; the design memo's policy is "caller must wipe first" instead.
-        // Plain imports keep their overwrite semantics for back-compat with
-        // the existing plain-DB import test suite.
-        if (opaque) {
-            const fileNames: string[] = poolUtil.getFileNames();
-            if (fileNames.includes(dbPath)) {
-                logger.warn(
-                    MODULE_NAME,
-                    `Refused opaque import of ${dbName}: existing DB at ${dbPath}; caller must wipe first`,
-                );
-                // VfsImportResult.EXISTING_DB_REFUSED = 2
-                return { rowsAffected: 2 };
-            }
-        }
-
-        // Close database if open (SAHPool requirement). Note: for encrypted
-        // paths this ALSO clears the key registry entry, so a subsequent
-        // opaque import cannot be detected via isEncryptedPath — the opaque
-        // signal must flow explicitly through the import call.
+        // Close database if open (SAHPool requirement).
         await closeDatabase(dbName);
 
-        // Import the raw database file into OPFS SAHPool. When opaque=true,
-        // the fork skips the 'SQLite format 3' header check and the byte-18
-        // WAL-mode patch, which would corrupt an AEAD tag for encrypted DBs.
-        poolUtil.importDb(dbPath, data, opaque);
-
-        // Verify-on-write: when an encryption key is registered for this
-        // path, AEAD-test slot 0 of the freshly written DB. On WrongKey
-        // unlink the file so the failed import leaves no half-written DB
-        // behind. This catches both corrupted ciphertext and recipient-side
-        // key mismatches at write time, instead of waiting for the first
-        // SQLite read to fail.
-        if (opaque && hasGlobalKey()) {
-            const verify = poolUtil.verifyEncryptionKey(dbPath);
-            if (verify === 'wrongKey') {
-                poolUtil.unlink(dbPath);
-                logger.warn(
-                    MODULE_NAME,
-                    `Verify-on-write rejected import of ${dbName}: AEAD failed on slot 0; rolled back`,
-                );
-                // VfsImportResult.WRONG_KEY = 1
-                return { rowsAffected: 1 };
-            }
-            logger.debug(
-                MODULE_NAME,
-                `Verify-on-write OK for ${dbName} (slot 0: ${verify})`,
-            );
-        }
+        // The vendor pool validates the 'SQLite format 3' header and patches
+        // byte 18 for WAL mode. Both are right here: everything this plane
+        // writes is a plain SQLite file. Plane 2 forks the pool to skip them
+        // for ciphertext, which would otherwise corrupt the AEAD tag on slot 0.
+        poolUtil.importDb(dbPath, data);
 
         logger.info(MODULE_NAME, `✓ Imported database: ${dbName} (${data.length} bytes)`);
 
-        // VfsImportResult.OK = 0
+        // PoolImportResult.OK = 0
         return { rowsAffected: 0 };
     } catch (error) {
         logger.error(MODULE_NAME, `Failed to import database ${dbName}:`, error);

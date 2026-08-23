@@ -8,8 +8,6 @@
 @inject IDbContextFactory<EncryptedTestContext> EncryptedFactory
 @inject IDbContextFactory<PlainVfsTestContext> PlainVfsFactory
 @inject ISqliteWasmDatabaseService DatabaseService
-@inject IEncryptedSqliteWasmDatabaseService Session
-@inject Crypto.Abstractions.ICryptoProvider CryptoProvider
 @inject IServiceProvider Services
 
 <button type="reset" hidden="@(!_running)" @onclick="@Cancel">Cancel</button>
@@ -43,9 +41,11 @@
     }
 }
 
+@* Stable id so the Playwright base can fail the first case immediately on a
+   harness error, instead of every case waiting out its timeout. *@
 @if (_error is not null)
 {
-    <h1 style="color: red">@_error</h1>
+    <h1 id="test-harness-error" style="color: red">@_error</h1>
 }
 
 @code {
@@ -93,7 +93,15 @@
                 //      they hit residual files.
                 //   3. Recreate TodoDb plain — boot's conditional
                 //      EnsureDeleted skipped this when state was Encrypted.
-                await Session.ResetPoolAsync();
+                // Resolved rather than injected: on the plain plane the
+                // Crypto services are not registered at all, which is the
+                // point of that run. There is no pool state to reset there —
+                // the wipe below is the whole reset.
+                var session = Services.GetService<IEncryptedSqliteWasmDatabaseService>();
+                if (session is not null)
+                {
+                    await session.ResetPoolAsync();
+                }
                 foreach (var name in await DatabaseService.ListDatabasesAsync())
                 {
                     try { await DatabaseService.DeleteDatabaseAsync(name); }
@@ -105,7 +113,12 @@
                     await seedContext.Database.MigrateAsync();
                 }
 
-                var testFactory = new TestFactory(_factory, DatabaseService, CryptoProvider, EncryptedFactory, PlainVfsFactory, Services);
+                var cryptoProvider = Services.GetService<Crypto.Abstractions.ICryptoProvider>();
+                var testFactory = new TestFactory(
+                    _factory, DatabaseService, cryptoProvider,
+                    session is null ? null : EncryptedFactory,
+                    session is null ? null : PlainVfsFactory,
+                    Services);
                 _tests.AddRange(testFactory.GetTests(TestName, CategoryFilter));
 
                 _running = true;

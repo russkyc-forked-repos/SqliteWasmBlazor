@@ -41,7 +41,7 @@ internal class TestFactory
         var session = services?.GetService(typeof(IEncryptedSqliteWasmDatabaseService))
             as IEncryptedSqliteWasmDatabaseService;
 
-        PopulateTests(todoFactory, databaseService);
+        PopulateTests(todoFactory, databaseService, cryptoPlane: session is not null);
         if (services?.GetService(typeof(TestHostDatabaseService)) is TestHostDatabaseService host)
         {
             var reconcile = new ImportReconcilesHostSchemaTest(todoFactory, databaseService, host);
@@ -178,28 +178,57 @@ internal class TestFactory
             }
         }
 
-        AssertRegistryParity();
+        AssertRegistryParity(cryptoPlane: session is not null);
     }
 
     /// <summary>
-    /// Catches drift between <see cref="TestRegistry.AllNames"/> and the
+    /// Catches drift between <see cref="TestRegistry"/> and the
     /// runtime-registered entries. A registered name not in the registry means
     /// either the registry forgot to declare it (Playwright won't run it) or
-    /// the factory typo'd the name (TestApp dispatch will miss it). The reverse
-    /// direction (registry name with no factory entry) only fires in the
-    /// maximal DI scope, so we don't assert it here to avoid false alarms when
-    /// optional services aren't wired.
+    /// the factory typo'd the name (TestApp dispatch will miss it).
+    ///
+    /// <para>
+    /// On the plain plane the check runs both ways. That run has no optional
+    /// services to make a missing entry ambiguous — everything
+    /// <see cref="TestRegistry.PlainPlaneNames"/> declares must be registered,
+    /// and nothing else — so a name the plain Playwright theory would wait for
+    /// and never see is caught here instead.
+    /// </para>
     /// </summary>
-    private void AssertRegistryParity()
+    /// <param name="cryptoPlane">
+    /// <c>false</c> when the Crypto services are absent, which is the
+    /// <c>?plane=plain</c> run.
+    /// </param>
+    private void AssertRegistryParity(bool cryptoPlane)
     {
-        var declared = TestRegistry.AllNames.ToHashSet();
-        var unknown = _entries.Select(e => e.Name).Where(n => !declared.Contains(n)).OrderBy(n => n).ToList();
+        var registered = _entries.Select(e => e.Name).ToHashSet();
+        var declared = (cryptoPlane ? TestRegistry.AllNames : TestRegistry.PlainPlaneNames).ToHashSet();
+
+        var unknown = registered.Where(n => !declared.Contains(n)).OrderBy(n => n).ToList();
         if (unknown.Count > 0)
         {
             throw new InvalidOperationException(
-                $"TestFactory registered names not in TestRegistry.AllNames: " +
+                $"TestFactory registered names not declared in TestRegistry: " +
                 $"{string.Join(", ", unknown)}. Add them to TestRegistry.cs or " +
                 $"correct the typo in TestFactory.");
+        }
+
+        if (cryptoPlane)
+        {
+            // The Crypto run can legitimately be missing entries when an
+            // optional service is unwired, so the reverse direction would
+            // false-alarm.
+            return;
+        }
+
+        var missing = declared.Where(n => !registered.Contains(n)).OrderBy(n => n).ToList();
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"TestRegistry.PlainPlaneNames declares tests the plain-plane run does " +
+                $"not register: {string.Join(", ", missing)}. Either the test needs the " +
+                $"Crypto worker (move it to CryptoPlaneNames) or its TestFactory entry " +
+                $"is behind a condition the plain run does not meet.");
         }
     }
 
@@ -278,7 +307,10 @@ internal class TestFactory
         }
     }
 
-    private void PopulateTests(IDbContextFactory<TodoDbContext> factory, ISqliteWasmDatabaseService databaseService)
+    private void PopulateTests(
+        IDbContextFactory<TodoDbContext> factory,
+        ISqliteWasmDatabaseService databaseService,
+        bool cryptoPlane)
     {
         // Type Marshalling Tests
         Add("Type Marshalling", new AllTypesRoundTripTest(factory));
@@ -345,9 +377,18 @@ internal class TestFactory
 
         // Raw Database Import/Export Tests
         Add("Import/Export", new RawDatabaseExportImportTest(factory, databaseService));
-        Add("Import/Export", new RawDatabaseImportInvalidFileTest(factory, databaseService));
+        if (cryptoPlane)
+        {
+            // Both write non-SQLite bytes through the raw slot seam. Only the
+            // forked pool in SqliteWasmBlazor.Crypto accepts those — the
+            // vendor pool this plane runs validates the header, which is
+            // correct for a pool that never holds ciphertext.
+            Add("Import/Export", new RawDatabaseImportInvalidFileTest(factory, databaseService));
+            Add("Import/Export", new RawDatabaseBackupRestoreOnFailureTest(factory, databaseService));
+        }
+
         Add("Import/Export", new RawDatabaseImportWithBackupTest(factory, databaseService));
-        Add("Import/Export", new RawDatabaseBackupRestoreOnFailureTest(factory, databaseService));
+
         Add("Import/Export", new RawDatabaseExportReOpenTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseExportToDownloadTest(factory, databaseService));
         Add("Import/Export", new RawDatabaseImportIntoNewTest(factory, databaseService));

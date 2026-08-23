@@ -8,6 +8,10 @@
         <WasmFingerprintAssets>false</WasmFingerprintAssets>
         <WasmBuildNative>true</WasmBuildNative>
         <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+        <!-- TestPlane reads the run's worker bundle from the URL via [JSImport],
+             which the source generator requires unsafe code for — the same
+             reason the library projects set it. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>

@@ -1,10 +1,9 @@
 # Plane re-homing: memory-safe I/O to base, encryption to Crypto
 
-> **Closed 2026-08-22.** Every goal shipped. What remains open is not in this
-> tree: the iPad re-verify (the device baseline attaches to the code, which
-> moved) and the plain-plane Playwright gap noted under Goal 3 — the suite
-> registers the Crypto plane, so base's own worker cases are bundled but
-> unexercised.
+> **Closed 2026-08-22.** Every goal shipped. The plain-plane Playwright gap
+> noted under Goal 3 was closed on 2026-08-23 — see the note there. What
+> remains open is the iPad re-verify: the device baseline attaches to the
+> code, which moved.
 
 The streamed import/export paths were developed on plane 2 because that is where
 the forked SAHPool VFS lived, not because they need encryption. The result is a
@@ -215,13 +214,41 @@ What the pass turned up, beyond the survey:
   replace), and base's init runs `planPoolSweep` so a park can be restored
   there too.
 
-- **Coverage gap, deliberate and open.** TestApp calls
-  `AddSqliteWasmBlazorCrypto`, so its `AssetRoot` points at the Crypto bundle
-  and all 98 Playwright tests drive the plane-2 worker. Base's six new worker
-  cases and its init sweep are typechecked and bundled but executed by nothing
-  in the repo. Closing it means a plain-plane Playwright fixture (a sample app
-  on `AddSqliteWasm` alone, plus host wiring) — a scope call, not part of this
-  goal.
+- **Coverage gap — CLOSED 2026-08-23.** TestApp called
+  `AddSqliteWasmBlazorCrypto` unconditionally, so its `AssetRoot` pointed at the
+  Crypto bundle and every Playwright test drove the plane-2 worker; base's own
+  worker cases were bundled but executed by nothing.
+
+  No second sample app was needed. The TestApp already has both bundles on disk
+  (it references Crypto, so the host serves `_content/SqliteWasmBlazor/` and
+  `_content/SqliteWasmBlazor.Crypto/` side by side), so the switch is a boot-time
+  registration: `?plane=plain` — read from the URL in `Program.cs` via a small
+  `[JSImport]` module, before DI is configured — leaves the Crypto services
+  unregistered and the bridge on the base bundle. `TestRegistry` splits into
+  `PlainPlaneNames` / `CryptoPlaneNames`, and a second Playwright fixture
+  (`PlainPlaneFixture`, port 7055) runs the plain half against the plain worker.
+  160 cases total, 1 m 30 s — *faster* than the 2 m 11 s the single crypto run
+  took, because the plain half boots a 3.7 MB smaller worker.
+
+  **It found two real bugs on the first run**, both invisible until now:
+
+  - `poolUtil.listDatabases()` exists only in the plane-2 fork. Base's worker
+    called it at init (the park sweep) and behind the public
+    `ListDatabasesAsync`, and `worker-common`'s `PoolUtilLike` — the contract
+    both VFS variants are supposed to satisfy — declares it, so
+    `importDatabasesFromEnvelope`'s wipe used it too. A plain consumer's worker
+    died at boot. Fixed by adding `listDatabases` to the vendor patch, where the
+    other five pool primitives already live.
+  - The vendor's `importDb(name, bytes)` takes two arguments and hard-checks the
+    SQLite header; base passed a third `opaque` flag that did nothing. Base now
+    refuses `opaque=true` by name — writing ciphertext into a pool with no key
+    is a plane-2 capability — and the two tests that exercise it moved to
+    `CryptoPlaneNames`.
+
+  Also: a harness failure used to render an error banner with no test labels,
+  so every case burned its full 60 s timeout and it read as a hang. The runner's
+  banner now has a stable id and the Playwright base fails the first case on it
+  immediately.
 
 ### Goal 4 — Retire the `byte[]` file methods
 
