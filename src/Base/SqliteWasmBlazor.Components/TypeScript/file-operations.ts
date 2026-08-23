@@ -5,6 +5,4 @@
 // (ISqliteWasmDatabaseService.ExportDatabaseToDownloadAsync), which never
 // routes bytes through managed or main-thread memory.
 
-console.log('File operations module loaded');
-
 export {};

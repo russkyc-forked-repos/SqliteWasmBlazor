@@ -13,6 +13,9 @@
 // with the C#-side request id space, which only increments positively.
 
 import {stagedExportFile, triggerDownload} from './staged-download.js';
+import {logger} from './sqlite-logger.js';
+
+const MODULE_NAME = 'Worker Bridge';
 
 /** One database's extent inside a multi-database staging file. */
 export interface StagedFileEntry {
@@ -82,8 +85,8 @@ export function createStreamRouter(post: StreamPost): StreamRouter {
 
             const handler = handlers.get(message.streamId);
             if (!handler) {
-                console.warn(
-                    '[Worker Bridge] Stream message for unknown streamId', message.streamId);
+                logger.warn(
+                    MODULE_NAME, 'Stream message for unknown streamId', message.streamId);
                 return true;
             }
 
@@ -101,7 +104,7 @@ export function createStreamRouter(post: StreamPost): StreamRouter {
                 handler.onError(
                     typeof message.error === 'string' ? message.error : 'unknown stream error');
             } else {
-                console.warn('[Worker Bridge] Unknown stream message shape', message);
+                logger.warn(MODULE_NAME, 'Unknown stream message shape', message);
             }
             return true;
         },

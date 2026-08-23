@@ -199,6 +199,7 @@ The same treatment reaches the demo's two remaining silent operations:
 
 - **Bug Fix (#20):** Fixed a documentation error in the Quick Start guide that erroneously instructed users to register a non-existent `IDBInitializationService`.
 - **Feature (#18):** Made SQL command logging strictly opt-in via `SqliteWasmOptions.EnableCommandSqlLogging` to prevent sensitive schema/data leakage in production (Reported & suggested by @bearyung).
+- **Logging:** `SqliteWasmLogger.SetLogLevel` now configures the main-thread half of the bridge as well as the worker. The bridge's own lines — "Worker ready", the stream router's warnings, the JSImport callback errors — were plain `console` writes that ignored the level, as were the rekey diagnostics on the encryption plane and the Emscripten `print`/`printErr` handlers. All of them route through the level-gated logger; "Worker ready" is `Information` and the rekey lines are `Debug`, so the default `Warning` level is quiet.
 
 ### Dependencies & Tooling
 

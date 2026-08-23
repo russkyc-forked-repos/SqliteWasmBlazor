@@ -170,8 +170,8 @@ async function initializeSQLite() {
         // Type declarations don't expose Emscripten-style init options,
         // but the runtime accepts them for locateFile, print, and printErr
         const initOptions = {
-            print: console.log,
-            printErr: console.error,
+            print: (...args: any[]) => logger.info(MODULE_NAME, ...args),
+            printErr: (...args: any[]) => logger.error(MODULE_NAME, ...args),
             locateFile(path: string) {
                 if (path.endsWith('.wasm')) {
                     return `${baseHref}${assetRoot}${path}`;

@@ -18,7 +18,10 @@ import {
     decryptChaCha20Poly1305,
     clearBytes,
 } from '@sqlitewasmblazor/crypto-core';
+import { logger } from '@sqlitewasmblazor/worker-common';
 import { buildPageAad } from './aad.js';
+
+const MODULE_NAME = 'VFS Rekey';
 
 const SECTOR_SIZE = 4096;
 const PAGE_NONCE_LEN = 12;
@@ -57,12 +60,11 @@ export function rekeySlots(
     const slotCount = bytesIn.length / sourceSlotSize;
     const out = new Uint8Array(slotCount * targetSlotSize);
 
-    // Diagnostic line on the very first slot of the very first chunk
-    // (slotIndexBase === 0 && i === 0). For chunked callers this fires
-    // once at the start of the loop; legacy whole-buffer callers see the
-    // same line as before.
-    console.log(
-        `[rekeySlots] dbPath=${dbPath} ` +
+    // Debug-level shape line: which key pair this call re-wraps under and
+    // how many slots it covers. The per-slot detail below fires only for
+    // slot 0, i.e. once per chunked import/export run.
+    logger.debug(MODULE_NAME,
+        `dbPath=${dbPath} ` +
         `sourceKey=${keyFingerprint(sourceKey)} ` +
         `targetKey=${keyFingerprint(targetKey)} ` +
         `slots=${slotCount} base=${slotIndexBase} ` +
@@ -82,8 +84,8 @@ export function rekeySlots(
                 .map(b => b.toString(16).padStart(2, '0')).join('');
             const slotHead = Array.from(bytesIn.subarray(srcStart, srcStart + 8))
                 .map(b => b.toString(16).padStart(2, '0')).join('');
-            console.log(
-                `[rekeySlots] slot[0] aad.prefix="${aadPrefix}" aad.idxLE=${aadIdxLE} ` +
+            logger.debug(MODULE_NAME,
+                `slot[0] aad.prefix="${aadPrefix}" aad.idxLE=${aadIdxLE} ` +
                 `aad.totalLen=${aad.length} sourceSlot[0..8]=${slotHead}`);
         }
 

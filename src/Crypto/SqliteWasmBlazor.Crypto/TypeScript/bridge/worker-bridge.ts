@@ -12,6 +12,8 @@ import {
     importDatabasesFromSession as importDatabasesFromSessionVia,
     stagedExportFile,
     triggerDownload,
+    logger as sqliteLogger,
+    SqliteWasmLogLevel,
 } from '@sqlitewasmblazor/worker-common';
 
 import {
@@ -34,6 +36,8 @@ interface IMemoryView {
     set(source: Uint8Array, targetOffset?: number): void;
     readonly byteLength: number;
 }
+
+const MODULE_NAME = 'Worker Bridge';
 
 let worker: Worker | null = null;
 
@@ -68,23 +72,23 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
 
     worker.onmessage = async (event) => {
         if (event.data.type === 'ready') {
-            console.log('[Worker Bridge] Worker ready');
+            sqliteLogger.info(MODULE_NAME, 'Worker ready');
             try {
                 const exports = await (globalThis as any).getDotnetRuntime(0).getAssemblyExports("SqliteWasmBlazor.dll");
                 exports.SqliteWasmBlazor.SqliteWasmWorkerBridge.OnWorkerReady();
             } catch (error) {
-                console.error('[Worker Bridge] Failed to call OnWorkerReady:', error);
+                sqliteLogger.error(MODULE_NAME, 'Failed to call OnWorkerReady:', error);
             }
             return;
         }
 
         if (event.data.type === 'error') {
-            console.error('[Worker Bridge] Worker error:', event.data.error);
+            sqliteLogger.error(MODULE_NAME, 'Worker error:', event.data.error);
             try {
                 const exports = await (globalThis as any).getDotnetRuntime(0).getAssemblyExports("SqliteWasmBlazor.dll");
                 exports.SqliteWasmBlazor.SqliteWasmWorkerBridge.OnWorkerError(event.data.error || 'Unknown worker error');
             } catch (error) {
-                console.error('[Worker Bridge] Failed to call OnWorkerError:', error);
+                sqliteLogger.error(MODULE_NAME, 'Failed to call OnWorkerError:', error);
             }
             return;
         }
@@ -114,7 +118,7 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
                     exports.SqliteWasmBlazor.SqliteWasmWorkerBridge.OnWorkerResponse(messageJson);
                 }
             } catch (error) {
-                console.error('[Worker Bridge] Failed to call C# callback:', error);
+                sqliteLogger.error(MODULE_NAME, 'Failed to call C# callback:', error);
                 try {
                     const exports = await (globalThis as any).getDotnetRuntime(0).getAssemblyExports("SqliteWasmBlazor.dll");
                     const errorJson = JSON.stringify({
@@ -130,7 +134,7 @@ export async function initializeBridge(baseHref: string, assetRoot: string): Pro
     };
 
     worker.onerror = (error) => {
-        console.error('[Worker Bridge] Worker error event:', error);
+        sqliteLogger.error(MODULE_NAME, 'Worker error event:', error);
     };
 }
 
@@ -173,8 +177,12 @@ export function sendBinaryToWorker(memoryView: IMemoryView, metadataJson: string
 
 export const logger = {
     setLogLevel(level: number): void {
+        // Two halves to configure: this module and the streaming router run on
+        // the main thread, the SQLite modules run inside the worker. Each side
+        // holds its own logger instance, so both need the level.
+        sqliteLogger.setLogLevel(level as SqliteWasmLogLevel);
         if (!worker) {
-            console.warn('[Worker Bridge] Worker not initialized, cannot set log level');
+            sqliteLogger.warn(MODULE_NAME, 'Worker not initialized, cannot set log level');
             return;
         }
         worker.postMessage({
