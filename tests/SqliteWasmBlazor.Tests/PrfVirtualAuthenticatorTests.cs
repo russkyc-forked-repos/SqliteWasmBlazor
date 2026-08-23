@@ -20,11 +20,11 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
     private const float FirstButtonVisibleTimeoutMs = 60000;
     private const float ButtonEnabledTimeoutMs = 10000;
     private const float StatusTimeoutMs = 8000;
-    // Post-TTL button re-enable budget. After SessionTtlMs the JS-side key
-    // cache clears, KeyExpired observable fires, fans out to UI, and Blazor
-    // re-renders the AuthorizeView. That cascade is slower than a normal
-    // button-enable on a fresh page load — CI runners need ~10–15 s, give
-    // 20 s headroom.
+    // Post-TTL button re-enable budget. After SessionTtlMs the seed cache
+    // expires, PrfService drops the JS-side bundle in the same turn, and the
+    // page's KeyExpired handler re-renders behind a worker Lock round trip.
+    // The re-enable is deterministic once that render lands, so this only has
+    // to cover the Lock hop; 20 s is headroom for a loaded CI runner.
     private const float KeyExpiredButtonEnableTimeoutMs = 20000;
 
     // Mirrors KeyCacheOptions.TtlMs configured in TestApp.Program.cs. Tests
@@ -170,10 +170,12 @@ public class PrfVirtualAuthenticatorTests(PrfWaFixture fixture, ITestOutputHelpe
         // After the timer fires HasCachedKeys() returns false, so the
         // Authenticate button must re-enable — the timer/observable wire-up
         // is the path under test (Lock + KeyExpired-fires-UI-update is
-        // already covered by scenario 3). Uses the dedicated
-        // KeyExpiredButtonEnableTimeoutMs because the JS→C# observable +
-        // Blazor re-render cascade is slower than a fresh-page button-enable
-        // — CI runners hit the original 8s StatusTimeoutMs ceiling here.
+        // already covered by scenario 3). This also pins the two caches
+        // ending the session together: the seed cache and the JS-side bundle
+        // run on independent clocks, and the page renders on the seed event
+        // while the button reads the bundle. If the bundle outlives the seed
+        // by even one interop hop, this render draws the button disabled and
+        // nothing schedules another one — the button never re-enables.
         await Assertions.Expect(authButton).ToBeEnabledAsync(
             new() { Timeout = KeyExpiredButtonEnableTimeoutMs });
     }

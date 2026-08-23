@@ -26,6 +26,7 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
     private readonly ISecureKeyCache _keyCache;
     private readonly ICryptoProvider _cryptoProvider;
     private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly IDisposable _keyExpiredSubscription;
     private bool _initialized;
 
     // Public-key cache (not sensitive). One salt per app ⇒ at most one entry each.
@@ -53,8 +54,36 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
         _keyCache = keyCache;
         _cryptoProvider = cryptoProvider;
 
+        // A session lives in two caches with two independent clocks: the C#
+        // seed (timer armed by _keyCache.Store) and the JS-side bundle
+        // (expiresAt stamped inside StoreKeysAsync, after key derivation and
+        // the interop hop). The JS stamp is therefore always the later of the
+        // two, so seed expiry alone would leave HasCachedKeys() reporting a
+        // live session against a seed that is already gone. Collapse the two
+        // into one boundary: when the seed for this salt expires, drop the JS
+        // bundle in the same synchronous turn. Subscribing here means this
+        // runs before any consumer's KeyExpired handler — a consumer cannot
+        // subscribe before the instance it subscribes to exists — so every
+        // subscriber observes HasCachedKeys() == false.
+        _keyExpiredSubscription = _keyCache.KeyExpired
+            .Where(keyId => keyId == PrfSeedCacheKey)
+            .Subscribe(_ => DropJsKeyBundle());
+
         // Configure-once for the static interop. Idempotent — see CryptoInterop.Configure.
         CryptoInterop.Configure(_sqliteWasmBlazorCryptoOptions.BaseHref, _sqliteWasmBlazorCryptoOptions.AssetRoot);
+    }
+
+    /// <summary>
+    /// Drops the JS-side derived key bundle and the public keys that are only
+    /// meaningful while it is cached. Idempotent: <c>RemoveCachedKey</c> on a
+    /// missing id is a no-op, so the TTL path and <see cref="ClearKeys"/> can
+    /// both run it without ordering constraints.
+    /// </summary>
+    private void DropJsKeyBundle()
+    {
+        _cryptoProvider.RemoveCachedKey(JsKeyId);
+        _cachedX25519PublicKey = null;
+        _cachedEd25519PublicKey = null;
     }
 
     /// <summary>
@@ -332,9 +361,7 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
         // Drop the C# seed (HKDF source) and the JS-side derived key bundle in one go.
         var hadSeed = _keyCache.Contains(PrfSeedCacheKey);
         _keyCache.Clear();
-        _cryptoProvider.RemoveCachedKey(JsKeyId);
-        _cachedX25519PublicKey = null;
-        _cachedEd25519PublicKey = null;
+        DropJsKeyBundle();
 
         // Manual ClearKeys is semantically a session end — same effect as
         // TTL expiry — so emit the same KeyExpired signal that
@@ -388,6 +415,7 @@ internal sealed partial class PrfService : IPrfService, IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
+        _keyExpiredSubscription.Dispose();
         ClearKeys();
         _initLock.Dispose();
         return ValueTask.CompletedTask;
